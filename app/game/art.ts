@@ -54,8 +54,7 @@ export const ART_MANIFEST: ArtAssetManifest = {
 
 export async function loadArtAssets(onProgress: (progress: number) => void): Promise<LoadedArt> {
   const seasonEntries = ART_MANIFEST.seasons.map((season) => season.image);
-  const enemyEntries = Object.entries(ART_MANIFEST.enemies) as Array<[EnemyArchetype, string]>;
-  const total = seasonEntries.length + enemyEntries.length;
+  const total = seasonEntries.length;
   let loaded = 0;
 
   const load = (src: string) =>
@@ -75,16 +74,12 @@ export async function loadArtAssets(onProgress: (progress: number) => void): Pro
     });
 
   const seasons = await Promise.all(seasonEntries.map(load));
-  const enemyImages = await Promise.all(enemyEntries.map(([, src]) => load(src)));
-  const enemies: LoadedArt["enemies"] = {};
-  enemyEntries.forEach(([id], index) => {
-    const image = enemyImages[index];
-    if (image) enemies[id] = image;
-  });
 
   return {
     seasons,
-    enemies,
+    // Directional multi-frame sheets are loaded by enemySprites.ts. Keeping
+    // this map empty avoids downloading the retired single-pose cutouts.
+    enemies: {},
   };
 }
 

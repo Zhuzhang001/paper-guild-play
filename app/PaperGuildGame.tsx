@@ -1,256 +1,138 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { loadArtAssets, type LoadedArt } from "./game/art";
 import {
-  drawEnemyArt,
-  drawPlayerArt,
-  drawSeasonParticles,
-  drawSeasonScene,
-  drawWeaponGlyph,
-  loadArtAssets,
-  seasonIndex,
-  type BossTier,
-  type EnemyArchetype,
-  type LoadedArt,
-} from "./game/art";
+  loadEnemySpriteSheets,
+  preloadEnemySpriteSheets,
+  type EnemySpriteSheets,
+} from "./game/actors/enemySprites";
 import {
-  createPlayerForm,
-  finishHumanForm,
-  forceHumanForm,
-  stepPlayerForm,
-  type PlayerFormModel,
-} from "./game/form";
+  getWeaponDefinition,
+  type FusionId,
+  type UpgradeOption,
+  type WeaponId,
+  WEAPON_IDS,
+} from "./game/content";
+import { finishHumanForm } from "./game/form";
+import {
+  drawMenuPreview,
+  drawRun,
+  loadSolarTermAtlas,
+  type RenderAssets,
+} from "./game/renderGame";
+import {
+  applyRareChoice,
+  applyUpgrade,
+  captureEndlessCelestial,
+  createRun,
+  fuseEndlessNodesWithName,
+  GAME_HEIGHT,
+  GAME_WIDTH,
+  getUpgradeChoices,
+  insertEndlessWeapon,
+  RARE_CHOICES,
+  snapshotRun,
+  STANDARD_SECONDS,
+  startEndless,
+  stepRun,
+  swapEndlessNodes,
+  type RareChoice,
+  type RunEvent,
+  type RunSnapshot,
+  type RunState,
+  type TrialId,
+} from "./game/survivor";
+import {
+  loadVisualPack,
+  preloadFusionVisuals,
+  preloadWeaponVisuals,
+  WEAPON_ATLASES,
+  type VisualPack,
+} from "./game/visual";
+import {
+  AudioManager,
+  getSolarTermState,
+  getTermAmbienceCue,
+  type AudioSettings,
+  type SfxCueId,
+} from "./game/world";
 
-const W = 1280;
-const H = 720;
-const RUN_TIME = 8 * 60;
+type Mode =
+  | "menu"
+  | "playing"
+  | "upgrade"
+  | "rare"
+  | "paused"
+  | "forge"
+  | "bossChoice"
+  | "result";
 
-type Mode = "menu" | "playing" | "upgrade" | "paused" | "bossChoice" | "result";
-type WeaponId = "sword" | "fan" | "umbrella" | "scissors" | "abacus" | "crossbow";
-type Branch = "a" | "b";
-type TrialId = "swift" | "crowd" | "elite";
-
-type WeaponState = {
-  id: WeaponId;
-  level: number;
-  branch?: Branch;
-};
-
-type EnemyType = EnemyArchetype;
-
-type Enemy = {
-  id: number;
-  x: number;
-  y: number;
-  r: number;
-  hp: number;
-  maxHp: number;
-  speed: number;
-  type: EnemyType;
-  damage: number;
-  hitFlash: number;
-  orbitCd: number;
-  marked: number;
-  elite: boolean;
-  boss: boolean;
-  bossTier: BossTier;
-};
-
-type Projectile = {
-  id: number;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  r: number;
-  damage: number;
-  life: number;
-  color: string;
-  pierce: number;
-  kind: WeaponId | "harmony";
-  homing?: boolean;
-  targetId?: number;
-  mark?: boolean;
-};
-
-type Pickup = { id: number; x: number; y: number; value: number; pulse: number };
-type Particle = { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; size: number };
-
-type UpgradeOption = {
-  key: string;
-  weapon?: WeaponId;
-  branch?: Branch;
-  kind: "new" | "upgrade" | "branch" | "rare";
+type ResultState = {
+  victory: boolean;
   title: string;
-  subtitle: string;
-  description: string;
-  accent: string;
-  targetLevel: number;
-  rare?: "power" | "speed" | "magnet";
 };
 
-type Game = {
-  elapsed: number;
-  endless: boolean;
-  environmental: string;
-  nextEnvironmentAt: number;
-  nextBossAt: number;
-  player: PlayerFormModel & {
-    x: number;
-    y: number;
-    life: number;
-    maxLife: number;
-    xp: number;
-    nextXp: number;
-    level: number;
-    invuln: number;
-    power: number;
-    speed: number;
-    magnet: number;
-  };
-  weapons: WeaponState[];
-  enemies: Enemy[];
-  projectiles: Projectile[];
-  pickups: Pickup[];
-  particles: Particle[];
-  cooldowns: Partial<Record<WeaponId, number>>;
-  spawnClock: number;
-  orbitAngle: number;
-  kills: number;
-  score: number;
-  hitCounter: number;
-  midBossSpawned: boolean;
-  finalBossSpawned: boolean;
-  endlessBossCount: number;
-  tutorial: boolean;
-  trials: Set<TrialId>;
+type QueuedModal = "upgrade" | "rare" | "forge" | "bossChoice";
+
+type GamepadUiState = {
+  direction: -1 | 0 | 1;
+  repeatAt: number;
+  confirm: boolean;
+  cancel: boolean;
+  pause: boolean;
 };
 
-type Snapshot = {
-  elapsed: number;
-  endless: boolean;
-  environmental: string;
-  life: number;
-  maxLife: number;
-  xp: number;
-  nextXp: number;
-  level: number;
-  weapons: WeaponState[];
-  resonances: string[];
-  kills: number;
-  score: number;
+const WEAPON_AUDIO: Readonly<Record<WeaponId, {
+  fire: SfxCueId;
+  hit: SfxCueId;
+}>> = {
+  sword: { fire: "weapon.sword.fire", hit: "weapon.sword.hit" },
+  fan: { fire: "weapon.fan.fire", hit: "weapon.fan.hit" },
+  umbrella: { fire: "weapon.umbrella.fire", hit: "weapon.umbrella.hit" },
+  scissors: { fire: "weapon.scissors.fire", hit: "weapon.scissors.hit" },
+  abacus: { fire: "weapon.abacus.fire", hit: "weapon.abacus.hit" },
+  crossbow: { fire: "weapon.crossbow.fire", hit: "weapon.crossbow.hit" },
+  pipa: { fire: "weapon.pipa.fire", hit: "weapon.pipa.hit" },
+  inkline: { fire: "weapon.inkline.fire", hit: "weapon.inkline.hit" },
+  lantern: { fire: "weapon.lantern.fire", hit: "weapon.lantern.hit" },
+  thunderSeal: { fire: "weapon.thunder.fire", hit: "weapon.thunder.hit" },
 };
 
-const weaponInfo: Record<WeaponId, {
-  name: string;
-  glyph: string;
-  color: string;
-  base: string;
-  branches: Record<Branch, { name: string; description: string }>;
-}> = {
-  sword: {
-    name: "竹剑",
-    glyph: "剑",
-    color: "#54766b",
-    base: "自动刺向最近的敌人。",
-    branches: {
-      a: { name: "飞剑", description: "剑光穿行更远，并会标记敌人。" },
-      b: { name: "剑阵", description: "竹剑化作环身剑阵，持续切割近敌。" },
-    },
-  },
-  fan: {
-    name: "折扇",
-    glyph: "风",
-    color: "#567c86",
-    base: "周期性扇出一列风刃。",
-    branches: {
-      a: { name: "大开大合", description: "风浪更宽，适合清扫密集敌群。" },
-      b: { name: "寻风", description: "风刃自动追踪远处的敌人。" },
-    },
-  },
-  umbrella: {
-    name: "油纸伞",
-    glyph: "伞",
-    color: "#a94a3c",
-    base: "绕身旋转，阻挡靠近的敌人。",
-    branches: {
-      a: { name: "伞阵", description: "增加护身伞面，扩大近身防线。" },
-      b: { name: "雨针", description: "伞沿周期性向四周射出细针。" },
-    },
-  },
-  scissors: {
-    name: "裁衣剪",
-    glyph: "裁",
-    color: "#9a6b3d",
-    base: "两片剪刃往返切割敌群。",
-    branches: {
-      a: { name: "回旋剪", description: "剪刃飞得更远并穿透更多敌人。" },
-      b: { name: "绞云", description: "剪刃环身高速旋转，守住近处。" },
-    },
-  },
-  abacus: {
-    name: "算盘",
-    glyph: "算",
-    color: "#76534b",
-    base: "算盘珠成列向前弹射。",
-    branches: {
-      a: { name: "珠雨", description: "攻击间隔缩短，持续洒出算珠。" },
-      b: { name: "贯珠", description: "算珠排列成线，获得强力穿透。" },
-    },
-  },
-  crossbow: {
-    name: "连弩",
-    glyph: "弩",
-    color: "#4a674d",
-    base: "稳定射出高速弩箭。",
-    branches: {
-      a: { name: "齐射", description: "一次发射三支弩箭覆盖扇面。" },
-      b: { name: "机关弩", description: "弩箭从身侧机关连续射出。" },
-    },
-  },
-};
-
-const seasonData = [
-  { name: "惊蛰 · 春桥", paper: "#eee7d1", wash: "#8ba38b", accent: "#b3655a" },
-  { name: "小暑 · 荷塘", paper: "#e8e1c8", wash: "#5c8a7c", accent: "#547b72" },
-  { name: "霜降 · 稻埂", paper: "#ebdfc4", wash: "#b1844d", accent: "#a87842" },
-  { name: "大寒 · 岁市", paper: "#e5e5de", wash: "#71808b", accent: "#9d4339" },
-];
-
-const harmonyPairs: Array<{ ids: [WeaponId, WeaponId]; name: string }> = [
-  { ids: ["fan", "umbrella"], name: "风雨合鸣" },
-  { ids: ["scissors", "abacus"], name: "精打细算" },
-  { ids: ["sword", "crossbow"], name: "远近相济" },
-];
-
-const initialSnapshot: Snapshot = {
+const emptySnapshot: RunSnapshot = {
   elapsed: 0,
   endless: false,
-  environmental: "",
+  score: 0,
+  kills: 0,
   life: 5,
   maxLife: 5,
   xp: 0,
-  nextXp: 8,
+  nextXp: 7,
   level: 1,
   weapons: [{ id: "sword", level: 1 }],
-  resonances: [],
-  kills: 0,
-  score: 0,
+  synergies: [],
+  currentBoss: null,
+  terminalLabel: "",
+  terminalLabelLife: 0,
 };
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
+const TRIAL_DEFINITIONS: Array<{
+  id: TrialId;
+  name: string;
+  description: string;
+}> = [
+  { id: "swift", name: "疾行", description: "敌人转向与移动更快" },
+  { id: "crowd", name: "聚众", description: "每波敌群数量提高" },
+  { id: "elite", name: "强敌", description: "精英和 Boss 更坚韧" },
+];
 
-function distSq(ax: number, ay: number, bx: number, by: number) {
-  const dx = ax - bx;
-  const dy = ay - by;
-  return dx * dx + dy * dy;
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function normalize(x: number, y: number) {
-  const length = Math.hypot(x, y) || 1;
-  return { x: x / length, y: y / length };
+  const magnitude = Math.hypot(x, y) || 1;
+  return { x: x / magnitude, y: y / magnitude };
 }
 
 function formatTime(seconds: number) {
@@ -258,837 +140,126 @@ function formatTime(seconds: number) {
   return `${String(Math.floor(whole / 60)).padStart(2, "0")}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-function getSeason(elapsed: number) {
-  return seasonIndex(elapsed);
+function optionKind(option: UpgradeOption) {
+  if (option.kind === "route") return "择路 · 三选一";
+  if (option.kind === "mastery") return "成器刻印 · 二选一";
+  if (option.kind === "acquire") return "新器入匣";
+  if (option.kind === "utility") return "行旅札记";
+  return option.kind === "refine" ? "基础精炼" : "路线再造";
 }
 
-function weaponLevel(game: Game, id: WeaponId) {
-  return game.weapons.find((weapon) => weapon.id === id)?.level ?? 0;
+function weaponSubline(snapshot: RunSnapshot, weaponId: WeaponId) {
+  const weapon = snapshot.weapons.find((item) => item.id === weaponId);
+  if (!weapon) return "";
+  const definition = getWeaponDefinition(weapon.id);
+  if (weapon.masteryId) {
+    const route = definition.routes.find((candidate) => candidate.id === weapon.routeId);
+    const mastery = route?.masteries.find((candidate) => candidate.id === weapon.masteryId);
+    return mastery?.name ?? "已成器";
+  }
+  if (weapon.routeId) {
+    return definition.routes.find((candidate) => candidate.id === weapon.routeId)?.name ?? "";
+  }
+  return weapon.level === 2 ? "待择路线" : definition.description;
 }
 
-function resonances(game: Game) {
-  return harmonyPairs
-    .filter((pair) => pair.ids.every((id) => weaponLevel(game, id) >= 3))
-    .slice(0, 2)
-    .map((pair) => pair.name);
+function weaponAtlasFrame(level: number, routeId?: string) {
+  if (level <= 1) return 0;
+  if (level === 2) return 1;
+  if (level >= 5) return 5;
+  const route = routeId?.split(":")[1];
+  return route === "b" ? 3 : route === "c" ? 4 : 2;
 }
 
-function hasHarmony(game: Game, name: string) {
-  return resonances(game).includes(name);
-}
-
-function createGame(trials: Set<TrialId>): Game {
-  const thinLife = 5;
+function weaponThumbStyle(weaponId: WeaponId, frame: number): React.CSSProperties {
+  const column = frame % 3;
+  const row = Math.floor(frame / 3);
   return {
-    elapsed: 0,
-    endless: false,
-    environmental: "",
-    nextEnvironmentAt: RUN_TIME + 120,
-    nextBossAt: RUN_TIME,
-    player: {
-      ...createPlayerForm(),
-      x: W / 2,
-      y: H / 2,
-      life: thinLife,
-      maxLife: thinLife,
-      xp: 0,
-      nextXp: 8,
-      level: 1,
-      invuln: 0,
-      power: 1,
-      speed: 1,
-      magnet: 1,
-    },
-    weapons: [{ id: "sword", level: 1 }],
-    enemies: [],
-    projectiles: [],
-    pickups: [],
-    particles: [],
-    cooldowns: {},
-    spawnClock: 0,
-    orbitAngle: 0,
-    kills: 0,
-    score: 0,
-    hitCounter: 0,
-    midBossSpawned: false,
-    finalBossSpawned: false,
-    endlessBossCount: 0,
-    tutorial: true,
-    trials: new Set(trials),
+    backgroundImage: `url("${WEAPON_ATLASES[weaponId].src}")`,
+    backgroundPosition: `${column * 50}% ${row * 100}%`,
+    backgroundSize: "300% 200%",
   };
 }
 
-function snapshotOf(game: Game): Snapshot {
-  return {
-    elapsed: game.elapsed,
-    endless: game.endless,
-    environmental: game.environmental,
-    life: game.player.life,
-    maxLife: game.player.maxLife,
-    xp: game.player.xp,
-    nextXp: game.player.nextXp,
-    level: game.player.level,
-    weapons: game.weapons.map((weapon) => ({ ...weapon })),
-    resonances: resonances(game),
-    kills: game.kills,
-    score: game.score,
+function initialAudioSettings(): AudioSettings {
+  const fallback: AudioSettings = {
+    muted: false,
+    master: 0.8,
+    music: 0.62,
+    sfx: 0.78,
   };
-}
-
-function makeUpgradeOptions(game: Game): UpgradeOption[] {
-  const candidates: UpgradeOption[] = [];
-  const owned = new Set(game.weapons.map((weapon) => weapon.id));
-
-  for (const weapon of game.weapons) {
-    const info = weaponInfo[weapon.id];
-    if (weapon.level === 2 && !weapon.branch) {
-      (["a", "b"] as Branch[]).forEach((branch) => {
-        candidates.push({
-          key: `${weapon.id}-${branch}`,
-          weapon: weapon.id,
-          branch,
-          kind: "branch",
-          title: info.branches[branch].name,
-          subtitle: `${info.name} · 路线选择`,
-          description: info.branches[branch].description,
-          accent: info.color,
-          targetLevel: 3,
-        });
-      });
-    } else if (weapon.level < 5) {
-      const next = weapon.level + 1;
-      candidates.push({
-        key: `${weapon.id}-up-${next}`,
-        weapon: weapon.id,
-        kind: "upgrade",
-        title: next === 5 ? `${info.name} · 成器` : `精进${info.name}`,
-        subtitle: next === 5 ? "最终形态" : `提升至第 ${next} 阶`,
-        description: next === 5
-          ? `完成${weapon.branch ? info.branches[weapon.branch].name : info.name}，攻击方式与外观全面增强。`
-          : `${info.base} 提高伤害、频率与作用范围。`,
-        accent: info.color,
-        targetLevel: next,
-      });
-    }
-  }
-
-  if (game.weapons.length < 4) {
-    (Object.keys(weaponInfo) as WeaponId[])
-      .filter((id) => !owned.has(id))
-      .forEach((id) => {
-        const info = weaponInfo[id];
-        candidates.push({
-          key: `${id}-new`,
-          weapon: id,
-          kind: "new",
-          title: info.name,
-          subtitle: "获得新器物",
-          description: info.base,
-          accent: info.color,
-          targetLevel: 1,
-        });
-      });
-  }
-
-  const shuffled = [...candidates].sort(() => Math.random() - 0.5);
-  const choices: UpgradeOption[] = [];
-
-  const branchGroups = shuffled.filter((option) => option.kind === "branch");
-  if (branchGroups.length) choices.push(branchGroups[0]);
-
-  for (const option of shuffled) {
-    if (choices.length >= 3) break;
-    if (!choices.some((choice) => choice.key === option.key)) choices.push(option);
-  }
-
-  const rares = makeRareOptions(game);
-  while (choices.length < 3) choices.push(rares[choices.length]);
-  return choices.slice(0, 3);
-}
-
-function makeRareOptions(game: Game): UpgradeOption[] {
-  return [
-    {
-      key: `rare-power-${game.player.level}`,
-      kind: "rare",
-      title: "百炼",
-      subtitle: "稀有强化",
-      description: "所有武器伤害提高 18%。",
-      accent: "#a54535",
-      targetLevel: 5,
-      rare: "power",
-    },
-    {
-      key: `rare-speed-${game.player.level}`,
-      kind: "rare",
-      title: "轻身",
-      subtitle: "稀有强化",
-      description: "移动速度提高 12%。",
-      accent: "#50766a",
-      targetLevel: 5,
-      rare: "speed",
-    },
-    {
-      key: `rare-magnet-${game.player.level}`,
-      kind: "rare",
-      title: "聚物",
-      subtitle: "稀有强化",
-      description: "拾取范围提高 28%。",
-      accent: "#c18b45",
-      targetLevel: 5,
-      rare: "magnet",
-    },
-  ];
-}
-
-function applyUpgrade(game: Game, option: UpgradeOption) {
-  if (option.kind === "rare" && option.rare) {
-    if (option.rare === "power") game.player.power *= 1.18;
-    if (option.rare === "speed") game.player.speed *= 1.12;
-    if (option.rare === "magnet") game.player.magnet *= 1.28;
-    return;
-  }
-  if (!option.weapon) return;
-  if (option.kind === "new") {
-    game.weapons.push({ id: option.weapon, level: 1 });
-    return;
-  }
-  const weapon = game.weapons.find((item) => item.id === option.weapon);
-  if (!weapon) return;
-  weapon.level = option.targetLevel;
-  if (option.kind === "branch" && option.branch) weapon.branch = option.branch;
-}
-
-function nearestEnemy(game: Game, markedOnly = false) {
-  let closest: Enemy | undefined;
-  let best = Infinity;
-  for (const enemy of game.enemies) {
-    if (markedOnly && enemy.marked <= 0) continue;
-    const distance = distSq(game.player.x, game.player.y, enemy.x, enemy.y);
-    if (distance < best) {
-      best = distance;
-      closest = enemy;
-    }
-  }
-  return closest;
-}
-
-function strongestEnemy(game: Game) {
-  return game.enemies.reduce<Enemy | undefined>((best, enemy) => (!best || enemy.hp > best.hp ? enemy : best), undefined);
-}
-
-let serial = 1;
-
-function addProjectile(
-  game: Game,
-  weapon: WeaponId | "harmony",
-  target: Enemy | undefined,
-  speed: number,
-  damage: number,
-  color: string,
-  options: Partial<Projectile> = {},
-  angleOffset = 0,
-) {
-  if (!target) return;
-  const baseAngle = Math.atan2(target.y - game.player.y, target.x - game.player.x) + angleOffset;
-  game.projectiles.push({
-    id: serial++,
-    x: game.player.x,
-    y: game.player.y,
-    vx: Math.cos(baseAngle) * speed,
-    vy: Math.sin(baseAngle) * speed,
-    r: options.r ?? 7,
-    damage: damage * game.player.power,
-    life: options.life ?? 2.2,
-    color,
-    pierce: options.pierce ?? 0,
-    kind: weapon,
-    homing: options.homing,
-    targetId: options.targetId ?? target.id,
-    mark: options.mark,
-  });
-}
-
-function fireWeapons(game: Game, dt: number) {
-  for (const weapon of game.weapons) {
-    game.cooldowns[weapon.id] = (game.cooldowns[weapon.id] ?? 0) - dt;
-    if ((game.cooldowns[weapon.id] ?? 0) > 0) continue;
-    const info = weaponInfo[weapon.id];
-    const target = weapon.id === "crossbow" && hasHarmony(game, "远近相济")
-      ? nearestEnemy(game, true) ?? nearestEnemy(game)
-      : nearestEnemy(game);
-    if (!target) continue;
-    const level = weapon.level;
-
-    if (weapon.id === "sword") {
-      if (weapon.branch === "b") {
-        game.cooldowns.sword = 0.28;
-      } else {
-        const count = level >= 5 ? 3 : level >= 4 ? 2 : 1;
-        for (let i = 0; i < count; i++) {
-          addProjectile(game, "sword", target, 520, 11 + level * 5, info.color, {
-            r: 6,
-            pierce: weapon.branch === "a" ? 1 + Math.floor(level / 2) : 0,
-            mark: hasHarmony(game, "远近相济"),
-          }, (i - (count - 1) / 2) * 0.1);
-        }
-        game.cooldowns.sword = Math.max(0.34, 0.85 - level * 0.07);
-      }
-    }
-
-    if (weapon.id === "fan") {
-      const count = weapon.branch === "a" ? 7 : level >= 4 ? 5 : 3;
-      const spread = weapon.branch === "a" ? 0.18 : 0.12;
-      for (let i = 0; i < count; i++) {
-        addProjectile(game, "fan", target, 290, 6 + level * 3.5, info.color, {
-          r: weapon.branch === "a" ? 13 : 9,
-          life: 1.45,
-          pierce: weapon.branch === "a" ? 2 : 0,
-          homing: weapon.branch === "b",
-        }, (i - (count - 1) / 2) * spread);
-      }
-      if (hasHarmony(game, "风雨合鸣")) {
-        for (let i = 0; i < 4; i++) {
-          addProjectile(game, "harmony", target, 390, 5 + level * 2, "#b24d43", {
-            r: 3,
-            pierce: 1,
-          }, (i - 1.5) * 0.2);
-        }
-      }
-      game.cooldowns.fan = Math.max(0.65, 1.55 - level * 0.1);
-    }
-
-    if (weapon.id === "umbrella") {
-      if (weapon.branch === "b") {
-        const count = level >= 5 ? 12 : 8;
-        for (let i = 0; i < count; i++) {
-          const angle = (Math.PI * 2 * i) / count;
-          const dummy = { ...target, x: game.player.x + Math.cos(angle) * 100, y: game.player.y + Math.sin(angle) * 100 };
-          addProjectile(game, "umbrella", dummy, 360, 6 + level * 2.5, info.color, { r: 3, pierce: 1 });
-        }
-      }
-      game.cooldowns.umbrella = weapon.branch === "b" ? Math.max(0.8, 1.7 - level * 0.12) : 0.35;
-    }
-
-    if (weapon.id === "scissors") {
-      if (weapon.branch !== "b") {
-        const count = level >= 5 ? 4 : 2;
-        for (let i = 0; i < count; i++) {
-          addProjectile(game, "scissors", target, 360, 9 + level * 4, info.color, {
-            r: 9,
-            pierce: weapon.branch === "a" ? 3 : 1,
-            life: 2.4,
-          }, (i - (count - 1) / 2) * 0.22);
-        }
-      }
-      game.cooldowns.scissors = Math.max(0.55, 1.35 - level * 0.08);
-    }
-
-    if (weapon.id === "abacus") {
-      const count = weapon.branch === "a" ? 7 : level >= 4 ? 5 : 3;
-      for (let i = 0; i < count; i++) {
-        addProjectile(game, "abacus", target, 420, 5 + level * 2.7, info.color, {
-          r: 5,
-          pierce: weapon.branch === "b" ? 4 : 0,
-        }, (i - (count - 1) / 2) * 0.07);
-      }
-      game.cooldowns.abacus = weapon.branch === "a"
-        ? Math.max(0.35, 0.82 - level * 0.06)
-        : Math.max(0.62, 1.2 - level * 0.06);
-    }
-
-    if (weapon.id === "crossbow") {
-      const count = weapon.branch === "a" ? 3 : weapon.level >= 5 ? 2 : 1;
-      for (let i = 0; i < count; i++) {
-        const offset = weapon.branch === "a" ? (i - 1) * 0.09 : (i - (count - 1) / 2) * 0.04;
-        addProjectile(game, "crossbow", target, 620, 12 + level * 5, info.color, {
-          r: 4,
-          pierce: level >= 5 ? 2 : 0,
-          mark: false,
-        }, offset);
-      }
-      game.cooldowns.crossbow = weapon.branch === "b"
-        ? Math.max(0.26, 0.7 - level * 0.07)
-        : Math.max(0.42, 1.05 - level * 0.07);
-    }
-  }
-}
-
-function spawnEnemy(game: Game, forced?: EnemyType) {
-  const season = getSeason(game.elapsed);
-  const available: EnemyType[][] = [
-    ["cup", "shoe", "fish"],
-    ["lantern", "fish", "shoe"],
-    ["abacus", "cup", "lantern"],
-    ["rib", "abacus", "shoe"],
-  ];
-  const type = forced ?? available[season][Math.floor(Math.random() * available[season].length)];
-  const resolvedType = !forced && game.environmental.startsWith("灯火") && Math.random() < 0.48 ? "lantern" : type;
-  const edge = Math.floor(Math.random() * 4);
-  const margin = 36;
-  let x = Math.random() * W;
-  let y = Math.random() * H;
-  if (edge === 0) { x = -margin; y = Math.random() * H; }
-  if (edge === 1) { x = W + margin; y = Math.random() * H; }
-  if (edge === 2) { x = Math.random() * W; y = -margin; }
-  if (edge === 3) { x = Math.random() * W; y = H + margin; }
-
-  const elite = resolvedType === "lion" || resolvedType === "puppet";
-  const boss = resolvedType === "taotie" || resolvedType === "nian";
-  const bossTier: BossTier = resolvedType === "taotie" ? "mid" : resolvedType === "nian" ? "final" : null;
-  const crowdScale = game.trials.has("crowd") ? 1.18 : 1;
-  const eliteScale = game.trials.has("elite") && (elite || boss) ? 1.45 : 1;
-  const baseHp = 11 + game.elapsed * 0.055;
-  const stats: Record<EnemyType, { r: number; hp: number; speed: number; damage: number }> = {
-    cup: { r: 18, hp: 1, speed: 48, damage: 1 },
-    shoe: { r: 16, hp: 0.8, speed: 76, damage: 1 },
-    lantern: { r: 20, hp: 1.45, speed: 42, damage: 1 },
-    fish: { r: 15, hp: 0.72, speed: 66, damage: 1 },
-    abacus: { r: 22, hp: 1.8, speed: 36, damage: 1 },
-    rib: { r: 20, hp: 1.55, speed: 50, damage: 1 },
-    lion: { r: 40, hp: 15, speed: 44, damage: 1 },
-    puppet: { r: 36, hp: 12, speed: 54, damage: 1 },
-    taotie: { r: 62, hp: 46, speed: 34, damage: 1 },
-    nian: { r: 78, hp: 92, speed: 31, damage: 1 },
-  };
-  const stat = stats[resolvedType];
-  const hp = baseHp * stat.hp * eliteScale * (boss && game.endless ? 1 + (game.elapsed - RUN_TIME) / 360 : 1);
-  game.enemies.push({
-    id: serial++,
-    x,
-    y,
-    r: stat.r,
-    hp,
-    maxHp: hp,
-    speed: stat.speed * (game.trials.has("swift") ? 1.18 : 1) * crowdScale,
-    type: resolvedType,
-    damage: stat.damage,
-    hitFlash: 0,
-    orbitCd: 0,
-    marked: 0,
-    elite,
-    boss,
-    bossTier,
-  });
-}
-
-function addBurst(game: Game, x: number, y: number, color: string, count = 7) {
-  for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 20 + Math.random() * 80;
-    game.particles.push({
-      x,
-      y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      life: 0.45 + Math.random() * 0.35,
-      max: 0.8,
-      color,
-      size: 2 + Math.random() * 5,
-    });
-  }
-}
-
-function damageEnemy(game: Game, enemy: Enemy, amount: number, source: WeaponId | "harmony") {
-  enemy.hp -= amount;
-  enemy.hitFlash = 0.08;
-  if (source === "sword" && hasHarmony(game, "远近相济")) enemy.marked = 2.2;
-  if (hasHarmony(game, "精打细算") && (source === "scissors" || source === "abacus")) {
-    game.hitCounter += 1;
-    if (game.hitCounter >= 12) {
-      game.hitCounter = 0;
-      const strongest = strongestEnemy(game);
-      if (strongest) {
-        strongest.hp -= 24 * game.player.power;
-        addBurst(game, strongest.x, strongest.y, "#c18b45", 12);
-      }
-    }
-  }
-  addBurst(game, enemy.x, enemy.y, source === "harmony" ? "#a54535" : "#2f302b", 3);
-}
-
-function updateOrbitWeapons(game: Game, dt: number) {
-  game.orbitAngle += dt * 2.2;
-  const active: Array<{ id: WeaponId; count: number; radius: number; damage: number; size: number }> = [];
-  const sword = game.weapons.find((item) => item.id === "sword" && item.branch === "b");
-  if (sword) active.push({ id: "sword", count: sword.level >= 5 ? 5 : 3, radius: 72, damage: 6 + sword.level * 2.4, size: 10 });
-  const umbrella = game.weapons.find((item) => item.id === "umbrella");
-  if (umbrella) active.push({
-    id: "umbrella",
-    count: umbrella.branch === "a" ? (umbrella.level >= 5 ? 4 : 3) : 1,
-    radius: umbrella.branch === "a" ? 82 : 62,
-    damage: 3.5 + umbrella.level * 1.8,
-    size: 14,
-  });
-  const scissors = game.weapons.find((item) => item.id === "scissors" && item.branch === "b");
-  if (scissors) active.push({ id: "scissors", count: scissors.level >= 5 ? 4 : 2, radius: 100, damage: 7 + scissors.level * 2.4, size: 11 });
-
-  for (const enemy of game.enemies) {
-    enemy.orbitCd -= dt;
-    if (enemy.orbitCd > 0) continue;
-    for (const orbit of active) {
-      let hit = false;
-      for (let i = 0; i < orbit.count; i++) {
-        const angle = game.orbitAngle * (orbit.id === "scissors" ? 1.45 : 1) + (Math.PI * 2 * i) / orbit.count;
-        const x = game.player.x + Math.cos(angle) * orbit.radius;
-        const y = game.player.y + Math.sin(angle) * orbit.radius;
-        if (distSq(x, y, enemy.x, enemy.y) < (orbit.size + enemy.r) ** 2) {
-          damageEnemy(game, enemy, orbit.damage * game.player.power, orbit.id);
-          enemy.orbitCd = 0.32;
-          hit = true;
-          break;
-        }
-      }
-      if (hit) break;
-    }
-  }
-}
-
-function updateProjectiles(game: Game, dt: number) {
-  for (const projectile of game.projectiles) {
-    projectile.life -= dt;
-    if (projectile.homing) {
-      const target = game.enemies.find((enemy) => enemy.id === projectile.targetId) ?? nearestEnemy(game);
-      if (target) {
-        const desired = normalize(target.x - projectile.x, target.y - projectile.y);
-        const speed = Math.hypot(projectile.vx, projectile.vy);
-        projectile.vx += (desired.x * speed - projectile.vx) * dt * 3.5;
-        projectile.vy += (desired.y * speed - projectile.vy) * dt * 3.5;
-      }
-    }
-    projectile.x += projectile.vx * dt;
-    projectile.y += projectile.vy * dt;
-
-    for (const enemy of game.enemies) {
-      if (enemy.hp <= 0) continue;
-      if (distSq(projectile.x, projectile.y, enemy.x, enemy.y) < (projectile.r + enemy.r) ** 2) {
-        damageEnemy(game, enemy, projectile.damage, projectile.kind);
-        if (projectile.mark) enemy.marked = 2.5;
-        projectile.pierce -= 1;
-        if (projectile.pierce < 0) {
-          projectile.life = 0;
-          break;
-        }
-      }
-    }
-  }
-  game.projectiles = game.projectiles.filter((projectile) =>
-    projectile.life > 0 &&
-    projectile.x > -100 && projectile.x < W + 100 &&
-    projectile.y > -100 && projectile.y < H + 100,
-  );
-}
-
-function removeDead(game: Game, onBoss: (enemy: Enemy) => void) {
-  const living: Enemy[] = [];
-  for (const enemy of game.enemies) {
-    if (enemy.hp > 0) {
-      living.push(enemy);
-      continue;
-    }
-    game.kills += 1;
-    game.score += enemy.bossTier === "final" ? 3000 : enemy.bossTier === "mid" ? 1200 : enemy.elite ? 500 : 20;
-    addBurst(game, enemy.x, enemy.y, enemy.boss ? "#a54535" : "#3f443d", enemy.boss ? 60 : enemy.elite ? 24 : 9);
-    const drops = enemy.boss ? 0 : enemy.elite ? 8 : 1;
-    for (let i = 0; i < drops; i++) {
-      game.pickups.push({
-        id: serial++,
-        x: enemy.x + (Math.random() - 0.5) * 30,
-        y: enemy.y + (Math.random() - 0.5) * 30,
-        value: enemy.elite ? 2 : 1,
-        pulse: Math.random() * Math.PI * 2,
-      });
-    }
-    if (enemy.boss) onBoss(enemy);
-  }
-  game.enemies = living;
-}
-
-function drawBackdrop(ctx: CanvasRenderingContext2D, elapsed: number, menu = false, art: LoadedArt | null = null) {
-  if (art) {
-    drawSeasonScene(ctx, art, elapsed, menu);
-    if (!menu) drawSeasonParticles(ctx, elapsed);
-    return;
-  }
-  const index = getSeason(elapsed);
-  const season = seasonData[index];
-  ctx.fillStyle = season.paper;
-  ctx.fillRect(0, 0, W, H);
-
-  const gradient = ctx.createRadialGradient(W * 0.55, H * 0.35, 20, W * 0.55, H * 0.35, W * 0.75);
-  gradient.addColorStop(0, "rgba(255,255,247,0.55)");
-  gradient.addColorStop(1, "rgba(94,83,61,0.05)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, W, H);
-
-  ctx.save();
-  ctx.globalAlpha = 0.12;
-  ctx.fillStyle = season.wash;
-  for (let i = 0; i < 5; i++) {
-    ctx.beginPath();
-    ctx.ellipse(170 + i * 250, H - 35 - (i % 2) * 22, 230, 110 + i * 8, -0.08 + i * 0.03, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 0.18;
-  ctx.strokeStyle = "#3b4038";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, 560);
-  ctx.bezierCurveTo(230, 490, 390, 585, 610, 535);
-  ctx.bezierCurveTo(840, 480, 1040, 570, W, 505);
-  ctx.stroke();
-
-  if (index === 0) {
-    ctx.fillStyle = "#b3655a";
-    for (let i = 0; i < 22; i++) {
-      const x = (i * 97 + elapsed * 7) % W;
-      const y = 90 + ((i * 53 + elapsed * 12) % 420);
-      ctx.fillRect(x, y, 4, 4);
-    }
-  }
-  if (index === 1) {
-    ctx.strokeStyle = "#50766a";
-    for (let i = 0; i < 8; i++) {
-      ctx.beginPath();
-      ctx.arc(120 + i * 170, H - 50, 34 + (i % 3) * 10, Math.PI, Math.PI * 2);
-      ctx.stroke();
-    }
-  }
-  if (index === 2) {
-    ctx.fillStyle = "#9d6a3f";
-    for (let i = 0; i < 18; i++) {
-      const x = (i * 83 + elapsed * 18) % W;
-      const y = 80 + ((i * 61 + elapsed * 9) % 520);
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(0.7);
-      ctx.fillRect(-5, -2, 10, 4);
-      ctx.restore();
-    }
-  }
-  if (index === 3) {
-    ctx.fillStyle = "#788995";
-    for (let i = 0; i < 36; i++) {
-      const x = (i * 47 + elapsed * 5) % W;
-      const y = (i * 79 + elapsed * 17) % H;
-      ctx.beginPath();
-      ctx.arc(x, y, 2 + (i % 3), 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-  ctx.restore();
-
-  ctx.save();
-  ctx.globalAlpha = menu ? 0.26 : 0.1;
-  ctx.strokeStyle = "#5e574c";
-  for (let i = 0; i < 28; i++) {
-    const y = 18 + i * 26;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(W, y + Math.sin(i) * 3);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, t: number, art: LoadedArt | null) {
-  if (art?.enemies[enemy.type]) {
-    drawEnemyArt(ctx, enemy, art, t);
-    return;
-  }
-  ctx.save();
-  ctx.translate(enemy.x, enemy.y);
-  const bob = Math.sin(t * 5 + enemy.id) * 2;
-  ctx.translate(0, bob);
-  ctx.lineWidth = enemy.boss ? 6 : enemy.elite ? 4 : 3;
-  ctx.strokeStyle = enemy.hitFlash > 0 ? "#fff6df" : "#302d28";
-  ctx.fillStyle = enemy.boss ? "#a54535" : enemy.elite ? "#73594b" : "#e5d8bd";
-
-  if (enemy.type === "cup") {
-    ctx.beginPath();
-    ctx.moveTo(-14, -12); ctx.lineTo(12, -12); ctx.lineTo(9, 13); ctx.lineTo(-10, 13); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.arc(14, 0, 8, -Math.PI / 2, Math.PI / 2); ctx.stroke();
-  } else if (enemy.type === "shoe") {
-    ctx.beginPath();
-    ctx.moveTo(-15, 7); ctx.quadraticCurveTo(-4, -14, 4, 0); ctx.quadraticCurveTo(12, 4, 16, 11); ctx.lineTo(-14, 11); ctx.closePath(); ctx.fill(); ctx.stroke();
-  } else if (enemy.type === "lantern") {
-    ctx.fillStyle = "#b44d3e";
-    ctx.beginPath(); ctx.ellipse(0, 0, 15, 20, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(-8, -22); ctx.lineTo(8, -22); ctx.moveTo(0, 21); ctx.lineTo(0, 30); ctx.stroke();
-  } else if (enemy.type === "fish") {
-    ctx.beginPath(); ctx.ellipse(0, 0, 16, 9, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(-15, 0); ctx.lineTo(-25, -10); ctx.lineTo(-25, 10); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = "#302d28"; ctx.beginPath(); ctx.arc(7, -2, 2, 0, Math.PI * 2); ctx.fill();
-  } else if (enemy.type === "abacus") {
-    ctx.strokeRect(-18, -14, 36, 28);
-    for (let row = -7; row <= 7; row += 7) {
-      ctx.beginPath(); ctx.moveTo(-14, row); ctx.lineTo(14, row); ctx.stroke();
-      for (let x = -8; x <= 8; x += 8) { ctx.beginPath(); ctx.arc(x, row, 3, 0, Math.PI * 2); ctx.fill(); }
-    }
-  } else if (enemy.type === "rib") {
-    ctx.beginPath(); ctx.arc(0, 0, 18, Math.PI, Math.PI * 2); ctx.stroke();
-    for (let i = -12; i <= 12; i += 8) { ctx.beginPath(); ctx.moveTo(i, -10); ctx.lineTo(i * 0.75, 16); ctx.stroke(); }
-  } else if (enemy.type === "lion") {
-    ctx.beginPath(); ctx.arc(0, 0, 31, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    for (let i = 0; i < 9; i++) {
-      const a = (Math.PI * 2 * i) / 9;
-      ctx.beginPath(); ctx.arc(Math.cos(a) * 34, Math.sin(a) * 34, 8, 0, Math.PI * 2); ctx.stroke();
-    }
-    ctx.fillStyle = "#f3dfb9";
-    ctx.beginPath(); ctx.arc(-11, -4, 6, 0, Math.PI * 2); ctx.arc(11, -4, 6, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#302d28";
-    ctx.beginPath(); ctx.arc(-11, -4, 2, 0, Math.PI * 2); ctx.arc(11, -4, 2, 0, Math.PI * 2); ctx.fill();
-  } else if (enemy.type === "puppet") {
-    ctx.beginPath(); ctx.arc(0, -17, 11, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.fillRect(-12, -4, 24, 32); ctx.strokeRect(-12, -4, 24, 32);
-    ctx.beginPath(); ctx.moveTo(-12, 3); ctx.lineTo(-28, 18); ctx.moveTo(12, 3); ctx.lineTo(28, 18); ctx.stroke();
-  } else {
-    ctx.rotate(Math.sin(t * 0.7) * 0.04);
-    ctx.beginPath();
-    for (let i = 0; i < 12; i++) {
-      const a = -Math.PI / 2 + (Math.PI * 2 * i) / 12;
-      const r = i % 2 === 0 ? 70 : 52;
-      const x = Math.cos(a) * r;
-      const y = Math.sin(a) * r;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = "#f3dfb9";
-    ctx.beginPath(); ctx.arc(-25, -8, 12, 0, Math.PI * 2); ctx.arc(25, -8, 12, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#29251f";
-    ctx.beginPath(); ctx.arc(-25, -8, 5, 0, Math.PI * 2); ctx.arc(25, -8, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.moveTo(-30, 28); ctx.quadraticCurveTo(0, 44, 30, 28); ctx.stroke();
-  }
-
-  if (enemy.marked > 0) {
-    ctx.strokeStyle = "#b64f3d";
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(0, 0, enemy.r + 8 + Math.sin(t * 7) * 2, 0, Math.PI * 2); ctx.stroke();
-  }
-  if (enemy.elite || enemy.boss) {
-    const width = enemy.boss ? 140 : 70;
-    ctx.fillStyle = "rgba(38,35,31,0.18)";
-    ctx.fillRect(-width / 2, enemy.r + 12, width, 5);
-    ctx.fillStyle = enemy.boss ? "#a54535" : "#50766a";
-    ctx.fillRect(-width / 2, enemy.r + 12, width * clamp(enemy.hp / enemy.maxHp, 0, 1), 5);
-  }
-  ctx.restore();
-}
-
-function drawPlayer(ctx: CanvasRenderingContext2D, game: Game, t: number) {
-  drawPlayerArt(ctx, game.player, t);
-}
-
-function drawOrbitWeapons(ctx: CanvasRenderingContext2D, game: Game) {
-  const drawOrbit = (weapon: WeaponState, count: number, radius: number, speedScale: number) => {
-    const info = weaponInfo[weapon.id];
-    for (let i = 0; i < count; i++) {
-      const angle = game.orbitAngle * speedScale + (Math.PI * 2 * i) / count;
-      const x = game.player.x + Math.cos(angle) * radius;
-      const y = game.player.y + Math.sin(angle) * radius;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(angle + Math.PI / 2);
-      drawWeaponGlyph(ctx, weapon.id, weapon.level, 0, 0, 0, info.color);
-      ctx.restore();
-    }
-  };
-
-  for (const weapon of game.weapons) {
-    if (weapon.id === "umbrella") drawOrbit(weapon, weapon.branch === "a" ? (weapon.level >= 5 ? 4 : 3) : 1, weapon.branch === "a" ? 82 : 62, 1);
-    if (weapon.id === "sword" && weapon.branch === "b") drawOrbit(weapon, weapon.level >= 5 ? 5 : 3, 72, 1);
-    if (weapon.id === "scissors" && weapon.branch === "b") drawOrbit(weapon, weapon.level >= 5 ? 4 : 2, 100, 1.45);
-  }
-}
-
-function drawGame(ctx: CanvasRenderingContext2D, game: Game, t: number, joystick: { active: boolean; bx: number; by: number; x: number; y: number }, art: LoadedArt | null) {
-  drawBackdrop(ctx, game.elapsed, false, art);
-  ctx.save();
-  ctx.globalAlpha = 0.035;
-  ctx.strokeStyle = seasonData[getSeason(game.elapsed)].wash;
-  ctx.lineWidth = 1;
-  for (let x = 80; x < W; x += 160) {
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-  }
-  ctx.restore();
-
-  for (const pickup of game.pickups) {
-    ctx.save();
-    ctx.translate(pickup.x, pickup.y);
-    const size = 5 + Math.sin(pickup.pulse) * 1.5;
-    ctx.fillStyle = "#50766a";
-    ctx.rotate(Math.PI / 4);
-    ctx.fillRect(-size, -size, size * 2, size * 2);
-    ctx.restore();
-  }
-
-  for (const projectile of game.projectiles) {
-    ctx.save();
-    ctx.translate(projectile.x, projectile.y);
-    ctx.rotate(Math.atan2(projectile.vy, projectile.vx));
-    ctx.fillStyle = projectile.color;
-    ctx.strokeStyle = "#2b2924";
-    ctx.lineWidth = 1.5;
-    if (projectile.kind === "fan") {
-      ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(-8, -7); ctx.lineTo(-4, 0); ctx.lineTo(-8, 7); ctx.closePath(); ctx.fill(); ctx.stroke();
-    } else if (projectile.kind === "scissors") {
-      ctx.beginPath(); ctx.moveTo(-10, -6); ctx.lineTo(11, 5); ctx.moveTo(-10, 6); ctx.lineTo(11, -5); ctx.stroke();
-    } else if (projectile.kind === "abacus") {
-      ctx.beginPath(); ctx.ellipse(0, 0, 8, 5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    } else {
-      ctx.fillRect(-10, -projectile.r / 2, 20, projectile.r);
-    }
-    ctx.restore();
-  }
-
-  for (const enemy of game.enemies) drawEnemy(ctx, enemy, t, art);
-  drawOrbitWeapons(ctx, game);
-  drawPlayer(ctx, game, t);
-
-  for (const particle of game.particles) {
-    ctx.save();
-    ctx.globalAlpha = clamp(particle.life / particle.max, 0, 1);
-    ctx.fillStyle = particle.color;
-    ctx.beginPath(); ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
-  }
-
-  if (joystick.active) {
-    ctx.save();
-    ctx.globalAlpha = 0.42;
-    ctx.fillStyle = "#29251f";
-    ctx.beginPath(); ctx.arc(joystick.bx, joystick.by, 48, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#f3ead5";
-    ctx.beginPath(); ctx.arc(joystick.x, joystick.y, 22, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
+  if (typeof window === "undefined") return fallback;
+  try {
+    const saved = JSON.parse(localStorage.getItem("paper-guild.audio.v1") ?? "{}") as Partial<AudioSettings>;
+    return {
+      muted: typeof saved.muted === "boolean" ? saved.muted : fallback.muted,
+      master: clamp(saved.master ?? fallback.master, 0, 1),
+      music: clamp(saved.music ?? fallback.music, 0, 1),
+      sfx: clamp(saved.sfx ?? fallback.sfx, 0, 1),
+    };
+  } catch {
+    return fallback;
   }
 }
 
 export function PaperGuildGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const gameRef = useRef<Game | null>(null);
-  const artRef = useRef<LoadedArt | null>(null);
+  const runRef = useRef<RunState | null>(null);
   const modeRef = useRef<Mode>("menu");
+  const assetsRef = useRef<RenderAssets>({
+    seasons: null,
+    enemies: null,
+    visuals: null,
+    solarTerms: null,
+  });
+  const audioRef = useRef<AudioManager | null>(null);
   const keysRef = useRef(new Set<string>());
-  const joystickRef = useRef({ active: false, pointerId: -1, bx: 0, by: 0, x: 0, y: 0 });
+  const joystickRef = useRef({
+    active: false,
+    pointerId: -1,
+    baseX: 0,
+    baseY: 0,
+    knobX: 0,
+    knobY: 0,
+  });
   const lastFrameRef = useRef(0);
   const hudClockRef = useRef(0);
+  const queuedModalsRef = useRef<QueuedModal[]>([]);
+  const forgeConsumedRef = useRef(false);
+  const gamepadUiRef = useRef<GamepadUiState>({
+    direction: 0,
+    repeatAt: 0,
+    confirm: false,
+    cancel: false,
+    pause: false,
+  });
+  const combatAudioRef = useRef({
+    actorIds: new Set<number>(),
+    fxIds: new Set<number>(),
+    kills: 0,
+  });
+  const bossPreloadRef = useRef({ taotie: false, nian: false });
+
   const [mode, setModeState] = useState<Mode>("menu");
-  const [snapshot, setSnapshot] = useState<Snapshot>(initialSnapshot);
-  const [options, setOptions] = useState<UpgradeOption[]>([]);
+  const [snapshot, setSnapshot] = useState<RunSnapshot>(emptySnapshot);
+  const [upgradeOptions, setUpgradeOptions] = useState<readonly UpgradeOption[]>([]);
   const [trials, setTrials] = useState<Set<TrialId>>(new Set());
+  const [selectedNodes, setSelectedNodes] = useState<number[]>([]);
+  const [forgeAction, setForgeAction] = useState<"swap" | "fuse">("fuse");
+  const [forgeMessage, setForgeMessage] = useState("点选相邻节点，可合铸为独立新器。");
+  const [result, setResult] = useState<ResultState>({ victory: false, title: "纸尽人归" });
+  const [loading, setLoading] = useState({ season: 0, enemy: 0, visual: 0, terms: 0 });
+  const [assetsReady, setAssetsReady] = useState(false);
+  const [audioSettings, setAudioSettings] = useState<AudioSettings>(initialAudioSettings);
   const [trialsUnlocked, setTrialsUnlocked] = useState(() => {
     if (typeof window === "undefined") return false;
     try {
-      return localStorage.getItem("paper-guild-cleared") === "yes";
+      return localStorage.getItem("paper-guild-cleared-v3") === "yes";
     } catch {
       return false;
     }
   });
-  const [tutorialKey, setTutorialKey] = useState(0);
-  const [artProgress, setArtProgress] = useState(0);
-  const [artReady, setArtReady] = useState(false);
+  const [tutorialNonce, setTutorialNonce] = useState(0);
 
   const setMode = useCallback((next: Mode) => {
     modeRef.current = next;
@@ -1096,394 +267,798 @@ export function PaperGuildGame() {
   }, []);
 
   useEffect(() => {
-    let active = true;
-    loadArtAssets((progress) => {
-      if (active) setArtProgress(progress);
-    }).then((art) => {
-      if (!active) return;
-      artRef.current = art;
-      setArtProgress(1);
-      setArtReady(true);
+    const manager = new AudioManager();
+    audioRef.current = manager;
+
+    let alive = true;
+    const seasonPromise = loadArtAssets((progress) => {
+      if (alive) setLoading((current) => ({ ...current, season: progress }));
     });
+    const enemyPromise = loadEnemySpriteSheets((progress) => {
+      if (alive) setLoading((current) => ({ ...current, enemy: progress }));
+    });
+    const visualPromise = loadVisualPack((done, total) => {
+      if (alive) setLoading((current) => ({
+        ...current,
+        visual: total > 0 ? done / total : 1,
+      }));
+    });
+    const termsPromise = loadSolarTermAtlas().then((atlas) => {
+      if (alive) setLoading((current) => ({ ...current, terms: 1 }));
+      return atlas;
+    });
+
+    Promise.all([seasonPromise, enemyPromise, visualPromise, termsPromise])
+      .then(([seasons, enemies, visuals, solarTerms]: [
+        LoadedArt,
+        EnemySpriteSheets,
+        VisualPack,
+        HTMLImageElement | null,
+      ]) => {
+        if (!alive) return;
+        assetsRef.current = { seasons, enemies, visuals, solarTerms };
+        setLoading({ season: 1, enemy: 1, visual: 1, terms: 1 });
+        setAssetsReady(true);
+      });
+
     return () => {
-      active = false;
+      alive = false;
+      manager.destroy();
+      audioRef.current = null;
     };
   }, []);
 
-  const openUpgrade = useCallback((game: Game, rareOnly = false) => {
-    finishHumanForm(game.player);
-    const nextOptions = rareOnly
-      ? makeRareOptions(game)
-      : makeUpgradeOptions(game);
-    setOptions(nextOptions.slice(0, 3));
-    setSnapshot(snapshotOf(game));
-    setMode("upgrade");
-  }, [setMode]);
+  const refreshSnapshot = useCallback(() => {
+    const run = runRef.current;
+    if (run) setSnapshot(snapshotRun(run));
+  }, []);
 
-  const endRun = useCallback((victory: boolean) => {
-    const game = gameRef.current;
-    if (!game) return;
+  const syncMusic = useCallback(() => {
+    const run = runRef.current;
+    if (!run) return;
+    const term = getSolarTermState(run.elapsed, run.endless);
+    void audioRef.current?.syncWorldMusic({
+      season: term.season,
+      endless: run.endless,
+      bossTier: run.currentBoss ?? undefined,
+    });
+  }, []);
+
+  const play = useCallback((cue: SfxCueId) => {
+    void audioRef.current?.playSfx(cue);
+  }, []);
+
+  const releaseMovementInput = useCallback(() => {
+    keysRef.current.clear();
+    joystickRef.current.active = false;
+    joystickRef.current.pointerId = -1;
+  }, []);
+
+  const pauseGame = useCallback(() => {
+    const run = runRef.current;
+    if (run) finishHumanForm(run.player);
+    releaseMovementInput();
+    setMode("paused");
+  }, [releaseMovementInput, setMode]);
+
+  const openUpgrade = useCallback((run: RunState) => {
+    finishHumanForm(run.player);
+    releaseMovementInput();
+    const options = getUpgradeChoices(run);
+    setUpgradeOptions(options);
+    const weaponIds = options
+      .filter((option) => option.kind !== "utility")
+      .map((option) => option.weaponId);
+    const visuals = assetsRef.current.visuals;
+    if (visuals && weaponIds.length > 0) void preloadWeaponVisuals(visuals, weaponIds);
+    setSnapshot(snapshotRun(run));
+    setMode("upgrade");
+  }, [releaseMovementInput, setMode]);
+
+  const openForge = useCallback((run: RunState, message?: string) => {
+    finishHumanForm(run.player);
+    releaseMovementInput();
+    forgeConsumedRef.current = false;
+    setSelectedNodes([]);
+    setForgeMessage(message ?? "器息暂歇。添器、换位或将相邻节点合铸。");
+    const used = new Set(
+      (run.weave?.nodes ?? [])
+        .filter((node) => node.kind === "weapon")
+        .map((node) => node.sourceId as WeaponId),
+    );
+    const candidates = WEAPON_IDS.filter((weaponId) => !used.has(weaponId)).slice(0, 6);
+    const visuals = assetsRef.current.visuals;
+    if (visuals && candidates.length > 0) void preloadWeaponVisuals(visuals, candidates);
+    setSnapshot(snapshotRun(run));
+    setMode("forge");
+  }, [releaseMovementInput, setMode]);
+
+  const endRun = useCallback((victory: boolean, title?: string) => {
+    const run = runRef.current;
+    if (!run) return;
+    queuedModalsRef.current = [];
+    finishHumanForm(run.player);
+    releaseMovementInput();
     if (victory) {
-      try { localStorage.setItem("paper-guild-cleared", "yes"); } catch {}
+      try {
+        localStorage.setItem("paper-guild-cleared-v3", "yes");
+      } catch {
+        // Progress still applies for this session when storage is unavailable.
+      }
       setTrialsUnlocked(true);
     }
-    setSnapshot(snapshotOf(game));
+    setResult({ victory, title: title ?? (victory ? "绘卷已收" : "纸尽人归") });
+    setSnapshot(snapshotRun(run));
     setMode("result");
-  }, [setMode]);
+    audioRef.current?.stopMusic(0.45);
+  }, [releaseMovementInput, setMode]);
 
-  const onBossDefeated = useCallback((enemy: Enemy) => {
-    const game = gameRef.current;
-    if (!game) return;
-    if (game.endless || enemy.bossTier === "mid") {
-      openUpgrade(game, true);
+  const openNextQueuedModal = useCallback((run: RunState) => {
+    const next = queuedModalsRef.current.shift();
+    if (!next) {
+      setMode("playing");
+      syncMusic();
+      return false;
+    }
+    if (next === "upgrade") {
+      openUpgrade(run);
+    } else if (next === "rare") {
+      finishHumanForm(run.player);
+      releaseMovementInput();
+      setSnapshot(snapshotRun(run));
+      setMode("rare");
+      syncMusic();
+    } else if (next === "forge") {
+      openForge(run, "阶段战已毕，万器天盘获得一次铸器机会。");
+      syncMusic();
+    } else {
+      finishHumanForm(run.player);
+      releaseMovementInput();
+      setSnapshot(snapshotRun(run));
+      setMode("bossChoice");
+      syncMusic();
+    }
+    return true;
+  }, [openForge, openUpgrade, releaseMovementInput, setMode, syncMusic]);
+
+  const handleEvents = useCallback((run: RunState, events: RunEvent[]) => {
+    for (const event of events) {
+      if (event.type === "pickup") play("sfx.pickup");
+      if (event.type === "playerHit") play("sfx.player-hit");
+      if (event.type === "fold") play(event.folded ? "sfx.fold" : "sfx.unfold");
+      if (event.type === "synergy") play("sfx.synergy");
+      if (event.type === "terminal") play("sfx.ultimate");
+      if (event.type === "bossSpawn") {
+        play(event.tier === "mid" ? "sfx.boss-taotie" : "sfx.boss-nian");
+        syncMusic();
+      }
+      if (event.type === "term") {
+        if (!run.endless && run.elapsed >= STANDARD_SECONDS) continue;
+        play("sfx.term-change");
+        const term = getSolarTermState(run.elapsed, run.endless).current;
+        void audioRef.current?.playSfx(getTermAmbienceCue(term));
+        syncMusic();
+      }
+    }
+
+    if (events.some((event) => event.type === "defeat")) {
+      queuedModalsRef.current = [];
+      endRun(false);
       return;
     }
-    setSnapshot(snapshotOf(game));
-    setMode("bossChoice");
-  }, [openUpgrade, setMode]);
+
+    const queued: QueuedModal[] = [];
+    if (events.some((event) => event.type === "finalBoss")) queued.push("bossChoice");
+    if (events.some((event) => event.type === "midBoss")) queued.push("rare");
+    if (events.some((event) => event.type === "forge")) queued.push("forge");
+    for (const event of events) if (event.type === "upgrade") queued.push("upgrade");
+    queuedModalsRef.current.push(...queued);
+    if (modeRef.current === "playing" && queued.length > 0) openNextQueuedModal(run);
+  }, [endRun, openNextQueuedModal, play, syncMusic]);
 
   useEffect(() => {
-    const onDown = (event: KeyboardEvent) => {
+    const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
-      if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(key)) event.preventDefault();
+      if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(key)) {
+        event.preventDefault();
+      }
       keysRef.current.add(key);
       if (key === "escape" && modeRef.current === "playing") {
-        if (gameRef.current) finishHumanForm(gameRef.current.player);
-        setMode("paused");
+        pauseGame();
+      } else if (key === "escape" && modeRef.current === "paused") {
+        setMode("playing");
       }
-      else if (key === "escape" && modeRef.current === "paused") setMode("playing");
+      if (modeRef.current === "upgrade" && ["1", "2", "3"].includes(key)) {
+        const option = upgradeOptions[Number(key) - 1];
+        if (option) {
+          const run = runRef.current;
+          if (run) {
+            const synergy = applyUpgrade(run, option);
+            if (synergy) play("sfx.synergy");
+            else play("sfx.upgrade");
+            refreshSnapshot();
+            openNextQueuedModal(run);
+          }
+        }
+      }
     };
-    const onUp = (event: KeyboardEvent) => keysRef.current.delete(event.key.toLowerCase());
-    window.addEventListener("keydown", onDown, { passive: false });
-    window.addEventListener("keyup", onUp);
+    const onKeyUp = (event: KeyboardEvent) => keysRef.current.delete(event.key.toLowerCase());
+    const onVisibility = () => {
+      if (document.hidden && modeRef.current === "playing") {
+        pauseGame();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, { passive: false });
+    window.addEventListener("keyup", onKeyUp);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      window.removeEventListener("keydown", onDown);
-      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [setMode]);
+  }, [openNextQueuedModal, pauseGame, play, refreshSnapshot, setMode, upgradeOptions]);
+
+  const pollGamepadUi = useCallback((gamepad: Gamepad, time: number) => {
+    const state = gamepadUiRef.current;
+    const pausePressed = gamepad.buttons[9]?.pressed ?? false;
+    if (pausePressed && !state.pause) {
+      if (modeRef.current === "playing") {
+        pauseGame();
+      } else if (modeRef.current === "paused") {
+        setMode("playing");
+        syncMusic();
+      } else if (modeRef.current === "menu" || modeRef.current === "result") {
+        document
+          .querySelector<HTMLButtonElement>(
+            modeRef.current === "menu"
+              ? ".menu .primary-button:not(:disabled)"
+              : ".result-panel .primary-button:not(:disabled)",
+          )
+          ?.click();
+      }
+      state.pause = true;
+      return;
+    }
+    state.pause = pausePressed;
+    if (modeRef.current === "playing") {
+      state.direction = 0;
+      state.confirm = gamepad.buttons[0]?.pressed ?? false;
+      state.cancel = gamepad.buttons[1]?.pressed ?? false;
+      return;
+    }
+
+    const modal = document.querySelector<HTMLElement>(
+      modeRef.current === "menu" ? ".overlay.menu" : ".modal-shade",
+    );
+    const controls = modal
+      ? [...modal.querySelectorAll<HTMLElement>("button:not(:disabled)")].filter((element) =>
+          element.offsetParent !== null
+        )
+      : [];
+    if (controls.length === 0) return;
+
+    const axisX = gamepad.axes[0] ?? 0;
+    const axisY = gamepad.axes[1] ?? 0;
+    const previousPressed = (gamepad.buttons[12]?.pressed ?? false) || (gamepad.buttons[14]?.pressed ?? false);
+    const nextPressed = (gamepad.buttons[13]?.pressed ?? false) || (gamepad.buttons[15]?.pressed ?? false);
+    const direction: -1 | 0 | 1 = previousPressed || axisX < -0.62 || axisY < -0.62
+      ? -1
+      : nextPressed || axisX > 0.62 || axisY > 0.62
+        ? 1
+        : 0;
+
+    if (direction === 0) {
+      state.direction = 0;
+    } else if (direction !== state.direction || time >= state.repeatAt) {
+      const focusedIndex = controls.findIndex((element) => element === document.activeElement);
+      const nextIndex = focusedIndex < 0
+        ? direction > 0 ? 0 : controls.length - 1
+        : (focusedIndex + direction + controls.length) % controls.length;
+      controls[nextIndex].focus({ preventScroll: false });
+      state.repeatAt = time + (direction === state.direction ? 115 : 270);
+      state.direction = direction;
+      play("sfx.ui-confirm");
+    }
+
+    const confirmPressed = gamepad.buttons[0]?.pressed ?? false;
+    if (confirmPressed && !state.confirm) {
+      const focused = controls.find((element) => element === document.activeElement) ?? controls[0];
+      focused.focus({ preventScroll: false });
+      focused.click();
+    }
+    state.confirm = confirmPressed;
+
+    const cancelPressed = gamepad.buttons[1]?.pressed ?? false;
+    if (cancelPressed && !state.cancel) {
+      modal?.querySelector<HTMLButtonElement>("[data-gamepad-cancel]")?.click();
+    }
+    state.cancel = cancelPressed;
+  }, [pauseGame, play, setMode, syncMusic]);
+
+  const consumeCombatAudio = useCallback((run: RunState) => {
+    const previous = combatAudioRef.current;
+    const activeActors = [
+      ...run.projectiles,
+      ...run.zones,
+      ...run.summons,
+      ...run.strikes.filter((strike) => !strike.hostile),
+    ];
+    const newOwners = new Set(
+      activeActors
+        .filter((actor) => !previous.actorIds.has(actor.id))
+        .map((actor) => actor.owner),
+    );
+    const currentFxIds = new Set(run.fx.map((effect) => effect.id));
+
+    for (const effect of run.fx) {
+      if (previous.fxIds.has(effect.id)) continue;
+      const separator = effect.artKey.lastIndexOf("/");
+      const owner =
+        effect.owner ??
+        (separator >= 0 ? effect.artKey.slice(separator + 1) : "");
+      if (WEAPON_IDS.includes(owner as WeaponId)) {
+        const weapon = owner as WeaponId;
+        if (effect.kind === "hit") play(WEAPON_AUDIO[weapon].hit);
+        else if (effect.kind === "beam" || effect.kind === "chain") newOwners.add(weapon);
+      }
+    }
+    for (const owner of newOwners) {
+      if (WEAPON_IDS.includes(owner as WeaponId)) play(WEAPON_AUDIO[owner as WeaponId].fire);
+    }
+    if (run.kills > previous.kills) play("sfx.enemy-death");
+
+    combatAudioRef.current = {
+      actorIds: new Set(activeActors.map((actor) => actor.id)),
+      fxIds: currentFxIds,
+      kills: run.kills,
+    };
+  }, [play]);
 
   useEffect(() => {
     let frame = 0;
     const loop = (time: number) => {
       const canvas = canvasRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (!canvas || !ctx) {
+      const context = canvas?.getContext("2d");
+      if (!canvas || !context) {
         frame = requestAnimationFrame(loop);
         return;
       }
-      if (canvas.width !== W || canvas.height !== H) {
-        canvas.width = W;
-        canvas.height = H;
+      if (canvas.width !== GAME_WIDTH || canvas.height !== GAME_HEIGHT) {
+        canvas.width = GAME_WIDTH;
+        canvas.height = GAME_HEIGHT;
       }
-      const rawDt = lastFrameRef.current ? (time - lastFrameRef.current) / 1000 : 0;
-      const dt = Math.min(rawDt, 0.033);
+      const rawDelta = lastFrameRef.current ? (time - lastFrameRef.current) / 1000 : 0;
+      const delta = Math.min(rawDelta, 0.034);
       lastFrameRef.current = time;
-      const game = gameRef.current;
+      const run = runRef.current;
 
-      if (!game) {
-        drawBackdrop(ctx, time / 1000, true, artRef.current);
-        const cycle = (time / 1000) % 5;
-        const previewProgress = cycle < 1.65
-          ? 0
-          : cycle < 1.95
-            ? (cycle - 1.65) / 0.3
-            : cycle < 3.35
-              ? 1
-              : cycle < 3.65
-                ? 1 - (cycle - 3.35) / 0.3
-                : 0;
-        const previewState = cycle < 1.65 || cycle >= 3.65
-          ? "human"
-          : cycle < 1.95
-            ? "foldingToPlane"
-            : cycle < 3.35
-              ? "plane"
-              : "foldingToHuman";
-        ctx.save();
-        ctx.translate(1000, 340);
-        ctx.scale(2.65, 2.65);
-        drawPlayerArt(ctx, {
-          x: 0,
-          y: 0,
-          invuln: 0,
-          formProgress: previewProgress,
-          formState: previewState,
-        }, time / 1000);
-        ctx.restore();
+      if (!run) {
+        drawMenuPreview(context, time / 1000, assetsRef.current);
         frame = requestAnimationFrame(loop);
         return;
       }
+
+      const enemySheets = assetsRef.current.enemies;
+      if (enemySheets && !bossPreloadRef.current.taotie && run.elapsed >= 330) {
+        bossPreloadRef.current.taotie = true;
+        void preloadEnemySpriteSheets(enemySheets, ["taotie"]);
+      }
+      if (enemySheets && !bossPreloadRef.current.nian && run.elapsed >= 450) {
+        bossPreloadRef.current.nian = true;
+        void preloadEnemySpriteSheets(enemySheets, ["nian"]);
+      }
+
+      const gamepad = navigator.getGamepads?.()[0];
+      if (gamepad) pollGamepadUi(gamepad, time);
 
       if (modeRef.current === "playing") {
-        game.elapsed += dt;
-        game.player.invuln = Math.max(0, game.player.invuln - dt);
-        game.orbitAngle += 0;
-        game.tutorial = game.elapsed < 8;
-
-        let dx = 0;
-        let dy = 0;
+        let x = 0;
+        let y = 0;
         const keys = keysRef.current;
-        if (keys.has("w") || keys.has("arrowup")) dy -= 1;
-        if (keys.has("s") || keys.has("arrowdown")) dy += 1;
-        if (keys.has("a") || keys.has("arrowleft")) dx -= 1;
-        if (keys.has("d") || keys.has("arrowright")) dx += 1;
+        if (keys.has("w") || keys.has("arrowup")) y -= 1;
+        if (keys.has("s") || keys.has("arrowdown")) y += 1;
+        if (keys.has("a") || keys.has("arrowleft")) x -= 1;
+        if (keys.has("d") || keys.has("arrowright")) x += 1;
 
-        const pad = navigator.getGamepads?.()[0];
-        if (pad && Math.hypot(pad.axes[0] ?? 0, pad.axes[1] ?? 0) > 0.2) {
-          dx += pad.axes[0] ?? 0;
-          dy += pad.axes[1] ?? 0;
+        if (gamepad && Math.hypot(gamepad.axes[0] ?? 0, gamepad.axes[1] ?? 0) > 0.2) {
+          x += gamepad.axes[0] ?? 0;
+          y += gamepad.axes[1] ?? 0;
         }
-        const joy = joystickRef.current;
-        if (joy.active) {
-          dx += clamp((joy.x - joy.bx) / 44, -1, 1);
-          dy += clamp((joy.y - joy.by) / 44, -1, 1);
+        const joystick = joystickRef.current;
+        if (joystick.active) {
+          x += clamp((joystick.knobX - joystick.baseX) / 46, -1, 1);
+          y += clamp((joystick.knobY - joystick.baseY) / 46, -1, 1);
         }
+        const direction = Math.hypot(x, y) > 1 ? normalize(x, y) : { x, y };
+        const events = stepRun(run, delta, direction);
+        consumeCombatAudio(run);
+        handleEvents(run, events);
 
-        const moving = Math.hypot(dx, dy) > 0.08;
-        const direction = moving ? normalize(dx, dy) : { x: 0, y: 0 };
-        stepPlayerForm(game.player, moving, direction.x, direction.y, dt);
-        if (moving) {
-          const weatherScale = game.environmental.startsWith("逆风") ? 0.88 : 1;
-          const speed = 205 * game.player.speed * weatherScale;
-          game.player.x = clamp(game.player.x + direction.x * speed * dt, 34, W - 34);
-          game.player.y = clamp(game.player.y + direction.y * speed * dt, 42, H - 38);
-        }
-
-        game.spawnClock -= dt;
-        const bossAlive = game.enemies.some((enemy) => enemy.boss);
-        if (!game.endless) {
-          if (game.elapsed >= 360 && !game.midBossSpawned && !bossAlive) {
-            spawnEnemy(game, "taotie");
-            game.midBossSpawned = true;
-          }
-          if (game.elapsed >= RUN_TIME && !game.finalBossSpawned && !bossAlive) {
-            spawnEnemy(game, "nian");
-            game.finalBossSpawned = true;
-          }
-        } else if (game.elapsed >= game.nextBossAt && !bossAlive) {
-          spawnEnemy(game, game.endlessBossCount % 2 === 0 ? "taotie" : "nian");
-          game.endlessBossCount += 1;
-          game.nextBossAt += 120;
-        }
-        if (game.spawnClock <= 0 && game.enemies.length < 150) {
-          const density = game.trials.has("crowd") ? 1.32 : 1;
-          const count = Math.min(4, 1 + Math.floor(game.elapsed / 150));
-          for (let i = 0; i < count; i++) spawnEnemy(game);
-          game.spawnClock = Math.max(0.2, (0.92 - game.elapsed * 0.0009) / density);
-        }
-        const eliteTimes = [120, 300];
-        for (const eliteTime of eliteTimes) {
-          if (game.elapsed >= eliteTime && game.elapsed - dt < eliteTime) spawnEnemy(game, eliteTime === 120 ? "lion" : "puppet");
-        }
-
-        if (game.endless && game.elapsed >= game.nextEnvironmentAt) {
-          const effects = ["逆风 · 步速稍缓", "灯火 · 灯笼精增多", "落叶障 · 轻敌加速", "精英增援"];
-          game.environmental = effects[Math.floor(Math.random() * effects.length)];
-          game.nextEnvironmentAt += 120;
-          if (game.environmental === "精英增援") {
-            spawnEnemy(game, "lion");
-            spawnEnemy(game, "puppet");
-          }
-          openUpgrade(game, true);
-        }
-
-        fireWeapons(game, dt);
-        updateOrbitWeapons(game, dt);
-        updateProjectiles(game, dt);
-
-        for (const enemy of game.enemies) {
-          enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
-          enemy.marked = Math.max(0, enemy.marked - dt);
-          const direction = normalize(game.player.x - enemy.x, game.player.y - enemy.y);
-          let speedScale = 1;
-          if (game.environmental.startsWith("落叶障") && (enemy.type === "shoe" || enemy.type === "fish")) speedScale = 1.18;
-          enemy.x += direction.x * enemy.speed * speedScale * dt;
-          enemy.y += direction.y * enemy.speed * speedScale * dt;
-          if (distSq(enemy.x, enemy.y, game.player.x, game.player.y) < (enemy.r + 19) ** 2 && game.player.invuln <= 0) {
-            game.player.life -= enemy.damage;
-            game.player.invuln = 1.25;
-            forceHumanForm(game.player);
-            addBurst(game, game.player.x, game.player.y, "#a54535", 20);
-            if (game.player.life <= 0) {
-              endRun(false);
-              break;
-            }
-          }
-        }
-
-        removeDead(game, onBossDefeated);
-
-        for (const pickup of game.pickups) {
-          pickup.pulse += dt * 5;
-          const distance = Math.sqrt(distSq(pickup.x, pickup.y, game.player.x, game.player.y));
-          const magnet = 135 * game.player.magnet;
-          if (distance < magnet) {
-            const direction = normalize(game.player.x - pickup.x, game.player.y - pickup.y);
-            const pull = 110 + (magnet - distance) * 3.5;
-            pickup.x += direction.x * pull * dt;
-            pickup.y += direction.y * pull * dt;
-          }
-          if (distance < 24) {
-            game.player.xp += pickup.value;
-            pickup.value = 0;
-          }
-        }
-        game.pickups = game.pickups.filter((pickup) => pickup.value > 0);
-
-        if (game.player.xp >= game.player.nextXp && modeRef.current === "playing") {
-          game.player.xp -= game.player.nextXp;
-          game.player.level += 1;
-          game.player.nextXp = 7 + game.player.level * 5;
-          openUpgrade(game);
-        }
-
-        for (const particle of game.particles) {
-          particle.life -= dt;
-          particle.x += particle.vx * dt;
-          particle.y += particle.vy * dt;
-          particle.vx *= 0.97;
-          particle.vy *= 0.97;
-        }
-        game.particles = game.particles.filter((particle) => particle.life > 0).slice(-450);
-        game.projectiles = game.projectiles.slice(-320);
-
-        hudClockRef.current += dt;
-        if (hudClockRef.current > 0.18) {
+        hudClockRef.current += delta;
+        if (hudClockRef.current >= 0.12) {
           hudClockRef.current = 0;
-          setSnapshot(snapshotOf(game));
+          setSnapshot(snapshotRun(run));
         }
       }
 
-      drawGame(ctx, game, time / 1000, joystickRef.current, artRef.current);
+      const renderRun = !run.endless && run.elapsed >= STANDARD_SECONDS
+        ? { ...run, elapsed: STANDARD_SECONDS - 0.001 }
+        : run;
+      drawRun(context, renderRun, time / 1000, assetsRef.current, joystickRef.current);
       frame = requestAnimationFrame(loop);
     };
     frame = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(frame);
-  }, [endRun, onBossDefeated, openUpgrade]);
+  }, [consumeCombatAudio, handleEvents, pollGamepadUi]);
 
-  const startGame = () => {
-    if (!artReady) return;
-    const game = createGame(trials);
-    gameRef.current = game;
-    setSnapshot(snapshotOf(game));
-    setTutorialKey((value) => value + 1);
+  const startGame = async () => {
+    if (!assetsReady) return;
+    await audioRef.current?.initFromGesture();
+    if (assetsRef.current.visuals) {
+      await preloadWeaponVisuals(assetsRef.current.visuals, ["sword"]);
+    }
+    void audioRef.current?.preload([
+      "music.spring",
+      "sfx.fold",
+      "sfx.unfold",
+      "sfx.pickup",
+      "sfx.upgrade",
+      "sfx.player-hit",
+    ]);
+    const run = createRun(trials);
+    runRef.current = run;
+    releaseMovementInput();
+    queuedModalsRef.current = [];
+    forgeConsumedRef.current = false;
+    bossPreloadRef.current = { taotie: false, nian: false };
+    combatAudioRef.current = {
+      actorIds: new Set(),
+      fxIds: new Set(),
+      kills: 0,
+    };
+    setSnapshot(snapshotRun(run));
+    setTutorialNonce((value) => value + 1);
     setMode("playing");
+    syncMusic();
+    play(getTermAmbienceCue(getSolarTermState(0, false).current));
+    play("sfx.ui-confirm");
   };
 
   const chooseUpgrade = (option: UpgradeOption) => {
-    const game = gameRef.current;
-    if (!game) return;
-    applyUpgrade(game, option);
-    setSnapshot(snapshotOf(game));
-    setMode("playing");
+    const run = runRef.current;
+    if (!run) return;
+    const synergy = applyUpgrade(run, option);
+    play(synergy ? "sfx.synergy" : "sfx.upgrade");
+    setSnapshot(snapshotRun(run));
+    openNextQueuedModal(run);
+  };
+
+  const chooseRare = (choice: RareChoice["id"]) => {
+    const run = runRef.current;
+    if (!run) return;
+    applyRareChoice(run, choice);
+    run.pendingRareChoice = false;
+    play(choice === "resonance-slot" ? "sfx.synergy" : "sfx.upgrade");
+    setSnapshot(snapshotRun(run));
+    openNextQueuedModal(run);
   };
 
   const continueEndless = () => {
-    const game = gameRef.current;
-    if (!game) return;
-    game.endless = true;
-    game.environmental = "四时再启";
-    game.nextEnvironmentAt = game.elapsed + 120;
-    game.nextBossAt = game.elapsed + 120;
-    game.endlessBossCount = 0;
-    setSnapshot(snapshotOf(game));
-    setMode("playing");
+    const run = runRef.current;
+    if (!run) return;
+    startEndless(run);
+    setSnapshot(snapshotRun(run));
+    play("sfx.ultimate");
+    syncMusic();
+    openNextQueuedModal(run);
   };
 
   const returnToMenu = () => {
-    gameRef.current = null;
-    setSnapshot(initialSnapshot);
+    runRef.current = null;
+    releaseMovementInput();
+    queuedModalsRef.current = [];
+    forgeConsumedRef.current = false;
+    setSnapshot(emptySnapshot);
+    setSelectedNodes([]);
     setMode("menu");
+    audioRef.current?.stopMusic();
   };
 
   const toggleTrial = (trial: TrialId) => {
     if (!trialsUnlocked) return;
     setTrials((current) => {
       const next = new Set(current);
-      if (next.has(trial)) next.delete(trial); else next.add(trial);
+      if (next.has(trial)) next.delete(trial);
+      else next.add(trial);
       return next;
     });
   };
 
-  const pointerPosition = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const updateAudio = (update: Partial<AudioSettings>) => {
+    audioRef.current?.setSettings(update);
+    setAudioSettings(audioRef.current?.getSettings() ?? audioSettings);
+    if (update.muted === false) {
+      void audioRef.current?.initFromGesture().then(() => syncMusic());
+    }
+  };
+
+  const canvasPoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return {
-      x: ((event.clientX - rect.left) / rect.width) * W,
-      y: ((event.clientY - rect.top) / rect.height) * H,
+      x: ((event.clientX - rect.left) / rect.width) * GAME_WIDTH,
+      y: ((event.clientY - rect.top) / rect.height) * GAME_HEIGHT,
     };
   };
 
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (modeRef.current !== "playing") return;
-    const pos = pointerPosition(event);
+    const point = canvasPoint(event);
     event.currentTarget.setPointerCapture(event.pointerId);
-    joystickRef.current = { active: true, pointerId: event.pointerId, bx: pos.x, by: pos.y, x: pos.x, y: pos.y };
+    joystickRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      baseX: point.x,
+      baseY: point.y,
+      knobX: point.x,
+      knobY: point.y,
+    };
   };
 
   const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const joy = joystickRef.current;
-    if (!joy.active || joy.pointerId !== event.pointerId) return;
-    const pos = pointerPosition(event);
-    const delta = normalize(pos.x - joy.bx, pos.y - joy.by);
-    const length = Math.min(48, Math.hypot(pos.x - joy.bx, pos.y - joy.by));
-    joy.x = joy.bx + delta.x * length;
-    joy.y = joy.by + delta.y * length;
+    const joystick = joystickRef.current;
+    if (!joystick.active || joystick.pointerId !== event.pointerId) return;
+    const point = canvasPoint(event);
+    const dx = point.x - joystick.baseX;
+    const dy = point.y - joystick.baseY;
+    const distance = Math.hypot(dx, dy);
+    const scale = distance > 48 ? 48 / distance : 1;
+    joystick.knobX = joystick.baseX + dx * scale;
+    joystick.knobY = joystick.baseY + dy * scale;
   };
 
-  const endPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (joystickRef.current.pointerId === event.pointerId) joystickRef.current.active = false;
+  const onPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (joystickRef.current.pointerId !== event.pointerId) return;
+    joystickRef.current.active = false;
+    joystickRef.current.pointerId = -1;
   };
 
-  const season = seasonData[getSeason(snapshot.elapsed)];
-  const elapsedDisplay = snapshot.endless
-    ? `无尽 ${formatTime(snapshot.elapsed - RUN_TIME)}`
-    : formatTime(snapshot.elapsed);
-  const resultVictory = snapshot.life > 0 && snapshot.elapsed >= RUN_TIME;
-  const trialLabels: Record<TrialId, string> = { swift: "疾行", crowd: "聚众", elite: "强敌" };
-  const rank = snapshot.score >= 8000 ? "甲" : snapshot.score >= 4500 ? "乙" : snapshot.score >= 2200 ? "丙" : "丁";
+  const onNodeSelect = (index: number) => {
+    setSelectedNodes((current) => {
+      if (current.includes(index)) return current.filter((value) => value !== index);
+      if (current.length >= 2) return [index];
+      return [...current, index];
+    });
+  };
+
+  const executeForgeAction = async () => {
+    const run = runRef.current;
+    if (!run?.weave || selectedNodes.length !== 2 || forgeConsumedRef.current) return;
+    const [first, second] = selectedNodes;
+    if (forgeAction === "swap") {
+      swapEndlessNodes(run, first, second);
+      setForgeMessage("节点次序已交换；下一轮终式签名会随之改变。");
+      play("sfx.ui-confirm");
+      forgeConsumedRef.current = true;
+    } else {
+      const existingFusions = new Set(
+        run.weave.nodes
+          .filter((node) => node.kind === "fusion")
+          .map((node) => node.sourceId),
+      );
+      const name = fuseEndlessNodesWithName(run, first, second);
+      if (name) {
+        const fusion = run.weave.nodes.find((node) =>
+          node.kind === "fusion" && !existingFusions.has(node.sourceId)
+        );
+        const visuals = assetsRef.current.visuals;
+        if (visuals && fusion) {
+          await preloadFusionVisuals(visuals, [fusion.sourceId as FusionId]);
+        }
+        setForgeMessage(`合铸完成：${name}。两个节点已归一，并释放一个盘位。`);
+        play("sfx.fusion");
+        forgeConsumedRef.current = true;
+      } else {
+        setForgeMessage("这两个节点必须相邻，且属于十五组精选合铸配方之一。");
+        play("sfx.ui-back");
+      }
+    }
+    setSelectedNodes([]);
+    setSnapshot(snapshotRun(run));
+    if (forgeConsumedRef.current) openNextQueuedModal(run);
+  };
+
+  const addEndlessWeapon = (weaponId: WeaponId) => {
+    const run = runRef.current;
+    if (!run || forgeConsumedRef.current) return;
+    if (!insertEndlessWeapon(run, weaponId)) {
+      setForgeMessage("天盘已满，先合铸相邻节点释放盘位。");
+      return;
+    }
+    forgeConsumedRef.current = true;
+    setForgeMessage(`${getWeaponDefinition(weaponId).name}已插入天盘末位。`);
+    play("sfx.upgrade");
+    setSnapshot(snapshotRun(run));
+    openNextQueuedModal(run);
+  };
+
+  const captureCelestial = () => {
+    const run = runRef.current;
+    if (!run || forgeConsumedRef.current) return;
+    const name = captureEndlessCelestial(run);
+    if (!name) {
+      setForgeMessage("需先击败敌对天罚化身，并确保天盘仍有空位。");
+      return;
+    }
+    forgeConsumedRef.current = true;
+    setForgeMessage(`${name}已炼入天盘，敌对天罚转为己方天律。`);
+    play("sfx.ultimate");
+    setSnapshot(snapshotRun(run));
+    openNextQueuedModal(run);
+  };
+
+  const closeForge = () => {
+    const run = runRef.current;
+    forgeConsumedRef.current = true;
+    setSelectedNodes([]);
+    if (run) openNextQueuedModal(run);
+    else setMode("playing");
+  };
+
+  const term = getSolarTermState(snapshot.elapsed, snapshot.endless);
+  const loadProgress = Math.round(
+    ((loading.season + loading.enemy + loading.visual + loading.terms) / 4) * 100,
+  );
+  const availableNodes = useMemo(() => {
+    const used = new Set(
+      (snapshot.weave?.nodes ?? [])
+        .filter((node) => node.kind === "weapon")
+        .map((node) => node.sourceId as WeaponId),
+    );
+    return WEAPON_IDS.filter((weaponId) => !used.has(weaponId)).slice(0, 6);
+  }, [snapshot.weave]);
 
   return (
     <main className="page">
-      <section className="game-shell" aria-label="纸上百工游戏区域">
+      <section className="game-shell" aria-label="纸上百工游戏">
         <canvas
           ref={canvasRef}
           className="game-canvas"
-          aria-label="游戏画面"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
-          onPointerUp={endPointer}
-          onPointerCancel={endPointer}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
         />
         <div className="paper-grain" />
+
+        {mode !== "menu" && (
+          <div className="hud" aria-live="polite">
+            <div className="hud-top">
+              <div className="status-card">
+                <div className="status-line">
+                  <span>纸命 <b className="hearts">{"◆".repeat(Math.max(0, snapshot.life))}{"◇".repeat(Math.max(0, snapshot.maxLife - snapshot.life))}</b></span>
+                  <strong>第 {snapshot.level} 境</strong>
+                </div>
+                <div className="xp-track" aria-label="经验进度">
+                  <span style={{ width: `${clamp(snapshot.xp / snapshot.nextXp, 0, 1) * 100}%` }} />
+                </div>
+              </div>
+
+              <div className="term-stack">
+                <span className={`season-mark season-${term.season}`}>{term.current.name}</span>
+                <small>下一节气 · {term.next.name}</small>
+                <div className="term-progress"><i style={{ width: `${term.termProgress * 100}%` }} /></div>
+              </div>
+
+              <div className="time-card">
+                <span className="timer">{snapshot.endless ? `续 ${formatTime(snapshot.elapsed - STANDARD_SECONDS)}` : formatTime(snapshot.elapsed)}</span>
+                <button className="icon-button" onClick={pauseGame} aria-label="暂停">暂停</button>
+              </div>
+            </div>
+
+            {snapshot.weave && (
+              <div className="weave-hud">
+                <span className="weave-title">万器经纬</span>
+                <div className="weave-mini-ring">
+                  {snapshot.weave.nodes.map((node, index) => (
+                    <i
+                      key={node.instanceId}
+                      className={`${node.kind} ${index === snapshot.weave?.pulse.nodeIndex ? "active" : ""}`}
+                      title={`${index + 1}. ${node.name}`}
+                    >
+                      {node.name.slice(0, 1)}
+                    </i>
+                  ))}
+                </div>
+                <span className="weave-charge">
+                  器息 {Math.round(snapshot.weave.pulse.nodeProgress * 100)}%
+                </span>
+                {snapshot.weave.activeIntrusion && (
+                  <span className={`intrusion ${snapshot.weave.activeIntrusion.phase}`}>
+                    天罚 · {snapshot.weave.activeIntrusion.phase === "warning" ? "将临" : snapshot.weave.activeIntrusion.phase === "defeated" ? "可炼化" : "入阵"}
+                  </span>
+                )}
+              </div>
+            )}
+
+            <div className="hud-bottom">
+              <div className="weapon-bar">
+                {snapshot.weapons.map((weapon) => (
+                  <span className="weapon-chip" key={weapon.id}>
+                    <i
+                      className="weapon-mini-art"
+                      aria-hidden="true"
+                      style={weaponThumbStyle(
+                        weapon.id,
+                        weaponAtlasFrame(weapon.level, weapon.routeId),
+                      )}
+                    />
+                    <b>{getWeaponDefinition(weapon.id).shortName}</b>
+                    <strong> {weapon.level}/5</strong>
+                    <em>{weaponSubline(snapshot, weapon.id)}</em>
+                  </span>
+                ))}
+              </div>
+              <div className="resonance-list">
+                {snapshot.synergies.map((name) => <span key={name}>合鸣 · {name}</span>)}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {snapshot.terminalLabelLife > 0 && (
+          <div className="terminal-callout">
+            <span>终式</span>
+            <strong>{snapshot.terminalLabel}</strong>
+          </div>
+        )}
+
+        {mode === "playing" && snapshot.elapsed < 8 && (
+          <div className="tutorial" key={tutorialNonce}>
+            只需移动 · 武器自动迎敌 · 停下或急转会展开人形
+          </div>
+        )}
 
         {mode === "menu" && (
           <div className="overlay menu">
             <div className="menu-panel">
-              <p className="kicker"><span className="seal">游</span>四时流转 · 百器自鸣</p>
+              <p className="kicker"><span className="seal">百工</span> 水墨绘本 · 剪纸肉鸽</p>
               <h1 className="title">纸上<span>百工</span></h1>
               <p className="subtitle">
-                操控一位会折成纸飞机的旅人，在春夏秋冬中收集器物。你只需移动，武器会替你开路。
+                清俊纸旅人携十般百工器物走过二十四节气。只需移动，让三路进化、双刻成器与万器经纬自动写成你的战局。
               </p>
               <div className="feature-row">
-                <span>八分钟一卷</span>
-                <span>全自动武器</span>
-                <span>双路线成器</span>
-                <span>三组合鸣</span>
+                <span>10 把本命器</span>
+                <span>30 条路线</span>
+                <span>12 套合鸣</span>
+                <span>15 件合铸器</span>
+                <span>二十四节气</span>
               </div>
-              <button className="primary-button" onClick={startGame} disabled={!artReady}>
-                {artReady ? "展开这一卷" : `研墨装裱 ${Math.round(artProgress * 100)}%`}
-              </button>
+              <p className="tao-note">
+                少量道门元素位于「五雷令、雷音琵琶、雷部天罚与法铃音色」，其余仍是市井百工与岁时行旅。
+              </p>
+              <div className="button-row">
+                <button className="primary-button" onClick={startGame} disabled={!assetsReady}>
+                  {assetsReady ? "展卷启程" : `美工图集装订中 ${loadProgress}%`}
+                </button>
+                <button
+                  className="secondary-button"
+                  onClick={() => updateAudio({ muted: !audioSettings.muted })}
+                >
+                  {audioSettings.muted ? "开启声音" : "声音已开"}
+                </button>
+              </div>
               <div className="trial-area">
                 <p className="trial-label">{trialsUnlocked ? "试炼签 · 可叠加" : "首次收卷后解锁试炼签"}</p>
                 <div className="trials">
-                  {(Object.keys(trialLabels) as TrialId[]).map((trial) => (
+                  {TRIAL_DEFINITIONS.map((trial) => (
                     <button
-                      className={`trial ${trials.has(trial) ? "active" : ""}`}
+                      key={trial.id}
+                      className={`trial ${trials.has(trial.id) ? "active" : ""}`}
+                      onClick={() => toggleTrial(trial.id)}
                       disabled={!trialsUnlocked}
-                      onClick={() => toggleTrial(trial)}
-                      key={trial}
+                      title={trial.description}
                     >
-                      {trialLabels[trial]}
+                      {trial.name}
                     </button>
                   ))}
                 </div>
@@ -1492,131 +1067,263 @@ export function PaperGuildGame() {
           </div>
         )}
 
-        {mode !== "menu" && (
-          <div className="hud" aria-live="polite">
-            <div className="hud-top">
-              <div className="status-card">
-                <div className="status-line">
-                  <span className="hearts">{"◆".repeat(snapshot.life)}{"◇".repeat(Math.max(0, snapshot.maxLife - snapshot.life))}</span>
-                  <span>旅人 · {snapshot.level}级</span>
-                </div>
-                <div className="xp-track"><span style={{ width: `${clamp(snapshot.xp / snapshot.nextXp, 0, 1) * 100}%` }} /></div>
+        {mode === "upgrade" && (
+          <div className="overlay modal-shade">
+            <section className="upgrade-panel">
+              <p className="kicker">器物自择 · 战局暂停</p>
+              <h2 className="upgrade-heading">
+                {upgradeOptions[0]?.kind === "route"
+                  ? "择定一条器路"
+                  : upgradeOptions[0]?.kind === "mastery"
+                    ? "镌下一枚成器刻印"
+                    : "拾取一页百工谱"}
+              </h2>
+              <p className="upgrade-note">
+                三级固定同时展示三条路线，五级固定展示两种刻印；选择后本局不可反悔。
+              </p>
+              <div className={`upgrade-grid count-${upgradeOptions.length}`}>
+                {upgradeOptions.map((option, index) => {
+                  const color = option.kind === "utility"
+                    ? "#886b42"
+                    : getWeaponDefinition(option.weaponId).color;
+                  const currentRoute =
+                    option.kind === "utility"
+                      ? undefined
+                      : option.kind === "route" || option.kind === "mastery"
+                        ? option.routeId
+                        : snapshot.weapons.find(
+                            (weapon) => weapon.id === option.weaponId,
+                          )?.routeId;
+                  const targetLevel =
+                    option.kind === "acquire"
+                      ? 1
+                      : option.kind === "refine"
+                        ? 2
+                        : option.kind === "route"
+                          ? 3
+                          : option.kind === "routeEnhancement"
+                            ? 4
+                            : option.kind === "mastery"
+                              ? 5
+                              : 0;
+                  return (
+                    <button
+                      className="upgrade-card"
+                      key={option.id}
+                      onClick={() => chooseUpgrade(option)}
+                      style={{ "--accent": color } as React.CSSProperties}
+                    >
+                      {option.kind !== "utility" && (
+                        <span
+                          className="upgrade-card-art"
+                          aria-hidden="true"
+                          style={weaponThumbStyle(
+                            option.weaponId,
+                            weaponAtlasFrame(targetLevel, currentRoute),
+                          )}
+                        />
+                      )}
+                      <span className="card-type">{index + 1} · {optionKind(option)}</span>
+                      <h3>{option.title}</h3>
+                      <p>{option.description}</p>
+                      {option.kind !== "utility" && (
+                        <div className="level-dots">
+                          {[1, 2, 3, 4, 5].map((level) => (
+                            <i key={level} className={level <= (
+                              option.kind === "acquire"
+                                ? 1
+                                : option.kind === "refine"
+                                  ? 2
+                                  : option.kind === "route"
+                                    ? 3
+                                    : option.kind === "routeEnhancement"
+                                      ? 4
+                                      : 5
+                            ) ? "on" : ""} />
+                          ))}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
-              <div className="time-card">
-                <span className="season-pill" style={{ borderColor: season.accent }}>{season.name}</span>
-                <strong className="timer">{elapsedDisplay}</strong>
-                <button
-                  className="icon-button"
-                  aria-label="暂停游戏"
-                  onClick={() => {
-                    if (gameRef.current) finishHumanForm(gameRef.current.player);
-                    setMode("paused");
-                  }}
-                >
-                  Ⅱ
-                </button>
-              </div>
-            </div>
-            <div className="hud-bottom">
-              <div className="weapon-bar">
-                {snapshot.weapons.map((weapon) => (
-                  <span className="weapon-chip" key={weapon.id}>
-                    {weaponInfo[weapon.id].glyph} {weaponInfo[weapon.id].name} <strong>{weapon.level}</strong>
-                  </span>
-                ))}
-              </div>
-              <div className="resonance-list">
-                {snapshot.environmental && <span>{snapshot.environmental}</span>}
-                {snapshot.resonances.map((name) => <span key={name}>{name}</span>)}
-              </div>
-            </div>
+            </section>
           </div>
         )}
 
-        {mode === "playing" && snapshot.elapsed < 8 && (
-          <div className="tutorial" key={tutorialKey}>WASD / 方向键 / 拖动屏幕移动 · 武器自动攻击</div>
-        )}
-
-        {mode === "upgrade" && (
+        {mode === "rare" && (
           <div className="overlay modal-shade">
-            <div className="upgrade-panel">
-              <h2 className="upgrade-heading">择一器，继续行</h2>
-              <p className="upgrade-note">升级期间时间暂停；第三阶将锁定进化路线。</p>
+            <section className="upgrade-panel rare-panel">
+              <p className="kicker">饕餮遗珍 · 质变奖励</p>
+              <h2 className="upgrade-heading">饕餮遗珍，择一改局</h2>
+              <p className="upgrade-note">三件遗珍都会改变后半局的构筑走向。</p>
               <div className="upgrade-grid">
-                {options.map((option) => (
+                {RARE_CHOICES.map((choice, index) => (
                   <button
-                    className="upgrade-card"
-                    style={{ "--accent": option.accent } as React.CSSProperties}
-                    onClick={() => chooseUpgrade(option)}
-                    key={option.key}
+                    key={choice.id}
+                    className="upgrade-card rare-card"
+                    onClick={() => chooseRare(choice.id)}
                   >
-                    <span className="card-type">{option.subtitle}</span>
-                    <h3>{option.title}</h3>
-                    <p>{option.description}</p>
-                    <span className="level-dots" aria-hidden="true">
-                      {[1, 2, 3, 4, 5].map((dot) => <i className={dot <= option.targetLevel ? "on" : ""} key={dot} />)}
-                    </span>
+                    <span className="card-type">{index + 1} · 饕餮遗珍</span>
+                    <h3>{choice.name}</h3>
+                    <p>{choice.description}</p>
                   </button>
                 ))}
               </div>
-            </div>
+            </section>
+          </div>
+        )}
+
+        {mode === "forge" && snapshot.weave && (
+          <div className="overlay modal-shade">
+            <section className="forge-panel">
+              <div className="forge-heading-row">
+                <div>
+                  <p className="kicker">无尽铸器 · 每两分钟一次</p>
+                  <h2 className="upgrade-heading">万器经纬天盘</h2>
+                </div>
+                <span className="capacity">节点 {snapshot.weave.nodes.length}/{snapshot.weave.maxNodes} · 合铸 {snapshot.weave.nodes.filter((node) => node.kind === "fusion").length}/{snapshot.weave.maxFusions}</span>
+              </div>
+              <p className="forge-message">{forgeMessage}</p>
+              <div className="forge-layout">
+                <div className="weave-ring-large">
+                  {snapshot.weave.nodes.map((node, index) => (
+                    <button
+                      key={node.instanceId}
+                      className={`weave-node ${node.kind} ${selectedNodes.includes(index) ? "selected" : ""} ${index === snapshot.weave?.pulse.nodeIndex ? "pulse" : ""}`}
+                      onClick={() => onNodeSelect(index)}
+                      style={{ "--node-index": index, "--node-count": snapshot.weave?.nodes.length ?? 1 } as React.CSSProperties}
+                    >
+                      <b>{index + 1}</b>
+                      <span>{node.name}</span>
+                      <small>{node.kind === "fusion" ? "合铸器" : node.kind === "celestial" ? "天律" : "本命器"}</small>
+                    </button>
+                  ))}
+                  <div className="weave-core">
+                    <span>顺时针器息</span>
+                    <strong>{Math.round(snapshot.weave.pulse.nodeProgress * 100)}%</strong>
+                  </div>
+                </div>
+
+                <div className="forge-controls">
+                  <div className="forge-tabs">
+                    <button className={forgeAction === "fuse" ? "active" : ""} onClick={() => setForgeAction("fuse")}>相邻合铸</button>
+                    <button className={forgeAction === "swap" ? "active" : ""} onClick={() => setForgeAction("swap")}>交换次序</button>
+                  </div>
+                  <button className="primary-button compact" onClick={executeForgeAction} disabled={selectedNodes.length !== 2}>
+                    {forgeAction === "fuse" ? "合铸所选节点" : "交换所选节点"}
+                  </button>
+                  <div className="new-node-list">
+                    <p>插入新器节点</p>
+                    {availableNodes.map((weaponId) => (
+                      <button key={weaponId} onClick={() => addEndlessWeapon(weaponId)}>
+                        {getWeaponDefinition(weaponId).name}
+                      </button>
+                    ))}
+                  </div>
+                  {snapshot.weave.activeIntrusion?.phase === "defeated" && (
+                    <button className="celestial-button" onClick={captureCelestial}>炼化敌方天罚为天律</button>
+                  )}
+                  <button className="secondary-button" data-gamepad-cancel onClick={closeForge}>定盘续战</button>
+                </div>
+              </div>
+            </section>
           </div>
         )}
 
         {mode === "paused" && (
           <div className="overlay modal-shade">
-            <div className="pause-panel">
-              <div className="result-seal">歇</div>
-              <h2>暂且搁笔</h2>
-              <p className="subtitle">这一卷仍在原处，回来便可继续。</p>
-              <div className="button-row" style={{ justifyContent: "center" }}>
-                <button className="primary-button" onClick={() => setMode("playing")}>继续行旅</button>
-                <button className="secondary-button" onClick={returnToMenu}>返回卷首</button>
+            <section className="pause-panel">
+              <p className="kicker">卷轴暂歇</p>
+              <h2>行旅未完</h2>
+              <p>角色已强制展开成人形，恢复后不会卡在折叠中途。</p>
+              <div className="audio-settings">
+                <label>
+                  <span>音乐</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={audioSettings.music}
+                    onChange={(event) => updateAudio({ music: Number(event.target.value) })}
+                  />
+                </label>
+                <label>
+                  <span>音效</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={audioSettings.sfx}
+                    onChange={(event) => updateAudio({ sfx: Number(event.target.value) })}
+                  />
+                </label>
               </div>
-            </div>
+              <div className="button-row centered">
+                <button className="primary-button" data-gamepad-cancel onClick={() => {
+                  setMode("playing");
+                  syncMusic();
+                }}>继续行旅</button>
+                <button className="secondary-button" onClick={() => updateAudio({ muted: !audioSettings.muted })}>
+                  {audioSettings.muted ? "取消静音" : "静音"}
+                </button>
+                <button className="secondary-button" onClick={returnToMenu}>弃卷返回</button>
+              </div>
+            </section>
           </div>
         )}
 
         {mode === "bossChoice" && (
           <div className="overlay modal-shade">
-            <div className="result-panel">
-              <div className="result-seal">胜</div>
-              <h2>岁夜年兽已伏</h2>
-              <p className="subtitle">八分钟的四时行旅已经写完。现在收卷，或让四季继续流转。</p>
+            <section className="result-panel">
+              <div className="result-seal">岁</div>
+              <p className="kicker">岁夜年兽已伏</p>
+              <h2>八分钟绘卷完成</h2>
+              <div className="stats">
+                <div><strong>{snapshot.kills}</strong><span>降服</span></div>
+                <div><strong>{snapshot.synergies.length}</strong><span>合鸣</span></div>
+                <div><strong>{snapshot.score}</strong><span>卷分</span></div>
+              </div>
               <div className="boss-choice">
-                <button className="primary-button" onClick={() => endRun(true)}>
-                  收卷结算<span className="choice-note">保存战绩并解锁试炼签</span>
+                <button
+                  className="primary-button"
+                  data-gamepad-cancel
+                  onClick={() => endRun(true, "清风收卷")}
+                >
+                  收卷结算
+                  <span className="choice-note">完成标准局并解锁试炼签</span>
                 </button>
                 <button className="secondary-button" onClick={continueEndless}>
-                  续写无尽<span className="choice-note">每两分钟获得天象与稀有强化</span>
+                  续卷 · 万器经纬
+                  <span className="choice-note">开启溢出武器、合铸、天罚与终式</span>
                 </button>
               </div>
-            </div>
+            </section>
           </div>
         )}
 
         {mode === "result" && (
           <div className="overlay modal-shade">
-            <div className="result-panel">
-              <div className="result-seal">{resultVictory ? "成" : "止"}</div>
-              <h2>{resultVictory ? "此卷已成" : "纸薄路长"}</h2>
-              <p className="subtitle">
-                {resultVictory ? "百器相鸣，四时归卷。" : "器物已经记住这趟行旅，换一种组合再来一卷。"}
-              </p>
+            <section className="result-panel">
+              <div className="result-seal">{result.victory ? "成" : "归"}</div>
+              <p className="kicker">{result.victory ? "四时已阅" : "纸命已尽"}</p>
+              <h2>{result.title}</h2>
               <div className="stats">
                 <div><strong>{formatTime(snapshot.elapsed)}</strong><span>行旅时间</span></div>
-                <div><strong>{snapshot.kills}</strong><span>驱散精怪</span></div>
-                <div><strong>{rank}</strong><span>本卷评级</span></div>
+                <div><strong>{snapshot.kills}</strong><span>降服</span></div>
+                <div><strong>{snapshot.score}</strong><span>卷分</span></div>
               </div>
-              <div className="button-row" style={{ justifyContent: "center" }}>
-                <button className="primary-button" onClick={startGame}>再写一卷</button>
-                <button className="secondary-button" onClick={returnToMenu}>返回卷首</button>
+              <div className="button-row centered">
+                <button className="primary-button" onClick={startGame}>再展一卷</button>
+                <button className="secondary-button" data-gamepad-cancel onClick={returnToMenu}>返回卷首</button>
               </div>
-            </div>
+            </section>
           </div>
         )}
       </section>
-      <div className="rotate-hint">请将手机横过来<br />让这一卷徐徐展开</div>
+      <aside className="rotate-hint">请将手机横置，给四时绘卷留出完整战场。</aside>
     </main>
   );
 }

@@ -10,6 +10,7 @@
     "build": "vinext build",
     "start": "vinext start",
     "test": "vinext build && node --test tests/*.test.mjs",
+    "typecheck:game": "tsc -p tsconfig.game.json --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

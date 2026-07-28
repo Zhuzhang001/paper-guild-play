@@ -332,6 +332,84 @@ button {
   color: var(--cinnabar);
 }
 
+.weapon-chip {
+  display: grid;
+  grid-template-columns: 34px auto auto;
+  column-gap: 3px;
+  min-width: 106px;
+  border-bottom: 2px solid rgba(165, 69, 53, 0.34);
+  box-shadow: 0 5px 18px rgba(52, 45, 34, 0.08);
+}
+
+.weapon-mini-art {
+  grid-row: 1 / 3;
+  width: 30px;
+  height: 34px;
+  align-self: center;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 2px 2px rgba(31, 28, 23, 0.28));
+}
+
+.weapon-chip em {
+  grid-column: 2 / -1;
+  max-width: 142px;
+  overflow: hidden;
+  color: #6b6257;
+  font-size: 9px;
+  font-style: normal;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.term-stack {
+  position: absolute;
+  top: clamp(10px, 1.6vw, 22px);
+  left: 50%;
+  display: grid;
+  min-width: clamp(150px, 20vw, 250px);
+  padding: 8px 16px 7px;
+  color: #312e29;
+  text-align: center;
+  transform: translateX(-50%);
+  background:
+    linear-gradient(90deg, transparent, rgba(250, 243, 225, 0.86) 12% 88%, transparent);
+  filter: drop-shadow(0 5px 12px rgba(41, 35, 27, 0.1));
+}
+
+.term-stack small {
+  margin-top: 2px;
+  color: #756b5f;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.season-mark {
+  font-size: clamp(15px, 1.5vw, 20px);
+  font-weight: 900;
+  letter-spacing: 0.22em;
+}
+
+.season-spring { color: #916254; }
+.season-summer { color: #386d65; }
+.season-autumn { color: #986432; }
+.season-winter { color: #536472; }
+
+.term-progress {
+  width: 86%;
+  height: 2px;
+  margin: 5px auto 0;
+  overflow: hidden;
+  background: rgba(47, 43, 37, 0.12);
+}
+
+.term-progress i {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  transition: width 120ms linear;
+}
+
 .resonance-list {
   display: grid;
   gap: 5px;
@@ -344,6 +422,119 @@ button {
   color: #fff5df;
   font-size: clamp(10px, 0.95vw, 13px);
   letter-spacing: 0.08em;
+}
+
+.weave-hud {
+  position: absolute;
+  top: clamp(66px, 8.8vw, 95px);
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 72%;
+  padding: 5px 10px;
+  color: #f8edd5;
+  font-size: 10px;
+  transform: translateX(-50%);
+  background: rgba(34, 31, 28, 0.76);
+  border: 1px solid rgba(231, 213, 177, 0.34);
+  backdrop-filter: blur(7px);
+}
+
+.weave-title {
+  color: #d5aa66;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+
+.weave-mini-ring {
+  display: flex;
+  gap: 4px;
+}
+
+.weave-mini-ring i {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid rgba(244, 230, 199, 0.4);
+  border-radius: 50%;
+  color: #f4e6c7;
+  font-style: normal;
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+.weave-mini-ring i.fusion {
+  color: #2b2924;
+  background: #cda65f;
+  border-radius: 3px;
+  transform: rotate(45deg);
+}
+
+.weave-mini-ring i.fusion::first-letter {
+  transform: rotate(-45deg);
+}
+
+.weave-mini-ring i.celestial {
+  color: #d9e4ff;
+  border-color: #8ea5d3;
+  box-shadow: 0 0 0 2px rgba(75, 91, 135, 0.25);
+}
+
+.weave-mini-ring i.active {
+  background: #a64738;
+  transform: scale(1.16);
+}
+
+.weave-charge {
+  color: #c5b899;
+  white-space: nowrap;
+}
+
+.intrusion {
+  padding: 2px 6px;
+  color: #f7d8dc;
+  border: 1px solid #8e4653;
+  white-space: nowrap;
+}
+
+.intrusion.defeated {
+  color: #e5dbab;
+  border-color: #b89d4d;
+}
+
+.terminal-callout {
+  position: absolute;
+  z-index: 4;
+  top: 25%;
+  left: 50%;
+  display: grid;
+  min-width: 240px;
+  padding: 10px 28px 13px;
+  color: #fff4da;
+  text-align: center;
+  transform: translateX(-50%) rotate(-1deg);
+  background:
+    linear-gradient(90deg, transparent, rgba(45, 38, 31, 0.92) 15% 85%, transparent);
+  pointer-events: none;
+  animation: terminalReveal 2.1s ease both;
+}
+
+.terminal-callout span {
+  color: #d39b54;
+  font-size: 10px;
+  letter-spacing: 0.4em;
+}
+
+.terminal-callout strong {
+  font-size: clamp(22px, 3vw, 38px);
+  letter-spacing: 0.14em;
+}
+
+@keyframes terminalReveal {
+  0% { opacity: 0; transform: translateX(-50%) scale(0.78) rotate(-2deg); }
+  18%, 72% { opacity: 1; transform: translateX(-50%) scale(1) rotate(-1deg); }
+  100% { opacity: 0; transform: translateX(-50%) scale(1.06) rotate(0deg); }
 }
 
 .tutorial {
@@ -369,6 +560,19 @@ button {
 .modal-shade {
   background: rgba(27, 26, 22, 0.42);
   backdrop-filter: blur(5px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+.game-shell:has(.modal-shade) {
+  touch-action: pan-y;
+}
+
+.modal-shade button:focus {
+  outline: 3px solid #f1c86d;
+  outline-offset: 3px;
 }
 
 .upgrade-panel,
@@ -402,6 +606,12 @@ button {
   gap: clamp(9px, 1.5vw, 18px);
 }
 
+.upgrade-grid.count-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 720px);
+  margin-inline: auto;
+}
+
 .upgrade-card {
   min-height: clamp(150px, 24vw, 245px);
   padding: clamp(14px, 2vw, 24px);
@@ -411,6 +621,29 @@ button {
   cursor: pointer;
   position: relative;
   overflow: hidden;
+}
+
+.upgrade-card-art {
+  position: absolute;
+  z-index: 0;
+  top: 42px;
+  right: 10px;
+  width: clamp(76px, 10vw, 118px);
+  aspect-ratio: 8 / 9;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 7px 5px rgba(32, 28, 23, 0.24));
+  opacity: 0.94;
+  pointer-events: none;
+}
+
+.upgrade-card > :not(.upgrade-card-art) {
+  position: relative;
+  z-index: 1;
+}
+
+.upgrade-card:has(.upgrade-card-art) h3,
+.upgrade-card:has(.upgrade-card-art) p {
+  max-width: calc(100% - clamp(82px, 11vw, 126px));
 }
 
 .upgrade-card::after {
@@ -516,6 +749,270 @@ button {
   margin-top: 22px;
 }
 
+.tao-note {
+  width: min(100%, 500px);
+  margin: -7px 0 20px;
+  padding-left: 12px;
+  color: #675f55;
+  font-size: clamp(10px, 1vw, 13px);
+  line-height: 1.6;
+  border-left: 2px solid #5a7194;
+}
+
+.rare-panel {
+  border-top: 5px solid #486b64;
+}
+
+.rare-card {
+  background:
+    radial-gradient(circle at 78% 18%, rgba(81, 112, 103, 0.13), transparent 34%),
+    rgba(255, 252, 241, 0.72);
+}
+
+.audio-settings {
+  display: grid;
+  gap: 12px;
+  margin: 22px auto;
+  padding: 14px;
+  background: rgba(255, 252, 241, 0.65);
+  border: 1px solid rgba(38, 35, 31, 0.15);
+}
+
+.audio-settings label {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  align-items: center;
+  gap: 10px;
+  color: #675f55;
+  font-size: 12px;
+}
+
+.audio-settings input {
+  accent-color: var(--cinnabar);
+}
+
+.forge-panel {
+  width: min(96%, 1120px);
+  min-height: min(88%, 620px);
+  padding: clamp(16px, 2.5vw, 32px);
+  color: #282621;
+  background:
+    radial-gradient(circle at 36% 50%, rgba(82, 111, 103, 0.16), transparent 31%),
+    linear-gradient(135deg, rgba(247, 240, 221, 0.98), rgba(224, 211, 184, 0.98));
+  border: 1px solid rgba(38, 35, 31, 0.36);
+  box-shadow: 18px 18px 0 rgba(27, 26, 22, 0.24);
+}
+
+.forge-heading-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.forge-heading-row .kicker {
+  margin-bottom: 7px;
+}
+
+.capacity {
+  padding: 7px 10px;
+  color: #eee2c9;
+  font-size: 11px;
+  background: #3c4039;
+}
+
+.forge-message {
+  margin: 10px 0 12px;
+  color: #6a6256;
+  font-size: 12px;
+}
+
+.forge-layout {
+  display: grid;
+  grid-template-columns: minmax(430px, 1fr) minmax(250px, 0.42fr);
+  gap: clamp(16px, 2.6vw, 34px);
+  align-items: center;
+}
+
+.weave-ring-large {
+  position: relative;
+  width: min(48vw, 520px);
+  aspect-ratio: 1.42;
+  margin-inline: auto;
+  border: 1px dashed rgba(45, 54, 48, 0.3);
+  border-radius: 50%;
+  box-shadow:
+    inset 0 0 0 18px rgba(72, 91, 81, 0.035),
+    inset 0 0 0 20px rgba(72, 91, 81, 0.09);
+}
+
+.weave-ring-large::before,
+.weave-ring-large::after {
+  content: "";
+  position: absolute;
+  inset: 10%;
+  border: 1px solid rgba(161, 66, 53, 0.18);
+  border-radius: 50%;
+}
+
+.weave-ring-large::after {
+  inset: 22%;
+  border-color: rgba(45, 54, 48, 0.18);
+}
+
+.weave-node {
+  --angle: calc(360deg / var(--node-count) * var(--node-index) - 90deg);
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: clamp(76px, 8vw, 104px);
+  min-height: 70px;
+  place-items: center;
+  padding: 7px;
+  transform:
+    translate(-50%, -50%)
+    rotate(var(--angle))
+    translateX(min(20vw, 210px))
+    rotate(calc(var(--angle) * -1));
+  color: #292722;
+  background: rgba(249, 242, 224, 0.95);
+  border: 1px solid rgba(44, 41, 35, 0.28);
+  cursor: pointer;
+  box-shadow: 5px 7px 0 rgba(47, 42, 34, 0.09);
+}
+
+.weave-node b {
+  position: absolute;
+  top: -9px;
+  left: -9px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  color: #f7ecd4;
+  font-size: 10px;
+  background: #3b4039;
+  border-radius: 50%;
+}
+
+.weave-node span {
+  font-weight: 900;
+  font-size: clamp(12px, 1.25vw, 16px);
+}
+
+.weave-node small {
+  color: #756c5f;
+  font-size: 9px;
+}
+
+.weave-node.fusion {
+  background: #efe0b8;
+  border-color: #a47e37;
+}
+
+.weave-node.celestial {
+  color: #f1edf4;
+  background: #52617b;
+  border-color: #aebad0;
+}
+
+.weave-node.celestial small {
+  color: #d8deea;
+}
+
+.weave-node.selected {
+  outline: 3px solid var(--cinnabar);
+  outline-offset: 3px;
+}
+
+.weave-node.pulse {
+  box-shadow: 0 0 0 6px rgba(166, 71, 54, 0.2), 5px 7px 0 rgba(47, 42, 34, 0.09);
+}
+
+.weave-core {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 140px;
+  height: 92px;
+  place-items: center;
+  padding: 12px;
+  color: #f3e7ce;
+  transform: translate(-50%, -50%) rotate(-2deg);
+  background: #31352f;
+  border: 4px double #b18a4e;
+}
+
+.weave-core span {
+  color: #cbb88e;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+}
+
+.weave-core strong {
+  font: 900 24px ui-monospace, monospace;
+}
+
+.forge-controls {
+  display: grid;
+  gap: 12px;
+}
+
+.forge-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: rgba(45, 41, 35, 0.22);
+}
+
+.forge-tabs button,
+.new-node-list button,
+.celestial-button {
+  padding: 9px 10px;
+  color: #39352e;
+  background: rgba(252, 246, 229, 0.78);
+  border: 0;
+  cursor: pointer;
+}
+
+.forge-tabs button.active {
+  color: #f8edd6;
+  background: #4c6961;
+}
+
+.primary-button.compact {
+  min-width: 0;
+  padding: 11px 15px;
+  font-size: 13px;
+}
+
+.new-node-list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 5px;
+}
+
+.new-node-list p {
+  grid-column: 1 / -1;
+  margin: 2px 0 5px;
+  color: #6a6256;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+.new-node-list button {
+  border: 1px solid rgba(45, 41, 35, 0.17);
+}
+
+.celestial-button {
+  color: #f1ebf6;
+  background: #596780;
+  border: 1px solid #abb7ce;
+}
+
 .boss-choice button {
   min-height: 92px;
 }
@@ -576,6 +1073,272 @@ button {
 
   .upgrade-card {
     min-height: 130px;
+  }
+
+  .tao-note {
+    display: none;
+  }
+
+  .term-stack {
+    top: 8px;
+    padding-block: 4px;
+  }
+
+  .term-stack small {
+    display: none;
+  }
+
+  .weave-hud {
+    top: 48px;
+    max-width: 78%;
+    padding: 3px 7px;
+  }
+
+  .weave-title,
+  .weave-charge {
+    display: none;
+  }
+
+  .weapon-chip em {
+    display: none;
+  }
+
+  .weapon-chip {
+    min-width: auto;
+  }
+
+  .forge-panel {
+    min-height: 94%;
+    padding: 12px;
+  }
+
+  .forge-heading-row .upgrade-heading {
+    font-size: 27px;
+  }
+
+  .forge-layout {
+    grid-template-columns: minmax(330px, 1fr) minmax(220px, 0.56fr);
+    gap: 10px;
+  }
+
+  .weave-ring-large {
+    width: min(50vw, 420px);
+  }
+
+  .weave-node {
+    width: 75px;
+    min-height: 55px;
+    transform:
+      translate(-50%, -50%)
+      rotate(var(--angle))
+      translateX(min(19vw, 158px))
+      rotate(calc(var(--angle) * -1));
+  }
+
+  .weave-node small {
+    display: none;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .modal-shade {
+    display: block;
+    padding: 8px;
+  }
+
+  .modal-shade > section {
+    margin: 0 auto;
+  }
+
+  .upgrade-panel,
+  .result-panel,
+  .pause-panel {
+    width: min(96%, 960px);
+    padding: 12px 14px;
+    box-shadow: 8px 8px 0 rgba(27, 26, 22, 0.2);
+  }
+
+  .upgrade-panel .kicker,
+  .result-panel .kicker,
+  .pause-panel .kicker {
+    margin-bottom: 5px;
+  }
+
+  .upgrade-heading,
+  .result-panel h2,
+  .pause-panel h2 {
+    font-size: clamp(22px, 5.8vh, 30px);
+  }
+
+  .upgrade-note {
+    margin: 5px 0 9px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .upgrade-grid {
+    gap: 8px;
+  }
+
+  .upgrade-card {
+    min-height: 112px;
+    padding: 9px 11px 20px;
+  }
+
+  .upgrade-card h3 {
+    margin: 6px 0 4px;
+    font-size: clamp(17px, 4.6vh, 22px);
+  }
+
+  .upgrade-card p {
+    font-size: 10px;
+    line-height: 1.4;
+  }
+
+  .upgrade-card-art {
+    top: 28px;
+    width: 62px;
+  }
+
+  .upgrade-card:has(.upgrade-card-art) h3,
+  .upgrade-card:has(.upgrade-card-art) p {
+    max-width: calc(100% - 68px);
+  }
+
+  .level-dots {
+    bottom: 8px;
+    left: 11px;
+  }
+
+  .forge-panel {
+    width: min(98%, 1080px);
+    min-height: 0;
+    padding: 8px 12px;
+    box-shadow: 8px 8px 0 rgba(27, 26, 22, 0.2);
+  }
+
+  .forge-heading-row {
+    align-items: center;
+  }
+
+  .forge-heading-row .kicker {
+    display: none;
+  }
+
+  .forge-heading-row .upgrade-heading {
+    font-size: clamp(22px, 6vh, 29px);
+  }
+
+  .capacity {
+    padding: 4px 7px;
+    font-size: 9px;
+  }
+
+  .forge-message {
+    margin: 4px 0 6px;
+    min-height: 14px;
+    font-size: 10px;
+  }
+
+  .forge-layout {
+    grid-template-columns: minmax(390px, 1fr) minmax(230px, 0.46fr);
+    gap: 8px;
+  }
+
+  .weave-ring-large {
+    width: min(46vw, 390px);
+  }
+
+  .weave-node {
+    width: 66px;
+    min-height: 48px;
+    padding: 4px;
+    transform:
+      translate(-50%, -50%)
+      rotate(var(--angle))
+      translateX(min(18vw, 150px))
+      rotate(calc(var(--angle) * -1));
+  }
+
+  .weave-node b {
+    width: 19px;
+    height: 19px;
+  }
+
+  .weave-node span {
+    font-size: 11px;
+  }
+
+  .weave-node small {
+    display: none;
+  }
+
+  .weave-core {
+    width: 104px;
+    height: 64px;
+    padding: 6px;
+  }
+
+  .weave-core strong {
+    font-size: 18px;
+  }
+
+  .forge-controls {
+    gap: 5px;
+  }
+
+  .forge-tabs button,
+  .new-node-list button,
+  .celestial-button {
+    padding: 5px 7px;
+    font-size: 10px;
+  }
+
+  .primary-button.compact {
+    padding: 7px 10px;
+    font-size: 11px;
+  }
+
+  .new-node-list {
+    gap: 3px;
+  }
+
+  .new-node-list p {
+    margin: 0;
+    font-size: 9px;
+  }
+
+  .forge-controls > .secondary-button {
+    padding: 7px 10px;
+  }
+
+  .stats {
+    margin: 10px 0;
+  }
+
+  .stats div {
+    padding: 7px 5px;
+  }
+
+  .result-seal {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 8px;
+    font-size: 22px;
+  }
+
+  .boss-choice {
+    margin-top: 10px;
+  }
+
+  .boss-choice button {
+    min-height: 68px;
+  }
+
+  .audio-settings {
+    gap: 6px;
+    margin: 9px auto;
+    padding: 7px 10px;
   }
 }
 

@@ -31,7 +31,9 @@ test("server-renders the Paper Guild game shell", async () => {
   assert.match(html, /<title>纸上百工｜水墨剪纸肉鸽<\/title>/i);
   assert.match(html, /og\.png/);
   assert.match(html, /纸上百工/);
-  assert.match(html, /研墨装裱 0%/);
-  assert.match(html, /游戏区域/);
+  assert.match(html, /美工图集装订中 0%/);
+  assert.match(html, /10 把本命器/);
+  assert.match(html, /二十四节气/);
+  assert.match(html, /纸上百工游戏/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
