@@ -28,9 +28,10 @@ test("server-renders the Paper Guild game shell", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>纸上百工｜轻量肉鸽生存<\/title>/i);
+  assert.match(html, /<title>纸上百工｜水墨剪纸肉鸽<\/title>/i);
+  assert.match(html, /og\.png/);
   assert.match(html, /纸上百工/);
-  assert.match(html, /展开这一卷/);
+  assert.match(html, /研墨装裱 0%/);
   assert.match(html, /游戏区域/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });

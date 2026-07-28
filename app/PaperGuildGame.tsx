@@ -1,6 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  drawEnemyArt,
+  drawPlayerArt,
+  drawSeasonParticles,
+  drawSeasonScene,
+  drawWeaponGlyph,
+  loadArtAssets,
+  seasonIndex,
+  type BossTier,
+  type EnemyArchetype,
+  type LoadedArt,
+} from "./game/art";
+import {
+  createPlayerForm,
+  finishHumanForm,
+  forceHumanForm,
+  stepPlayerForm,
+  type PlayerFormModel,
+} from "./game/form";
 
 const W = 1280;
 const H = 720;
@@ -17,7 +36,7 @@ type WeaponState = {
   branch?: Branch;
 };
 
-type EnemyType = "cup" | "shoe" | "lantern" | "fish" | "abacus" | "rib" | "lion" | "puppet" | "boss";
+type EnemyType = EnemyArchetype;
 
 type Enemy = {
   id: number;
@@ -34,6 +53,7 @@ type Enemy = {
   marked: number;
   elite: boolean;
   boss: boolean;
+  bossTier: BossTier;
 };
 
 type Projectile = {
@@ -75,7 +95,7 @@ type Game = {
   environmental: string;
   nextEnvironmentAt: number;
   nextBossAt: number;
-  player: {
+  player: PlayerFormModel & {
     x: number;
     y: number;
     life: number;
@@ -84,7 +104,6 @@ type Game = {
     nextXp: number;
     level: number;
     invuln: number;
-    movingFor: number;
     power: number;
     speed: number;
     magnet: number;
@@ -100,7 +119,9 @@ type Game = {
   kills: number;
   score: number;
   hitCounter: number;
-  bossSpawned: boolean;
+  midBossSpawned: boolean;
+  finalBossSpawned: boolean;
+  endlessBossCount: number;
   tutorial: boolean;
   trials: Set<TrialId>;
 };
@@ -190,10 +211,10 @@ const weaponInfo: Record<WeaponId, {
 };
 
 const seasonData = [
-  { name: "春 · 生", paper: "#eee7d1", wash: "#8ba38b", accent: "#b3655a" },
-  { name: "夏 · 长", paper: "#e8e1c8", wash: "#5c8a7c", accent: "#b04b38" },
-  { name: "秋 · 收", paper: "#ebdfc4", wash: "#b1844d", accent: "#8f4e3d" },
-  { name: "冬 · 藏", paper: "#e5e5de", wash: "#71808b", accent: "#9d3e34" },
+  { name: "惊蛰 · 春桥", paper: "#eee7d1", wash: "#8ba38b", accent: "#b3655a" },
+  { name: "小暑 · 荷塘", paper: "#e8e1c8", wash: "#5c8a7c", accent: "#547b72" },
+  { name: "霜降 · 稻埂", paper: "#ebdfc4", wash: "#b1844d", accent: "#a87842" },
+  { name: "大寒 · 岁市", paper: "#e5e5de", wash: "#71808b", accent: "#9d4339" },
 ];
 
 const harmonyPairs: Array<{ ids: [WeaponId, WeaponId]; name: string }> = [
@@ -238,7 +259,7 @@ function formatTime(seconds: number) {
 }
 
 function getSeason(elapsed: number) {
-  return Math.floor((elapsed % RUN_TIME) / 120) % 4;
+  return seasonIndex(elapsed);
 }
 
 function weaponLevel(game: Game, id: WeaponId) {
@@ -265,6 +286,7 @@ function createGame(trials: Set<TrialId>): Game {
     nextEnvironmentAt: RUN_TIME + 120,
     nextBossAt: RUN_TIME,
     player: {
+      ...createPlayerForm(),
       x: W / 2,
       y: H / 2,
       life: thinLife,
@@ -273,7 +295,6 @@ function createGame(trials: Set<TrialId>): Game {
       nextXp: 8,
       level: 1,
       invuln: 0,
-      movingFor: 0,
       power: 1,
       speed: 1,
       magnet: 1,
@@ -289,7 +310,9 @@ function createGame(trials: Set<TrialId>): Game {
     kills: 0,
     score: 0,
     hitCounter: 0,
-    bossSpawned: false,
+    midBossSpawned: false,
+    finalBossSpawned: false,
+    endlessBossCount: 0,
     tutorial: true,
     trials: new Set(trials),
   };
@@ -611,7 +634,8 @@ function spawnEnemy(game: Game, forced?: EnemyType) {
   if (edge === 3) { x = Math.random() * W; y = H + margin; }
 
   const elite = resolvedType === "lion" || resolvedType === "puppet";
-  const boss = resolvedType === "boss";
+  const boss = resolvedType === "taotie" || resolvedType === "nian";
+  const bossTier: BossTier = resolvedType === "taotie" ? "mid" : resolvedType === "nian" ? "final" : null;
   const crowdScale = game.trials.has("crowd") ? 1.18 : 1;
   const eliteScale = game.trials.has("elite") && (elite || boss) ? 1.45 : 1;
   const baseHp = 11 + game.elapsed * 0.055;
@@ -624,7 +648,8 @@ function spawnEnemy(game: Game, forced?: EnemyType) {
     rib: { r: 20, hp: 1.55, speed: 50, damage: 1 },
     lion: { r: 40, hp: 15, speed: 44, damage: 1 },
     puppet: { r: 36, hp: 12, speed: 54, damage: 1 },
-    boss: { r: 76, hp: 95, speed: 31, damage: 1 },
+    taotie: { r: 62, hp: 46, speed: 34, damage: 1 },
+    nian: { r: 78, hp: 92, speed: 31, damage: 1 },
   };
   const stat = stats[resolvedType];
   const hp = baseHp * stat.hp * eliteScale * (boss && game.endless ? 1 + (game.elapsed - RUN_TIME) / 360 : 1);
@@ -643,6 +668,7 @@ function spawnEnemy(game: Game, forced?: EnemyType) {
     marked: 0,
     elite,
     boss,
+    bossTier,
   });
 }
 
@@ -753,7 +779,7 @@ function updateProjectiles(game: Game, dt: number) {
   );
 }
 
-function removeDead(game: Game, onBoss: () => void) {
+function removeDead(game: Game, onBoss: (enemy: Enemy) => void) {
   const living: Enemy[] = [];
   for (const enemy of game.enemies) {
     if (enemy.hp > 0) {
@@ -761,7 +787,7 @@ function removeDead(game: Game, onBoss: () => void) {
       continue;
     }
     game.kills += 1;
-    game.score += enemy.boss ? 3000 : enemy.elite ? 500 : 20;
+    game.score += enemy.bossTier === "final" ? 3000 : enemy.bossTier === "mid" ? 1200 : enemy.elite ? 500 : 20;
     addBurst(game, enemy.x, enemy.y, enemy.boss ? "#a54535" : "#3f443d", enemy.boss ? 60 : enemy.elite ? 24 : 9);
     const drops = enemy.boss ? 0 : enemy.elite ? 8 : 1;
     for (let i = 0; i < drops; i++) {
@@ -773,12 +799,17 @@ function removeDead(game: Game, onBoss: () => void) {
         pulse: Math.random() * Math.PI * 2,
       });
     }
-    if (enemy.boss) onBoss();
+    if (enemy.boss) onBoss(enemy);
   }
   game.enemies = living;
 }
 
-function drawBackdrop(ctx: CanvasRenderingContext2D, elapsed: number, menu = false) {
+function drawBackdrop(ctx: CanvasRenderingContext2D, elapsed: number, menu = false, art: LoadedArt | null = null) {
+  if (art) {
+    drawSeasonScene(ctx, art, elapsed, menu);
+    if (!menu) drawSeasonParticles(ctx, elapsed);
+    return;
+  }
   const index = getSeason(elapsed);
   const season = seasonData[index];
   ctx.fillStyle = season.paper;
@@ -860,7 +891,11 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, elapsed: number, menu = fal
   ctx.restore();
 }
 
-function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, t: number) {
+function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, t: number, art: LoadedArt | null) {
+  if (art?.enemies[enemy.type]) {
+    drawEnemyArt(ctx, enemy, art, t);
+    return;
+  }
   ctx.save();
   ctx.translate(enemy.x, enemy.y);
   const bob = Math.sin(t * 5 + enemy.id) * 2;
@@ -942,52 +977,7 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, t: number) {
 }
 
 function drawPlayer(ctx: CanvasRenderingContext2D, game: Game, t: number) {
-  const player = game.player;
-  ctx.save();
-  ctx.translate(player.x, player.y);
-  if (player.invuln > 0 && Math.floor(player.invuln * 15) % 2 === 0) ctx.globalAlpha = 0.35;
-  ctx.strokeStyle = "#27241f";
-  ctx.fillStyle = "#f6eedb";
-  ctx.lineWidth = 4;
-
-  if (player.movingFor > 0.8) {
-    ctx.rotate(Math.sin(t * 3) * 0.04);
-    ctx.beginPath();
-    ctx.moveTo(27, 0);
-    ctx.lineTo(-22, -18);
-    ctx.lineTo(-10, 0);
-    ctx.lineTo(-22, 18);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-10, 0);
-    ctx.lineTo(12, 0);
-    ctx.moveTo(-22, -18);
-    ctx.lineTo(-5, 0);
-    ctx.lineTo(-22, 18);
-    ctx.stroke();
-    ctx.fillStyle = "#a54535";
-    ctx.beginPath(); ctx.arc(-1, 0, 3, 0, Math.PI * 2); ctx.fill();
-  } else {
-    ctx.beginPath(); ctx.arc(0, -18, 11, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-14, -5);
-    ctx.lineTo(14, -5);
-    ctx.lineTo(18, 25);
-    ctx.lineTo(-18, 25);
-    ctx.closePath();
-    ctx.fill(); ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-14, 2); ctx.lineTo(-26, 14);
-    ctx.moveTo(14, 2); ctx.lineTo(26, 14);
-    ctx.moveTo(-8, 25); ctx.lineTo(-12, 36);
-    ctx.moveTo(8, 25); ctx.lineTo(12, 36);
-    ctx.stroke();
-    ctx.fillStyle = "#a54535";
-    ctx.fillRect(-15, -6, 30, 6);
-  }
-  ctx.restore();
+  drawPlayerArt(ctx, game.player, t);
 }
 
 function drawOrbitWeapons(ctx: CanvasRenderingContext2D, game: Game) {
@@ -1000,15 +990,7 @@ function drawOrbitWeapons(ctx: CanvasRenderingContext2D, game: Game) {
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(angle + Math.PI / 2);
-      ctx.fillStyle = info.color;
-      ctx.strokeStyle = "#29251f";
-      ctx.lineWidth = 2;
-      if (weapon.id === "umbrella") {
-        ctx.beginPath(); ctx.arc(0, 0, 14, Math.PI, Math.PI * 2); ctx.lineTo(14, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 18); ctx.stroke();
-      } else {
-        ctx.beginPath(); ctx.moveTo(0, -16); ctx.lineTo(5, 11); ctx.lineTo(0, 17); ctx.lineTo(-5, 11); ctx.closePath(); ctx.fill(); ctx.stroke();
-      }
+      drawWeaponGlyph(ctx, weapon.id, weapon.level, 0, 0, 0, info.color);
       ctx.restore();
     }
   };
@@ -1020,10 +1002,10 @@ function drawOrbitWeapons(ctx: CanvasRenderingContext2D, game: Game) {
   }
 }
 
-function drawGame(ctx: CanvasRenderingContext2D, game: Game, t: number, joystick: { active: boolean; bx: number; by: number; x: number; y: number }) {
-  drawBackdrop(ctx, game.elapsed);
+function drawGame(ctx: CanvasRenderingContext2D, game: Game, t: number, joystick: { active: boolean; bx: number; by: number; x: number; y: number }, art: LoadedArt | null) {
+  drawBackdrop(ctx, game.elapsed, false, art);
   ctx.save();
-  ctx.globalAlpha = 0.1;
+  ctx.globalAlpha = 0.035;
   ctx.strokeStyle = seasonData[getSeason(game.elapsed)].wash;
   ctx.lineWidth = 1;
   for (let x = 80; x < W; x += 160) {
@@ -1060,7 +1042,7 @@ function drawGame(ctx: CanvasRenderingContext2D, game: Game, t: number, joystick
     ctx.restore();
   }
 
-  for (const enemy of game.enemies) drawEnemy(ctx, enemy, t);
+  for (const enemy of game.enemies) drawEnemy(ctx, enemy, t, art);
   drawOrbitWeapons(ctx, game);
   drawPlayer(ctx, game, t);
 
@@ -1086,6 +1068,7 @@ function drawGame(ctx: CanvasRenderingContext2D, game: Game, t: number, joystick
 export function PaperGuildGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<Game | null>(null);
+  const artRef = useRef<LoadedArt | null>(null);
   const modeRef = useRef<Mode>("menu");
   const keysRef = useRef(new Set<string>());
   const joystickRef = useRef({ active: false, pointerId: -1, bx: 0, by: 0, x: 0, y: 0 });
@@ -1104,13 +1087,31 @@ export function PaperGuildGame() {
     }
   });
   const [tutorialKey, setTutorialKey] = useState(0);
+  const [artProgress, setArtProgress] = useState(0);
+  const [artReady, setArtReady] = useState(false);
 
   const setMode = useCallback((next: Mode) => {
     modeRef.current = next;
     setModeState(next);
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    loadArtAssets((progress) => {
+      if (active) setArtProgress(progress);
+    }).then((art) => {
+      if (!active) return;
+      artRef.current = art;
+      setArtProgress(1);
+      setArtReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const openUpgrade = useCallback((game: Game, rareOnly = false) => {
+    finishHumanForm(game.player);
     const nextOptions = rareOnly
       ? makeRareOptions(game)
       : makeUpgradeOptions(game);
@@ -1130,19 +1131,26 @@ export function PaperGuildGame() {
     setMode("result");
   }, [setMode]);
 
-  const onBossDefeated = useCallback(() => {
+  const onBossDefeated = useCallback((enemy: Enemy) => {
     const game = gameRef.current;
     if (!game) return;
+    if (game.endless || enemy.bossTier === "mid") {
+      openUpgrade(game, true);
+      return;
+    }
     setSnapshot(snapshotOf(game));
     setMode("bossChoice");
-  }, [setMode]);
+  }, [openUpgrade, setMode]);
 
   useEffect(() => {
     const onDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
       if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(key)) event.preventDefault();
       keysRef.current.add(key);
-      if (key === "escape" && modeRef.current === "playing") setMode("paused");
+      if (key === "escape" && modeRef.current === "playing") {
+        if (gameRef.current) finishHumanForm(gameRef.current.player);
+        setMode("paused");
+      }
       else if (key === "escape" && modeRef.current === "paused") setMode("playing");
     };
     const onUp = (event: KeyboardEvent) => keysRef.current.delete(event.key.toLowerCase());
@@ -1173,16 +1181,34 @@ export function PaperGuildGame() {
       const game = gameRef.current;
 
       if (!game) {
-        drawBackdrop(ctx, time / 1000, true);
+        drawBackdrop(ctx, time / 1000, true, artRef.current);
+        const cycle = (time / 1000) % 5;
+        const previewProgress = cycle < 1.65
+          ? 0
+          : cycle < 1.95
+            ? (cycle - 1.65) / 0.3
+            : cycle < 3.35
+              ? 1
+              : cycle < 3.65
+                ? 1 - (cycle - 3.35) / 0.3
+                : 0;
+        const previewState = cycle < 1.65 || cycle >= 3.65
+          ? "human"
+          : cycle < 1.95
+            ? "foldingToPlane"
+            : cycle < 3.35
+              ? "plane"
+              : "foldingToHuman";
         ctx.save();
         ctx.translate(1000, 340);
-        ctx.rotate(-0.05);
-        ctx.fillStyle = "rgba(248,242,227,0.8)";
-        ctx.strokeStyle = "#302d28";
-        ctx.lineWidth = 8;
-        ctx.beginPath(); ctx.moveTo(120, 0); ctx.lineTo(-95, -80); ctx.lineTo(-40, 0); ctx.lineTo(-95, 80); ctx.closePath(); ctx.fill(); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(-40, 0); ctx.lineTo(65, 0); ctx.moveTo(-95, -80); ctx.lineTo(-22, 0); ctx.lineTo(-95, 80); ctx.stroke();
-        ctx.fillStyle = "#a54535"; ctx.beginPath(); ctx.arc(-5, 0, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.scale(2.65, 2.65);
+        drawPlayerArt(ctx, {
+          x: 0,
+          y: 0,
+          invuln: 0,
+          formProgress: previewProgress,
+          formState: previewState,
+        }, time / 1000);
         ctx.restore();
         frame = requestAnimationFrame(loop);
         return;
@@ -1214,22 +1240,30 @@ export function PaperGuildGame() {
         }
 
         const moving = Math.hypot(dx, dy) > 0.08;
+        const direction = moving ? normalize(dx, dy) : { x: 0, y: 0 };
+        stepPlayerForm(game.player, moving, direction.x, direction.y, dt);
         if (moving) {
-          const direction = normalize(dx, dy);
           const weatherScale = game.environmental.startsWith("逆风") ? 0.88 : 1;
           const speed = 205 * game.player.speed * weatherScale;
           game.player.x = clamp(game.player.x + direction.x * speed * dt, 34, W - 34);
           game.player.y = clamp(game.player.y + direction.y * speed * dt, 42, H - 38);
-          game.player.movingFor += dt;
-        } else {
-          game.player.movingFor = Math.max(0, game.player.movingFor - dt * 2.8);
         }
 
         game.spawnClock -= dt;
         const bossAlive = game.enemies.some((enemy) => enemy.boss);
-        if (game.elapsed >= game.nextBossAt && !bossAlive && !game.bossSpawned) {
-          spawnEnemy(game, "boss");
-          game.bossSpawned = true;
+        if (!game.endless) {
+          if (game.elapsed >= 360 && !game.midBossSpawned && !bossAlive) {
+            spawnEnemy(game, "taotie");
+            game.midBossSpawned = true;
+          }
+          if (game.elapsed >= RUN_TIME && !game.finalBossSpawned && !bossAlive) {
+            spawnEnemy(game, "nian");
+            game.finalBossSpawned = true;
+          }
+        } else if (game.elapsed >= game.nextBossAt && !bossAlive) {
+          spawnEnemy(game, game.endlessBossCount % 2 === 0 ? "taotie" : "nian");
+          game.endlessBossCount += 1;
+          game.nextBossAt += 120;
         }
         if (game.spawnClock <= 0 && game.enemies.length < 150) {
           const density = game.trials.has("crowd") ? 1.32 : 1;
@@ -1246,8 +1280,6 @@ export function PaperGuildGame() {
           const effects = ["逆风 · 步速稍缓", "灯火 · 灯笼精增多", "落叶障 · 轻敌加速", "精英增援"];
           game.environmental = effects[Math.floor(Math.random() * effects.length)];
           game.nextEnvironmentAt += 120;
-          game.nextBossAt = game.elapsed + 120;
-          game.bossSpawned = false;
           if (game.environmental === "精英增援") {
             spawnEnemy(game, "lion");
             spawnEnemy(game, "puppet");
@@ -1270,6 +1302,7 @@ export function PaperGuildGame() {
           if (distSq(enemy.x, enemy.y, game.player.x, game.player.y) < (enemy.r + 19) ** 2 && game.player.invuln <= 0) {
             game.player.life -= enemy.damage;
             game.player.invuln = 1.25;
+            forceHumanForm(game.player);
             addBurst(game, game.player.x, game.player.y, "#a54535", 20);
             if (game.player.life <= 0) {
               endRun(false);
@@ -1321,7 +1354,7 @@ export function PaperGuildGame() {
         }
       }
 
-      drawGame(ctx, game, time / 1000, joystickRef.current);
+      drawGame(ctx, game, time / 1000, joystickRef.current, artRef.current);
       frame = requestAnimationFrame(loop);
     };
     frame = requestAnimationFrame(loop);
@@ -1329,6 +1362,7 @@ export function PaperGuildGame() {
   }, [endRun, onBossDefeated, openUpgrade]);
 
   const startGame = () => {
+    if (!artReady) return;
     const game = createGame(trials);
     gameRef.current = game;
     setSnapshot(snapshotOf(game));
@@ -1351,7 +1385,7 @@ export function PaperGuildGame() {
     game.environmental = "四时再启";
     game.nextEnvironmentAt = game.elapsed + 120;
     game.nextBossAt = game.elapsed + 120;
-    game.bossSpawned = false;
+    game.endlessBossCount = 0;
     setSnapshot(snapshotOf(game));
     setMode("playing");
   };
@@ -1436,7 +1470,9 @@ export function PaperGuildGame() {
                 <span>双路线成器</span>
                 <span>三组合鸣</span>
               </div>
-              <button className="primary-button" onClick={startGame}>展开这一卷</button>
+              <button className="primary-button" onClick={startGame} disabled={!artReady}>
+                {artReady ? "展开这一卷" : `研墨装裱 ${Math.round(artProgress * 100)}%`}
+              </button>
               <div className="trial-area">
                 <p className="trial-label">{trialsUnlocked ? "试炼签 · 可叠加" : "首次收卷后解锁试炼签"}</p>
                 <div className="trials">
@@ -1469,7 +1505,16 @@ export function PaperGuildGame() {
               <div className="time-card">
                 <span className="season-pill" style={{ borderColor: season.accent }}>{season.name}</span>
                 <strong className="timer">{elapsedDisplay}</strong>
-                <button className="icon-button" aria-label="暂停游戏" onClick={() => setMode("paused")}>Ⅱ</button>
+                <button
+                  className="icon-button"
+                  aria-label="暂停游戏"
+                  onClick={() => {
+                    if (gameRef.current) finishHumanForm(gameRef.current.player);
+                    setMode("paused");
+                  }}
+                >
+                  Ⅱ
+                </button>
               </div>
             </div>
             <div className="hud-bottom">
@@ -1536,7 +1581,7 @@ export function PaperGuildGame() {
           <div className="overlay modal-shade">
             <div className="result-panel">
               <div className="result-seal">胜</div>
-              <h2>吞卷饕餮已伏</h2>
+              <h2>岁夜年兽已伏</h2>
               <p className="subtitle">八分钟的四时行旅已经写完。现在收卷，或让四季继续流转。</p>
               <div className="boss-choice">
                 <button className="primary-button" onClick={() => endRun(true)}>
