@@ -23,6 +23,7 @@ export type {
 export {
   AUDIO_CUES,
   AudioManager,
+  getFusionSfxCue,
   getTermAmbienceCue,
   getWorldMusicCue,
 } from "./audio";
@@ -32,6 +33,7 @@ export type {
   AudioCueId,
   AudioSettings,
   MusicCueId,
+  FusionSfxCueId,
   PlaySfxOptions,
   SfxCueId,
   WorldMusicState,

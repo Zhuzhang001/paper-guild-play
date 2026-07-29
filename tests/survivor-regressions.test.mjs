@@ -107,6 +107,39 @@ test("beam hits dispatch the pipa harmonic onHit chain", () => {
   );
 });
 
+test("搭手 listens to constituent weapon events instead of idling on its own owner", () => {
+  const run = quietRun("event-driven-synergy");
+  run.build.weapons = [
+    { id: "fan", level: 3, routeId: "fan:a" },
+    { id: "umbrella", level: 3, routeId: "umbrella:b" },
+  ];
+  spawnOneTarget(run);
+
+  let sawSynergyAttack = false;
+  stepFor(run, 2.2, () => {
+    sawSynergyAttack ||= run.projectiles.some(
+      (projectile) => projectile.owner === "synergy:windRain",
+    );
+  });
+
+  assert.equal(
+    sawSynergyAttack,
+    true,
+    "fan attacks must drive the 风过伞骨 event rule",
+  );
+});
+
+test("burst projectiles leave the magazine over time", () => {
+  const run = quietRun("temporal-burst");
+  run.build.weapons = [{ id: "abacus", level: 1 }];
+  spawnOneTarget(run);
+
+  assert.ok(
+    run.projectiles.some((projectile) => (projectile.spawnDelay ?? 0) > 0),
+    "a burst must retain delayed rounds instead of behaving as an instant fan",
+  );
+});
+
 test("an expired celestial intrusion is removed and a later intrusion can begin", () => {
   const run = quietRun("intrusion-expiry");
   run.elapsed = 480;
@@ -156,6 +189,11 @@ test("defeating an intrusion avatar does not grant a Boss forge reward", () => {
     false,
     "only the scheduled endless Boss may grant a Boss forge opportunity",
   );
+  assert.equal(
+    events.some((event) => event.type === "celestialReady"),
+    true,
+    "a defeated celestial avatar should immediately open its free capture",
+  );
 });
 
 test("standard mode remains at Dahan after the 480-second Boss boundary", () => {
@@ -173,8 +211,8 @@ test("standard mode remains at Dahan after the 480-second Boss boundary", () => 
   );
 });
 
-test("one forge opportunity permits only one weave mutation", () => {
-  const run = quietRun("single-forge-action");
+test("one forge opportunity grants two fire and keeps at most three", () => {
+  const run = quietRun("two-forge-actions");
   run.elapsed = 500;
   survivor.startEndless(run);
   run.spawnClock = Number.POSITIVE_INFINITY;
@@ -184,11 +222,17 @@ test("one forge opportunity permits only one weave mutation", () => {
 
   const events = survivor.stepRun(run, 1 / 30, { x: 0, y: 0 });
   assert.ok(events.some((event) => event.type === "forge"));
+  assert.equal(run.forgeCredits, 2);
 
   assert.equal(survivor.insertEndlessWeapon(run, "fan"), true);
   assert.equal(
     survivor.insertEndlessWeapon(run, "umbrella"),
+    true,
+    "the second point of fire should support another mutation",
+  );
+  assert.equal(
+    survivor.insertEndlessWeapon(run, "scissors"),
     false,
-    "a second mutation must wait for the next forge opportunity",
+    "a third mutation must wait for the next forge opportunity",
   );
 });

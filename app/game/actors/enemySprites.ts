@@ -19,16 +19,16 @@ export type EnemySpritePose = {
 export type EnemySpriteSheets = Partial<Record<EnemyArchetype, HTMLImageElement>>;
 
 const SPRITE_URLS: Record<EnemyArchetype, string> = {
-  cup: "/enemies-v3/cup.webp",
-  shoe: "/enemies-v3/shoe.webp",
-  lantern: "/enemies-v3/lantern.webp",
-  fish: "/enemies-v3/fish.webp",
-  abacus: "/enemies-v3/abacus.webp",
-  rib: "/enemies-v3/umbrella.webp",
-  lion: "/enemies-v3/lion.webp",
-  puppet: "/enemies-v3/puppet.webp",
-  taotie: "/enemies-v3/taotie.webp",
-  nian: "/enemies-v3/nian.webp",
+  cup: "/enemies-v3/cup-runtime.webp",
+  shoe: "/enemies-v3/shoe-runtime.webp",
+  lantern: "/enemies-v3/lantern-runtime.webp",
+  fish: "/enemies-v3/fish-runtime.webp",
+  abacus: "/enemies-v3/abacus-runtime.webp",
+  rib: "/enemies-v3/umbrella-runtime.webp",
+  lion: "/enemies-v3/lion-runtime.webp",
+  puppet: "/enemies-v3/puppet-runtime.webp",
+  taotie: "/enemies-v3/taotie-runtime.webp",
+  nian: "/enemies-v3/nian-runtime.webp",
 };
 
 const STRIDE: Record<EnemyArchetype, number> = {

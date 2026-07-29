@@ -30,7 +30,22 @@ export type FusionId =
   | "lanternBallista"
   | "inklineRepeater"
   | "thunderPipa"
-  | "myriadLanternCanopy";
+  | "myriadLanternCanopy"
+  | "galeBamboo"
+  | "hiddenSwordCanopy"
+  | "twinTailorBlades"
+  | "inkRuleSword"
+  | "windRepeater"
+  | "rainStringCanopy"
+  | "windStringPass"
+  | "inkRainBoundary"
+  | "stringScissor"
+  | "shadowScissor"
+  | "pearlInkLine"
+  | "countedLantern"
+  | "pearlThunder"
+  | "thunderBoltRoad"
+  | "inkScore";
 
 export type EffectTag =
   | "blade"
@@ -195,6 +210,32 @@ export type EffectSpec =
   | BeamEffect
   | LightningEffect;
 
+export type EffectPatchTarget = "core" | "route";
+
+/**
+ * Upgrade data is authored as complete readable effects, then normalized into
+ * patches. A replacement upgrades one logical emitter; append is reserved for
+ * a genuinely new trigger or side mechanism.
+ */
+export type EffectPatch = {
+  id: string;
+  target: EffectPatchTarget;
+  mode: "replace" | "append";
+  matchKind?: EffectSpec["kind"];
+  matchIndex?: number;
+  effect: EffectSpec;
+};
+
+export type ResolvedWeaponKit = {
+  core: readonly EffectSpec[];
+  route: readonly EffectSpec[];
+  mastery: readonly EffectSpec[];
+  effects: readonly EffectSpec[];
+};
+
+/** Public v4 name; `ResolvedWeaponKit` remains as a source-compatible alias. */
+export type ResolvedWeapon = ResolvedWeaponKit;
+
 export type MasteryDefinition = {
   id: MasteryId;
   key: MasteryKey;
@@ -308,29 +349,61 @@ export type SynergyRouteVariant = {
   effects: readonly EffectSpec[];
 };
 
+export type CombatEventKind =
+  | "weaponAttack"
+  | "weaponHit"
+  | "weaponKill"
+  | "guardBlock";
+
+export type SynergyEventRule = {
+  id: string;
+  event: CombatEventKind;
+  sourceWeapon?: WeaponId;
+  every?: number;
+  effects: readonly EffectSpec[];
+};
+
 export type SynergyDefinition = {
   id: string;
   name: string;
   weapons: readonly [WeaponId, WeaponId];
   description: string;
   effects: readonly EffectSpec[];
+  eventRules: readonly SynergyEventRule[];
   routeVariants: readonly SynergyRouteVariant[];
   artKey: string;
+};
+
+export type FusionMechanicDefinition = {
+  event:
+    | "attack"
+    | "hit"
+    | "markedHit"
+    | "block"
+    | "kill"
+    | "weavePass";
+  cadence: number;
+  action: string;
 };
 
 export type FusionDefinition = {
   id: FusionId;
   name: string;
+  canonicalName: string;
   weapons: readonly [WeaponId, WeaponId];
   description: string;
   tags: readonly EffectTag[];
   effects: readonly EffectSpec[];
   weaveVerb: string;
+  pairLabel: string;
+  action: string;
+  mechanic: FusionMechanicDefinition;
   artKey: string;
   terminalArtKey: string;
 };
 
 export type WeaveNodeKind = "weapon" | "fusion" | "celestial";
+export type WeaveNodeOrigin = "core" | "overflow" | "fusion" | "celestial";
 
 export type WeaveNode = {
   instanceId: string;
@@ -339,6 +412,9 @@ export type WeaveNode = {
   name: string;
   tags: readonly EffectTag[];
   passEffects: readonly EffectSpec[];
+  origin: WeaveNodeOrigin;
+  weaponState?: WeaponState;
+  consumedWeapons?: readonly WeaponState[];
 };
 
 export type CelestialIntrusionId =
@@ -401,4 +477,146 @@ export type WeaveTerminal = {
   effects: readonly EffectSpec[];
   steps: readonly TerminalStep[];
   artKey: string;
+};
+
+export type EndlessPerkId =
+  | "swordMarkReturn"
+  | "windDeflectShot"
+  | "umbrellaGap"
+  | "scissorsCross"
+  | "ninePearl"
+  | "thirdVolleyTurret"
+  | "lastNoteReturn"
+  | "inkCrossStay"
+  | "lanternStoredFire"
+  | "thunderRelay"
+  | "reverseCycle"
+  | "dualCursor"
+  | "emptySlotCharge"
+  | "everyThirdBack"
+  | "firstNodeTwice"
+  | "slowHeavyFinish"
+  | "fastLightFinish"
+  | "carryFinish"
+  | "springHealingLeaf"
+  | "rainMergePearls"
+  | "lotusConduct"
+  | "summerWindShot"
+  | "harvestBundle"
+  | "autumnSweep"
+  | "winterLanternWard"
+  | "frostEntrySlow"
+  | "highPickupWind"
+  | "lastPaperGuard"
+  | "humanSteady"
+  | "planeCharge"
+  | "sharpTurnPush"
+  | "idleRecovery";
+
+export type EndlessPerkCategory =
+  | "weapon"
+  | "weave"
+  | "season"
+  | "journey";
+
+export type EndlessPerkEvent =
+  | "markedTargetKilled"
+  | "projectileCrossedWind"
+  | "guardSucceeded"
+  | "scissorPathsCrossed"
+  | "sameTargetPearlHit"
+  | "crossbowVolleyCompleted"
+  | "musicChainCompleted"
+  | "inkLinesCrossed"
+  | "summonExpired"
+  | "lightningChainCompleted"
+  | "weaveCycleStarted"
+  | "weaveNodePassed"
+  | "weaveFinishReleased"
+  | "highTierPickupCollected"
+  | "pickupCreated"
+  | "zoneHit"
+  | "projectileCrossedWeather"
+  | "multiKill"
+  | "interval"
+  | "enemyEnteredZone"
+  | "lethalDamage"
+  | "formChanged"
+  | "formDuration"
+  | "sharpTurn"
+  | "idleDuration";
+
+export type EndlessPerkActionKind =
+  | "returnAndRetarget"
+  | "retargetAndAccelerate"
+  | "pushAndGuard"
+  | "crossCutMarked"
+  | "releasePearlRows"
+  | "placeTemporaryTurret"
+  | "returnChainToFirst"
+  | "extendInkAndBurstCross"
+  | "storeLanternFire"
+  | "leaveLightningRelay"
+  | "reverseNextCycle"
+  | "addCounterCursor"
+  | "chargeNextNode"
+  | "repeatPreviousNode"
+  | "repeatFirstNode"
+  | "replayFinish"
+  | "scaleCycleAndFinish"
+  | "carryFinishDamage"
+  | "spawnHealingLeaf"
+  | "acceleratePickupMerge"
+  | "conductLightningFromZone"
+  | "accelerateAndExtendProjectile"
+  | "bundleKillDrops"
+  | "sweepDistantPickups"
+  | "grantLanternGuard"
+  | "slowFirstZoneEntry"
+  | "emitPickupWind"
+  | "preventLethalDamage"
+  | "grantHumanGuard"
+  | "empowerNextSignatureAttack"
+  | "pushOnSharpTurn"
+  | "healWhileIdle";
+
+export type EndlessPerkTrigger = {
+  event: EndlessPerkEvent;
+  weaponId?: WeaponId;
+  requiredWeaponId?: WeaponId;
+  every?: number;
+  cooldownSeconds?: number;
+  minValue?: number;
+  maxValue?: number;
+  afterSeconds?: number;
+  counterScope?: "global" | "target" | "weapon";
+  season?: "spring" | "summer" | "autumn" | "winter";
+  form?: "human" | "plane";
+};
+
+export type EndlessPerkAction = {
+  kind: EndlessPerkActionKind;
+  count?: number;
+  value?: number;
+  secondaryValue?: number;
+  durationSeconds?: number;
+  radius?: number;
+  maxActive?: number;
+  target?: "nearest" | "highestHp" | "firstTarget" | "nextNode";
+};
+
+export type EndlessPerkRule = {
+  trigger: EndlessPerkTrigger;
+  actions: readonly EndlessPerkAction[];
+};
+
+export type EndlessPerkDefinition = {
+  id: EndlessPerkId;
+  name: string;
+  description: string;
+  category: EndlessPerkCategory;
+  maxRank: number;
+  weight: number;
+  tags: readonly EffectTag[];
+  rules: readonly EndlessPerkRule[];
 };

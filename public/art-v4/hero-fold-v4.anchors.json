@@ -1,0 +1,1338 @@
+{
+  "version": 4,
+  "columns": 12,
+  "rows": 5,
+  "cell": {
+    "width": 160,
+    "height": 192
+  },
+  "directions": [
+    "south",
+    "southeast",
+    "east",
+    "northeast",
+    "north"
+  ],
+  "frames": [
+    {
+      "direction": "south",
+      "frame": 0,
+      "bounds": {
+        "left": 40,
+        "top": 13,
+        "width": 81,
+        "height": 158
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 143
+      },
+      "feet": {
+        "x": 80,
+        "y": 171
+      },
+      "weaponSocket": {
+        "x": 104,
+        "y": 92
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 1,
+      "bounds": {
+        "left": 12,
+        "top": 13,
+        "width": 131,
+        "height": 158
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 143
+      },
+      "feet": {
+        "x": 80,
+        "y": 171
+      },
+      "weaponSocket": {
+        "x": 105,
+        "y": 94
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 2,
+      "bounds": {
+        "left": 10,
+        "top": 13,
+        "width": 137,
+        "height": 158
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 143
+      },
+      "feet": {
+        "x": 80,
+        "y": 171
+      },
+      "weaponSocket": {
+        "x": 106,
+        "y": 95
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 3,
+      "bounds": {
+        "left": 39,
+        "top": 13,
+        "width": 69,
+        "height": 158
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 143
+      },
+      "feet": {
+        "x": 80,
+        "y": 171
+      },
+      "weaponSocket": {
+        "x": 107,
+        "y": 97
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 4,
+      "bounds": {
+        "left": 59,
+        "top": 12,
+        "width": 46,
+        "height": 158
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 142
+      },
+      "feet": {
+        "x": 80,
+        "y": 170
+      },
+      "weaponSocket": {
+        "x": 108,
+        "y": 99
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 5,
+      "bounds": {
+        "left": 57,
+        "top": 16,
+        "width": 40,
+        "height": 154
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 142
+      },
+      "feet": {
+        "x": 80,
+        "y": 170
+      },
+      "weaponSocket": {
+        "x": 109,
+        "y": 100
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 6,
+      "bounds": {
+        "left": 51,
+        "top": 18,
+        "width": 41,
+        "height": 152
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 142
+      },
+      "feet": {
+        "x": 80,
+        "y": 170
+      },
+      "weaponSocket": {
+        "x": 109,
+        "y": 102
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 7,
+      "bounds": {
+        "left": 36,
+        "top": 20,
+        "width": 62,
+        "height": 150
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 142
+      },
+      "feet": {
+        "x": 80,
+        "y": 170
+      },
+      "weaponSocket": {
+        "x": 110,
+        "y": 103
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 8,
+      "bounds": {
+        "left": 52,
+        "top": 21,
+        "width": 54,
+        "height": 144
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 137
+      },
+      "feet": {
+        "x": 80,
+        "y": 165
+      },
+      "weaponSocket": {
+        "x": 111,
+        "y": 105
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 9,
+      "bounds": {
+        "left": 11,
+        "top": 58,
+        "width": 124,
+        "height": 102
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 132
+      },
+      "feet": {
+        "x": 80,
+        "y": 160
+      },
+      "weaponSocket": {
+        "x": 112,
+        "y": 107
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 10,
+      "bounds": {
+        "left": 10,
+        "top": 72,
+        "width": 121,
+        "height": 85
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 129
+      },
+      "feet": {
+        "x": 80,
+        "y": 157
+      },
+      "weaponSocket": {
+        "x": 113,
+        "y": 108
+      }
+    },
+    {
+      "direction": "south",
+      "frame": 11,
+      "bounds": {
+        "left": 8,
+        "top": 73,
+        "width": 124,
+        "height": 83
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 128
+      },
+      "feet": {
+        "x": 80,
+        "y": 156
+      },
+      "weaponSocket": {
+        "x": 114,
+        "y": 110
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 0,
+      "bounds": {
+        "left": 39,
+        "top": 14,
+        "width": 69,
+        "height": 147
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 133
+      },
+      "feet": {
+        "x": 80,
+        "y": 161
+      },
+      "weaponSocket": {
+        "x": 104,
+        "y": 92
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 1,
+      "bounds": {
+        "left": 17,
+        "top": 16,
+        "width": 127,
+        "height": 146
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 134
+      },
+      "feet": {
+        "x": 80,
+        "y": 162
+      },
+      "weaponSocket": {
+        "x": 105,
+        "y": 94
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 2,
+      "bounds": {
+        "left": 18,
+        "top": 16,
+        "width": 113,
+        "height": 146
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 134
+      },
+      "feet": {
+        "x": 80,
+        "y": 162
+      },
+      "weaponSocket": {
+        "x": 106,
+        "y": 95
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 3,
+      "bounds": {
+        "left": 50,
+        "top": 18,
+        "width": 58,
+        "height": 143
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 133
+      },
+      "feet": {
+        "x": 80,
+        "y": 161
+      },
+      "weaponSocket": {
+        "x": 107,
+        "y": 97
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 4,
+      "bounds": {
+        "left": 59,
+        "top": 5,
+        "width": 50,
+        "height": 153
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 130
+      },
+      "feet": {
+        "x": 80,
+        "y": 158
+      },
+      "weaponSocket": {
+        "x": 108,
+        "y": 99
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 5,
+      "bounds": {
+        "left": 59,
+        "top": 7,
+        "width": 45,
+        "height": 150
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 129
+      },
+      "feet": {
+        "x": 80,
+        "y": 157
+      },
+      "weaponSocket": {
+        "x": 109,
+        "y": 100
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 6,
+      "bounds": {
+        "left": 51,
+        "top": 8,
+        "width": 44,
+        "height": 149
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 129
+      },
+      "feet": {
+        "x": 80,
+        "y": 157
+      },
+      "weaponSocket": {
+        "x": 109,
+        "y": 102
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 7,
+      "bounds": {
+        "left": 42,
+        "top": 9,
+        "width": 56,
+        "height": 144
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 125
+      },
+      "feet": {
+        "x": 80,
+        "y": 153
+      },
+      "weaponSocket": {
+        "x": 110,
+        "y": 103
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 8,
+      "bounds": {
+        "left": 52,
+        "top": 5,
+        "width": 53,
+        "height": 143
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 120
+      },
+      "feet": {
+        "x": 80,
+        "y": 148
+      },
+      "weaponSocket": {
+        "x": 111,
+        "y": 105
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 9,
+      "bounds": {
+        "left": 11,
+        "top": 25,
+        "width": 120,
+        "height": 114
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 111
+      },
+      "feet": {
+        "x": 80,
+        "y": 139
+      },
+      "weaponSocket": {
+        "x": 112,
+        "y": 107
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 10,
+      "bounds": {
+        "left": 13,
+        "top": 32,
+        "width": 116,
+        "height": 96
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 100
+      },
+      "feet": {
+        "x": 80,
+        "y": 128
+      },
+      "weaponSocket": {
+        "x": 113,
+        "y": 108
+      }
+    },
+    {
+      "direction": "southeast",
+      "frame": 11,
+      "bounds": {
+        "left": 8,
+        "top": 28,
+        "width": 113,
+        "height": 95
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 95
+      },
+      "feet": {
+        "x": 80,
+        "y": 123
+      },
+      "weaponSocket": {
+        "x": 114,
+        "y": 110
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 0,
+      "bounds": {
+        "left": 45,
+        "top": 28,
+        "width": 78,
+        "height": 159
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 104,
+        "y": 92
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 1,
+      "bounds": {
+        "left": 23,
+        "top": 31,
+        "width": 102,
+        "height": 156
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 105,
+        "y": 94
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 2,
+      "bounds": {
+        "left": 30,
+        "top": 33,
+        "width": 101,
+        "height": 154
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 106,
+        "y": 95
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 3,
+      "bounds": {
+        "left": 40,
+        "top": 34,
+        "width": 53,
+        "height": 153
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 107,
+        "y": 97
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 4,
+      "bounds": {
+        "left": 77,
+        "top": 30,
+        "width": 43,
+        "height": 154
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 156
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 108,
+        "y": 99
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 5,
+      "bounds": {
+        "left": 67,
+        "top": 32,
+        "width": 40,
+        "height": 152
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 156
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 109,
+        "y": 100
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 6,
+      "bounds": {
+        "left": 63,
+        "top": 33,
+        "width": 37,
+        "height": 150
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 155
+      },
+      "feet": {
+        "x": 80,
+        "y": 183
+      },
+      "weaponSocket": {
+        "x": 109,
+        "y": 102
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 7,
+      "bounds": {
+        "left": 44,
+        "top": 33,
+        "width": 42,
+        "height": 150
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 155
+      },
+      "feet": {
+        "x": 80,
+        "y": 183
+      },
+      "weaponSocket": {
+        "x": 110,
+        "y": 103
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 8,
+      "bounds": {
+        "left": 60,
+        "top": 21,
+        "width": 49,
+        "height": 144
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 137
+      },
+      "feet": {
+        "x": 80,
+        "y": 165
+      },
+      "weaponSocket": {
+        "x": 111,
+        "y": 105
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 9,
+      "bounds": {
+        "left": 8,
+        "top": 50,
+        "width": 114,
+        "height": 104
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 126
+      },
+      "feet": {
+        "x": 80,
+        "y": 154
+      },
+      "weaponSocket": {
+        "x": 112,
+        "y": 107
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 10,
+      "bounds": {
+        "left": 8,
+        "top": 54,
+        "width": 144,
+        "height": 101
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 127
+      },
+      "feet": {
+        "x": 80,
+        "y": 155
+      },
+      "weaponSocket": {
+        "x": 113,
+        "y": 108
+      }
+    },
+    {
+      "direction": "east",
+      "frame": 11,
+      "bounds": {
+        "left": 8,
+        "top": 55,
+        "width": 104,
+        "height": 99
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 126
+      },
+      "feet": {
+        "x": 80,
+        "y": 154
+      },
+      "weaponSocket": {
+        "x": 114,
+        "y": 110
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 0,
+      "bounds": {
+        "left": 32,
+        "top": 15,
+        "width": 87,
+        "height": 154
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 141
+      },
+      "feet": {
+        "x": 80,
+        "y": 169
+      },
+      "weaponSocket": {
+        "x": 104,
+        "y": 92
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 1,
+      "bounds": {
+        "left": 15,
+        "top": 22,
+        "width": 120,
+        "height": 150
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 144
+      },
+      "feet": {
+        "x": 80,
+        "y": 172
+      },
+      "weaponSocket": {
+        "x": 105,
+        "y": 94
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 2,
+      "bounds": {
+        "left": 37,
+        "top": 25,
+        "width": 85,
+        "height": 148
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 145
+      },
+      "feet": {
+        "x": 80,
+        "y": 173
+      },
+      "weaponSocket": {
+        "x": 106,
+        "y": 95
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 3,
+      "bounds": {
+        "left": 54,
+        "top": 24,
+        "width": 57,
+        "height": 149
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 145
+      },
+      "feet": {
+        "x": 80,
+        "y": 173
+      },
+      "weaponSocket": {
+        "x": 107,
+        "y": 97
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 4,
+      "bounds": {
+        "left": 70,
+        "top": 13,
+        "width": 47,
+        "height": 155
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 140
+      },
+      "feet": {
+        "x": 80,
+        "y": 168
+      },
+      "weaponSocket": {
+        "x": 108,
+        "y": 99
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 5,
+      "bounds": {
+        "left": 73,
+        "top": 23,
+        "width": 36,
+        "height": 147
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 142
+      },
+      "feet": {
+        "x": 80,
+        "y": 170
+      },
+      "weaponSocket": {
+        "x": 109,
+        "y": 100
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 6,
+      "bounds": {
+        "left": 69,
+        "top": 25,
+        "width": 34,
+        "height": 147
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 144
+      },
+      "feet": {
+        "x": 80,
+        "y": 172
+      },
+      "weaponSocket": {
+        "x": 109,
+        "y": 102
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 7,
+      "bounds": {
+        "left": 57,
+        "top": 25,
+        "width": 40,
+        "height": 147
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 144
+      },
+      "feet": {
+        "x": 80,
+        "y": 172
+      },
+      "weaponSocket": {
+        "x": 110,
+        "y": 103
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 8,
+      "bounds": {
+        "left": 57,
+        "top": 13,
+        "width": 47,
+        "height": 147
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 132
+      },
+      "feet": {
+        "x": 80,
+        "y": 160
+      },
+      "weaponSocket": {
+        "x": 111,
+        "y": 105
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 9,
+      "bounds": {
+        "left": 12,
+        "top": 47,
+        "width": 120,
+        "height": 105
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 124
+      },
+      "feet": {
+        "x": 80,
+        "y": 152
+      },
+      "weaponSocket": {
+        "x": 112,
+        "y": 107
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 10,
+      "bounds": {
+        "left": 8,
+        "top": 52,
+        "width": 121,
+        "height": 101
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 125
+      },
+      "feet": {
+        "x": 80,
+        "y": 153
+      },
+      "weaponSocket": {
+        "x": 113,
+        "y": 108
+      }
+    },
+    {
+      "direction": "northeast",
+      "frame": 11,
+      "bounds": {
+        "left": 8,
+        "top": 52,
+        "width": 120,
+        "height": 101
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 125
+      },
+      "feet": {
+        "x": 80,
+        "y": 153
+      },
+      "weaponSocket": {
+        "x": 114,
+        "y": 110
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 0,
+      "bounds": {
+        "left": 43,
+        "top": 12,
+        "width": 85,
+        "height": 175
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 104,
+        "y": 92
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 1,
+      "bounds": {
+        "left": 20,
+        "top": 14,
+        "width": 128,
+        "height": 173
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 105,
+        "y": 94
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 2,
+      "bounds": {
+        "left": 22,
+        "top": 15,
+        "width": 117,
+        "height": 172
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 106,
+        "y": 95
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 3,
+      "bounds": {
+        "left": 26,
+        "top": 15,
+        "width": 85,
+        "height": 172
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 107,
+        "y": 97
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 4,
+      "bounds": {
+        "left": 60,
+        "top": 27,
+        "width": 49,
+        "height": 160
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 108,
+        "y": 99
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 5,
+      "bounds": {
+        "left": 55,
+        "top": 28,
+        "width": 42,
+        "height": 159
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 109,
+        "y": 100
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 6,
+      "bounds": {
+        "left": 53,
+        "top": 29,
+        "width": 41,
+        "height": 158
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 109,
+        "y": 102
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 7,
+      "bounds": {
+        "left": 46,
+        "top": 28,
+        "width": 45,
+        "height": 159
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 159
+      },
+      "feet": {
+        "x": 80,
+        "y": 184
+      },
+      "weaponSocket": {
+        "x": 110,
+        "y": 103
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 8,
+      "bounds": {
+        "left": 59,
+        "top": 30,
+        "width": 46,
+        "height": 148
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 150
+      },
+      "feet": {
+        "x": 80,
+        "y": 178
+      },
+      "weaponSocket": {
+        "x": 111,
+        "y": 105
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 9,
+      "bounds": {
+        "left": 14,
+        "top": 66,
+        "width": 118,
+        "height": 103
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 141
+      },
+      "feet": {
+        "x": 80,
+        "y": 169
+      },
+      "weaponSocket": {
+        "x": 112,
+        "y": 107
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 10,
+      "bounds": {
+        "left": 18,
+        "top": 71,
+        "width": 112,
+        "height": 97
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 140
+      },
+      "feet": {
+        "x": 80,
+        "y": 168
+      },
+      "weaponSocket": {
+        "x": 113,
+        "y": 108
+      }
+    },
+    {
+      "direction": "north",
+      "frame": 11,
+      "bounds": {
+        "left": 12,
+        "top": 71,
+        "width": 113,
+        "height": 97
+      },
+      "collisionCenter": {
+        "x": 80,
+        "y": 140
+      },
+      "feet": {
+        "x": 80,
+        "y": 168
+      },
+      "weaponSocket": {
+        "x": 114,
+        "y": 110
+      }
+    }
+  ]
+}

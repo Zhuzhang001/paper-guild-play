@@ -1,36 +1,47 @@
 import type { BossTier, EnemyArchetype } from "./art";
 import {
+  chooseActiveSynergies as resolveChosenSynergies,
+  getSynergyChoices as getEligibleSynergies,
   getWeaponDefinition,
   getWeaponRoute,
-  resolveActiveSynergies,
+  type CombatEventKind,
   type CombatBuild,
+  type EndlessPerkAction,
   type EffectSpec,
   type EffectTag,
   type EffectTrigger,
   type UpgradeOption,
   type WeaponId,
   type WeaponState,
+  type WeaveNode,
   type WeaveState,
+  type WeaveTerminal,
   WEAPON_IDS,
 } from "./content";
 import {
-  advanceWeavePulse,
   applyUpgradeOption,
   beginCelestialIntrusion,
   captureDefeatedIntrusion,
   chooseCelestialIntrusion,
+  consumeEndlessPerkEvent,
   createCombatBuild,
+  createEndlessPerkState,
   createRngState,
   createWeaveState,
   damageCelestialIntrusion,
+  deriveWeaveTerminal,
   fuseAdjacentNodes,
   generateUpgradeOptions,
   insertWeaponNode,
   nextRandom,
   resolveWeaponEffects,
+  stepEndlessPerkState,
   stepCelestialIntrusion,
   swapWeaveNodes,
+  type EndlessPerkProc,
+  type EndlessPerkRuntimeEvent,
   type RngState,
+  type EndlessPerkState,
 } from "./runtime";
 import {
   createPlayerForm,
@@ -45,15 +56,29 @@ export const GAME_HEIGHT = 720;
 export const STANDARD_SECONDS = 480;
 
 export type TrialId = "swift" | "crowd" | "elite";
+export type SynergyChoiceOption = {
+  id: string;
+  name: string;
+  description: string;
+  weapons: readonly WeaponId[];
+};
+
 export type RunEvent =
   | { type: "upgrade" }
   | { type: "midBoss" }
   | { type: "finalBoss" }
   | { type: "defeat" }
   | { type: "forge" }
+  | { type: "celestialReady" }
   | { type: "term"; name: string; ambience: string }
   | { type: "fold"; folded: boolean }
   | { type: "synergy"; name: string }
+  | {
+      type: "synergyChoice";
+      choices: readonly SynergyChoiceOption[];
+      capacity: number;
+      selectedIds: readonly string[];
+    }
   | { type: "terminal"; name: string }
   | { type: "bossSpawn"; tier: Exclude<BossTier, null> }
   | { type: "pickup" }
@@ -108,7 +133,12 @@ export type Enemy = {
   lastHitOwner?: ProjectileOwner;
 };
 
-export type ProjectileOwner = WeaponId | `synergy:${string}` | `weave:${string}` | "terminal";
+export type ProjectileOwner =
+  | WeaponId
+  | `synergy:${string}`
+  | `weave:${string}`
+  | `fusion:${string}`
+  | "terminal";
 
 export type Projectile = {
   id: number;
@@ -129,6 +159,9 @@ export type Projectile = {
   hitCooldown: number;
   hitAt: Map<number, number>;
   canProc?: boolean;
+  spawnDelay?: number;
+  windTouched?: boolean;
+  weatherTouched?: boolean;
 };
 
 export type Pickup = {
@@ -138,6 +171,9 @@ export type Pickup = {
   value: number;
   age: number;
   tier: 1 | 2 | 3;
+  kind?: "experience" | "healingLeaf";
+  mergeMultiplier?: number;
+  magnetRadius?: number;
 };
 
 export type Zone = {
@@ -155,6 +191,7 @@ export type Zone = {
   followsPlayer: boolean;
   slow: number;
   canProc?: boolean;
+  enteredEnemyIds: Set<number>;
 };
 
 export type Summon = {
@@ -169,6 +206,7 @@ export type Summon = {
   cooldown: number;
   index: number;
   total: number;
+  moveSpeed: number;
   canProc?: boolean;
 };
 
@@ -217,6 +255,36 @@ export type DeathActor = {
   life: number;
 };
 
+export type PendingPerkReplay = {
+  delay: number;
+  effects: readonly EffectSpec[];
+  damageScale: number;
+};
+
+export type EndlessPerkCombatState = {
+  temporaryGuardCharges: number;
+  temporaryGuardUntil: number;
+  lanternGuardCharges: number;
+  lanternFireCharges: number;
+  signatureCharges: number;
+  signatureMultiplier: number;
+  planeSeconds: number;
+  planeTriggered: boolean;
+  idleSeconds: number;
+  idleHealClock: number;
+  weaveCycleInitialized: boolean;
+  weaveCycleStartIndex: number;
+  weaveDirection: 1 | -1;
+  weaveCounterIndex: number;
+  weaveCounterScale: number;
+  weaveCycleScale: number;
+  weaveFinishScale: number;
+  weaveRepeatFirst: number;
+  weaveFirstPassed: boolean;
+  weaveNextNodeScale: number;
+  pendingFinishReplays: PendingPerkReplay[];
+};
+
 export type RunState = {
   elapsed: number;
   endless: boolean;
@@ -236,6 +304,7 @@ export type RunState = {
   cooldowns: Map<string, number>;
   orbitHits: Map<string, number>;
   accumulators: Map<string, number>;
+  synergyCounters: Map<string, number>;
   rng: RngState;
   serial: number;
   spawnClock: number;
@@ -243,6 +312,8 @@ export type RunState = {
   finalBossSpawned: boolean;
   currentBoss: BossTier;
   activeSynergyIds: string[];
+  pendingSynergyChoiceIds: string[];
+  synergyChoiceSignature: string;
   pendingRareChoice: boolean;
   weave?: WeaveState;
   forgeAt: number;
@@ -256,6 +327,8 @@ export type RunState = {
   lastFormState: PlayerFormModel["formState"];
   terminalLabel: string;
   terminalLabelLife: number;
+  endlessPerks: EndlessPerkState;
+  perkCombat: EndlessPerkCombatState;
 };
 
 export type RunSnapshot = {
@@ -272,6 +345,7 @@ export type RunSnapshot = {
   synergies: readonly string[];
   currentBoss: BossTier;
   weave?: WeaveState;
+  endlessPerks?: EndlessPerkState;
   terminalLabel: string;
   terminalLabelLife: number;
 };
@@ -355,6 +429,32 @@ function nextId(run: RunState) {
   return value;
 }
 
+function createEndlessPerkCombatState(): EndlessPerkCombatState {
+  return {
+    temporaryGuardCharges: 0,
+    temporaryGuardUntil: 0,
+    lanternGuardCharges: 0,
+    lanternFireCharges: 0,
+    signatureCharges: 0,
+    signatureMultiplier: 1,
+    planeSeconds: 0,
+    planeTriggered: false,
+    idleSeconds: 0,
+    idleHealClock: 0,
+    weaveCycleInitialized: false,
+    weaveCycleStartIndex: 0,
+    weaveDirection: 1,
+    weaveCounterIndex: 0,
+    weaveCounterScale: 0,
+    weaveCycleScale: 1,
+    weaveFinishScale: 1,
+    weaveRepeatFirst: 0,
+    weaveFirstPassed: false,
+    weaveNextNodeScale: 1,
+    pendingFinishReplays: [],
+  };
+}
+
 export function createRun(trials: Set<TrialId>, seed = Date.now()): RunState {
   return {
     elapsed: 0,
@@ -389,6 +489,7 @@ export function createRun(trials: Set<TrialId>, seed = Date.now()): RunState {
     cooldowns: new Map(),
     orbitHits: new Map(),
     accumulators: new Map(),
+    synergyCounters: new Map(),
     rng: createRngState(seed),
     serial: 1,
     spawnClock: 0.25,
@@ -396,6 +497,8 @@ export function createRun(trials: Set<TrialId>, seed = Date.now()): RunState {
     finalBossSpawned: false,
     currentBoss: null,
     activeSynergyIds: [],
+    pendingSynergyChoiceIds: [],
+    synergyChoiceSignature: "",
     pendingRareChoice: false,
     forgeAt: STANDARD_SECONDS + 120,
     forgeCredits: 0,
@@ -407,11 +510,81 @@ export function createRun(trials: Set<TrialId>, seed = Date.now()): RunState {
     lastFormState: "human",
     terminalLabel: "",
     terminalLabelLife: 0,
+    endlessPerks: createEndlessPerkState(),
+    perkCombat: createEndlessPerkCombatState(),
   };
 }
 
+function synergyChoiceOption(
+  synergy: ReturnType<typeof getEligibleSynergies>[number],
+): SynergyChoiceOption {
+  return {
+    id: synergy.definition.id,
+    name: synergy.name,
+    description: synergy.description,
+    weapons: synergy.definition.weapons,
+  };
+}
+
+function synergyQualificationSignature(run: RunState) {
+  const eligibleIds = getEligibleSynergies(run.build.weapons).map(
+    (synergy) => synergy.definition.id,
+  );
+  return `${Math.max(0, Math.floor(run.build.synergyCapacity))}:${eligibleIds.join(",")}`;
+}
+
+export function getSynergyChoices(run: RunState): readonly SynergyChoiceOption[] {
+  return getEligibleSynergies(run.build.weapons).map(synergyChoiceOption);
+}
+
+/**
+ * Applies a player's explicit overflow selection. Automatic activation remains
+ * authoritative while every qualified pairing fits within capacity.
+ */
+export function chooseActiveSynergies(
+  run: RunState,
+  selectedIds: readonly string[],
+): boolean {
+  const eligible = getEligibleSynergies(run.build.weapons);
+  const capacity = Math.max(0, Math.floor(run.build.synergyCapacity));
+  if (eligible.length <= capacity) {
+    run.activeSynergyIds = eligible.map((synergy) => synergy.definition.id);
+    run.pendingSynergyChoiceIds = [];
+    run.synergyChoiceSignature = synergyQualificationSignature(run);
+    return true;
+  }
+
+  const unique = [...new Set(selectedIds)];
+  const eligibleIds = new Set(
+    eligible.map((synergy) => synergy.definition.id),
+  );
+  if (
+    unique.length !== capacity ||
+    unique.some((id) => !eligibleIds.has(id))
+  ) {
+    return false;
+  }
+
+  const previousIds = new Set(run.activeSynergyIds);
+  run.activeSynergyIds = unique;
+  run.pendingSynergyChoiceIds = [];
+  run.synergyChoiceSignature = synergyQualificationSignature(run);
+  for (const key of run.synergyCounters.keys()) {
+    if (!key.startsWith("synergy:")) continue;
+    const synergyId = key.split(":")[1];
+    if (!unique.includes(synergyId) || !previousIds.has(synergyId)) {
+      run.synergyCounters.delete(key);
+    }
+  }
+  return true;
+}
+
 export function snapshotRun(run: RunState): RunSnapshot {
-  const synergies = resolveActiveSynergies(run.build.weapons, run.build.synergyCapacity);
+  const synergies = resolveChosenSynergies(
+    run.build.weapons,
+    run.activeSynergyIds,
+    run.build.synergyCapacity,
+  );
   return {
     elapsed: run.elapsed,
     endless: run.endless,
@@ -426,6 +599,7 @@ export function snapshotRun(run: RunState): RunSnapshot {
     synergies: synergies.map((synergy) => synergy.name),
     currentBoss: run.currentBoss,
     weave: run.weave,
+    endlessPerks: run.endlessPerks,
     terminalLabel: run.terminalLabel,
     terminalLabelLife: run.terminalLabelLife,
   };
@@ -449,23 +623,29 @@ export type RareChoice = {
 export const RARE_CHOICES: readonly RareChoice[] = [
   {
     id: "master-now",
-    name: "先声成器",
-    description: "将当前最高阶但未成器的本命武器直接推进一阶。",
+    name: "先做定型",
+    description: "将当前最高阶但尚未定型的本命武器直接推进一阶。",
   },
   {
     id: "resonance-slot",
-    name: "三器同鸣",
-    description: "合鸣容量增加一格，并立即触发全部已满足的合鸣。",
+    name: "多留一手",
+    description: "搭手容量增加一格，并立即启用所有已满足条件的搭手。",
   },
   {
     id: "weapon-soul",
-    name: "器魂·照胆",
-    description: "每件本命器累计命中十八次，器魂便追索强敌并弹射三次。",
+    name: "记住手法",
+    description: "每件本命武器累计命中十八次，便用这门手艺追击强敌并弹射三次。",
   },
 ] as const;
 
 export function applyUpgrade(run: RunState, option: UpgradeOption): string | undefined {
-  const before = new Set(resolveActiveSynergies(run.build.weapons, run.build.synergyCapacity).map((item) => item.definition.id));
+  const before = new Set(
+    resolveChosenSynergies(
+      run.build.weapons,
+      run.activeSynergyIds,
+      run.build.synergyCapacity,
+    ).map((item) => item.definition.id),
+  );
   run.build = applyUpgradeOption(run.build, option);
   if (option.kind === "utility") {
     if (option.modifierId === "keenEdge") run.player.powerMultiplier *= 1.08;
@@ -475,8 +655,11 @@ export function applyUpgrade(run: RunState, option: UpgradeOption): string | und
       run.player.life = Math.min(run.player.maxLife, run.player.life + 1);
     }
   }
-  const newlyActive = resolveActiveSynergies(run.build.weapons, run.build.synergyCapacity)
-    .find((item) => !before.has(item.definition.id));
+  const eligible = getEligibleSynergies(run.build.weapons);
+  const newlyActive =
+    eligible.length <= run.build.synergyCapacity
+      ? eligible.find((item) => !before.has(item.definition.id))
+      : undefined;
   return newlyActive?.name;
 }
 
@@ -634,8 +817,12 @@ function spawnProjectilePattern(
   for (let index = 0; index < count; index += 1) {
     let angle = baseAngle;
     if (effect.pattern === "radial") angle = (Math.PI * 2 * index) / count;
-    else if (effect.pattern === "fan" || effect.pattern === "burst") {
+    else if (effect.pattern === "fan") {
       angle += count === 1 ? 0 : (index / (count - 1) - 0.5) * spread;
+    } else if (effect.pattern === "burst") {
+      // Burst is a temporal magazine, not another fan with a different label.
+      const side = index === 0 ? 0 : (index % 2 === 0 ? 1 : -1);
+      angle += side * Math.min(spread * 0.08, 0.045);
     }
     run.projectiles.push({
       id: nextId(run),
@@ -656,6 +843,7 @@ function spawnProjectilePattern(
       hitCooldown: effect.singleTargetHitCooldown ?? 0.16,
       hitAt: new Map(),
       canProc,
+      spawnDelay: effect.pattern === "burst" ? index * 0.065 : 0,
     });
   }
 }
@@ -678,6 +866,21 @@ function damageEnemy(
     owner,
   });
   if (canProc) applyOnHitEffects(run, owner, enemy);
+  const sourceWeapon = directWeaponOwner(owner);
+  if (canProc && sourceWeapon) {
+    dispatchSynergyEvent(run, "weaponHit", sourceWeapon, enemy);
+    if (sourceWeapon === "abacus") {
+      dispatchEndlessPerkEvent(
+        run,
+        {
+          type: "sameTargetPearlHit",
+          weaponId: "abacus",
+          targetId: enemy.id,
+        },
+        { target: enemy, firstTarget: enemy },
+      );
+    }
+  }
 }
 
 function effectOwners(run: RunState) {
@@ -716,9 +919,6 @@ function effectOwners(run: RunState) {
       },
     ]);
   }
-  for (const synergy of resolveActiveSynergies(run.build.weapons, run.build.synergyCapacity)) {
-    groups.set(`synergy:${synergy.definition.id}`, synergy.effects);
-  }
   if (run.weave) {
     const held = new Set(run.build.weapons.map((weapon) => weapon.id));
     for (const node of run.weave.nodes) {
@@ -726,14 +926,14 @@ function effectOwners(run: RunState) {
       if (node.kind === "fusion") {
         groups.set(owner, node.passEffects);
       } else if (node.kind === "weapon" && !held.has(node.sourceId as WeaponId)) {
-        const definition = getWeaponDefinition(node.sourceId as WeaponId);
         groups.set(
           owner,
-          resolveWeaponEffects({
-            id: definition.id,
-            level: 3,
-            routeId: definition.routes[0].id,
-          }),
+          resolveWeaponEffects(
+            node.weaponState ?? {
+              id: node.sourceId as WeaponId,
+              level: 1,
+            },
+          ),
         );
       }
     }
@@ -751,10 +951,13 @@ function fireChain(
 ) {
   const hit = new Set<number>();
   let current = start ?? pickNearest(run);
+  const firstTarget = current;
+  let lastTarget = current;
   let damage = effect.damage * damageScale * run.player.powerMultiplier;
   let previousX = run.player.x;
   let previousY = run.player.y;
   for (let jump = 0; jump < effect.jumps && current; jump += 1) {
+    lastTarget = current;
     hit.add(current.id);
     damageEnemy(run, current, damage, owner, canProc);
     addFx(run, "chain", previousX, previousY, 18, 0.28, ownerColor(owner), effect.visualKey ?? `chain/${owner}`, {
@@ -770,10 +973,35 @@ function fireChain(
       !hit.has(enemy.id) &&
       distanceSquared(previousX, previousY, enemy.x, enemy.y) <= effect.range ** 2
     );
-    current = candidates.sort((a, b) =>
-      distanceSquared(previousX, previousY, a.x, a.y) -
-      distanceSquared(previousX, previousY, b.x, b.y)
-    )[0];
+    current = candidates.sort((a, b) => {
+      if (effect.preferMarked) {
+        const markOrder = Number(b.marked > 0) - Number(a.marked > 0);
+        if (markOrder !== 0) return markOrder;
+      }
+      return (
+        distanceSquared(previousX, previousY, a.x, a.y) -
+        distanceSquared(previousX, previousY, b.x, b.y)
+      );
+    })[0];
+  }
+  const sourceWeapon = directWeaponOwner(owner);
+  if (canProc && sourceWeapon === "pipa" && effect.tags.includes("music")) {
+    dispatchEndlessPerkEvent(
+      run,
+      { type: "musicChainCompleted", weaponId: "pipa" },
+      { firstTarget, lastTarget, target: lastTarget },
+    );
+  }
+  if (
+    canProc &&
+    sourceWeapon === "thunderSeal" &&
+    effect.tags.includes("lightning")
+  ) {
+    dispatchEndlessPerkEvent(
+      run,
+      { type: "lightningChainCompleted", weaponId: "thunderSeal" },
+      { firstTarget, lastTarget, target: lastTarget },
+    );
   }
 }
 
@@ -786,36 +1014,71 @@ function fireBeam(
 ) {
   const target = pickNearest(run);
   if (!target) return;
-  const direction = normalized(target.x - run.player.x, target.y - run.player.y);
-  const endX = run.player.x + direction.x * effect.length;
-  const endY = run.player.y + direction.y * effect.length;
-  let pierced = 0;
+  const baseAngle = Math.atan2(
+    target.y - run.player.y,
+    target.x - run.player.x,
+  );
+  const sweepRadians = ((effect.sweepDegrees ?? 0) * Math.PI) / 180;
+  const rayCount = sweepRadians > 0.8 ? 5 : sweepRadians > 0 ? 3 : 1;
+  const hitIds = new Set<number>();
   const candidates = [...run.enemies].sort((a, b) =>
     distanceSquared(run.player.x, run.player.y, a.x, a.y) -
     distanceSquared(run.player.x, run.player.y, b.x, b.y)
   );
-  for (const enemy of candidates) {
-    const relX = enemy.x - run.player.x;
-    const relY = enemy.y - run.player.y;
-    const along = relX * direction.x + relY * direction.y;
-    const across = Math.abs(relX * direction.y - relY * direction.x);
-    if (along >= 0 && along <= effect.length && across <= effect.width / 2 + enemy.radius) {
-      damageEnemy(
-        run,
-        enemy,
-        effect.damage * damageScale * run.player.powerMultiplier,
-        owner,
-        canProc,
-      );
-      pierced += 1;
-      if (pierced > effect.pierce) break;
+  for (let rayIndex = 0; rayIndex < rayCount; rayIndex += 1) {
+    const sweepOffset =
+      rayCount === 1
+        ? 0
+        : (rayIndex / (rayCount - 1) - 0.5) * sweepRadians;
+    const angle = baseAngle + sweepOffset;
+    const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+    let pierced = 0;
+    for (const enemy of candidates) {
+      if (hitIds.has(enemy.id)) continue;
+      const relX = enemy.x - run.player.x;
+      const relY = enemy.y - run.player.y;
+      const along = relX * direction.x + relY * direction.y;
+      const across = Math.abs(relX * direction.y - relY * direction.x);
+      if (
+        along >= 0 &&
+        along <= effect.length &&
+        across <= effect.width / 2 + enemy.radius
+      ) {
+        hitIds.add(enemy.id);
+        damageEnemy(
+          run,
+          enemy,
+          effect.damage * damageScale * run.player.powerMultiplier,
+          owner,
+          canProc,
+        );
+        pierced += 1;
+        if (pierced > effect.pierce) break;
+      }
     }
+    addFx(
+      run,
+      "beam",
+      run.player.x,
+      run.player.y,
+      effect.width,
+      Math.max(0.2, effect.duration),
+      ownerColor(owner),
+      effect.visualKey ?? `beam/${owner}`,
+      {
+        owner,
+        x2: run.player.x + direction.x * effect.length,
+        y2: run.player.y + direction.y * effect.length,
+      },
+    );
   }
-  addFx(run, "beam", run.player.x, run.player.y, effect.width, Math.max(0.2, effect.duration), ownerColor(owner), effect.visualKey ?? `beam/${owner}`, {
-    owner,
-    x2: endX,
-    y2: endY,
-  });
+  if (canProc && directWeaponOwner(owner) === "inkline") {
+    dispatchEndlessPerkEvent(
+      run,
+      { type: "inkLinesCrossed", weaponId: "inkline" },
+      { target },
+    );
+  }
 }
 
 function scheduleLightning(
@@ -826,10 +1089,28 @@ function scheduleLightning(
   canProc = true,
 ) {
   const ignored = new Set<number>();
+  let originX = run.player.x;
+  let originY = run.player.y;
   for (let index = 0; index < effect.strikes; index += 1) {
-    const target = pickNearest(run, run.player.x, run.player.y, ignored) ?? pickStrongest(run);
+    const chained =
+      index > 0 && effect.chainRange
+        ? pickNearest(run, originX, originY, ignored)
+        : undefined;
+    const target =
+      chained &&
+      distanceSquared(originX, originY, chained.x, chained.y) <=
+        effect.chainRange! ** 2
+        ? chained
+        : index === 0
+          ? pickNearest(run, run.player.x, run.player.y, ignored) ??
+            pickStrongest(run)
+          : effect.chainRange
+            ? undefined
+            : pickNearest(run, run.player.x, run.player.y, ignored);
     if (!target) break;
     ignored.add(target.id);
+    originX = target.x;
+    originY = target.y;
     run.strikes.push({
       id: nextId(run),
       owner,
@@ -869,6 +1150,7 @@ function spawnZone(
     followsPlayer: effect.followsOwner ?? false,
     slow: effect.slow ?? 0,
     canProc,
+    enteredEnemyIds: new Set(),
   });
 }
 
@@ -897,9 +1179,598 @@ function spawnSummons(
       cooldown: index * 0.12,
       index,
       total: effect.count,
+      moveSpeed: effect.moveSpeed,
       canProc,
     });
   }
+}
+
+function directWeaponOwner(owner: ProjectileOwner): WeaponId | undefined {
+  return WEAPON_IDS.includes(owner as WeaponId)
+    ? (owner as WeaponId)
+    : undefined;
+}
+
+export type EndlessPerkDispatchContext = {
+  target?: Enemy;
+  firstTarget?: Enemy;
+  lastTarget?: Enemy;
+  projectile?: Projectile;
+  pickup?: Pickup;
+  zone?: Zone;
+  summon?: Summon;
+  node?: WeaveNode;
+  nodeIndex?: number;
+  terminal?: WeaveTerminal;
+  killedEnemies?: readonly Enemy[];
+  pickupIds?: readonly number[];
+};
+
+function ownedWeaponIds(run: RunState): WeaponId[] {
+  const ids = new Set(run.build.weapons.map((weapon) => weapon.id));
+  for (const node of run.weave?.nodes ?? []) {
+    if (node.kind === "weapon") ids.add(node.sourceId as WeaponId);
+  }
+  return [...ids];
+}
+
+function hasEndlessPerk(run: RunState, id: keyof EndlessPerkState["ranks"]) {
+  return (run.endlessPerks.ranks[id] ?? 0) > 0;
+}
+
+function pushEnemiesFrom(
+  run: RunState,
+  x: number,
+  y: number,
+  radius: number,
+  strength = 1,
+) {
+  for (const enemy of run.enemies) {
+    if (enemy.hp <= 0) continue;
+    const distance = Math.sqrt(distanceSquared(x, y, enemy.x, enemy.y));
+    if (distance > radius + enemy.radius) continue;
+    const direction = normalized(enemy.x - x, enemy.y - y);
+    const push = Math.max(24, (radius - distance) * 0.46) * strength;
+    enemy.x = clamp(enemy.x + direction.x * push, 24, GAME_WIDTH - 24);
+    enemy.y = clamp(enemy.y + direction.y * push, 28, GAME_HEIGHT - 28);
+    enemy.vx += direction.x * push * 2.2;
+    enemy.vy += direction.y * push * 2.2;
+  }
+}
+
+function spawnPerkProjectile(
+  run: RunState,
+  owner: WeaponId,
+  x: number,
+  y: number,
+  target: Enemy,
+  damage: number,
+  angleOffset = 0,
+  tags: readonly EffectTag[] = [],
+) {
+  const base = Math.atan2(target.y - y, target.x - x) + angleOffset;
+  run.projectiles.push({
+    id: nextId(run),
+    owner,
+    artKey: `perk/${owner}/projectile`,
+    tags,
+    x,
+    y,
+    vx: Math.cos(base) * 780,
+    vy: Math.sin(base) * 780,
+    radius: 9,
+    damage,
+    life: 1.7,
+    pierce: 2,
+    homing: 0.24,
+    targetId: target.id,
+    markSeconds: 0,
+    hitCooldown: 0.16,
+    hitAt: new Map(),
+    canProc: false,
+    spawnDelay: 0,
+  });
+}
+
+function executeEndlessPerkAction(
+  run: RunState,
+  action: EndlessPerkAction,
+  seasonalMultiplier: 1 | 2,
+  event: EndlessPerkRuntimeEvent,
+  context: EndlessPerkDispatchContext,
+) {
+  const strength = seasonalMultiplier;
+  const target = context.target ?? context.lastTarget ?? context.firstTarget;
+  if (action.kind === "returnAndRetarget") {
+    const next = pickNearest(
+      run,
+      target?.x ?? run.player.x,
+      target?.y ?? run.player.y,
+      target ? new Set([target.id]) : new Set(),
+    );
+    if (next) {
+      spawnPerkProjectile(
+        run,
+        "sword",
+        target?.x ?? run.player.x,
+        target?.y ?? run.player.y,
+        next,
+        46 * strength * run.player.powerMultiplier,
+        0,
+        ["blade", "mark"],
+      );
+    }
+  } else if (action.kind === "retargetAndAccelerate") {
+    const projectile = context.projectile;
+    const strongest = pickStrongest(run);
+    if (projectile && strongest) {
+      const speed =
+        Math.hypot(projectile.vx, projectile.vy) *
+        (action.value ?? 1.35);
+      const direction = normalized(
+        strongest.x - projectile.x,
+        strongest.y - projectile.y,
+      );
+      projectile.vx = direction.x * speed;
+      projectile.vy = direction.y * speed;
+      projectile.targetId = strongest.id;
+      projectile.homing = Math.max(projectile.homing, 0.72);
+    }
+  } else if (action.kind === "pushAndGuard") {
+    pushEnemiesFrom(
+      run,
+      run.player.x,
+      run.player.y,
+      action.radius ?? 148,
+      strength,
+    );
+    run.perkCombat.temporaryGuardCharges = Math.max(
+      run.perkCombat.temporaryGuardCharges,
+      (action.count ?? 1) * strength,
+    );
+    run.perkCombat.temporaryGuardUntil = Math.max(
+      run.perkCombat.temporaryGuardUntil,
+      run.elapsed + (action.durationSeconds ?? 0.6) * strength,
+    );
+  } else if (action.kind === "crossCutMarked") {
+    const marked = run.enemies
+      .filter((enemy) => enemy.hp > 0 && enemy.marked > 0)
+      .sort(
+        (a, b) =>
+          distanceSquared(run.player.x, run.player.y, a.x, a.y) -
+          distanceSquared(run.player.x, run.player.y, b.x, b.y),
+      )[0];
+    if (marked) {
+      run.strikes.push({
+        id: nextId(run),
+        owner: "scissors",
+        artKey: "perk/scissors/cross-cut",
+        x: marked.x,
+        y: marked.y,
+        radius: 74,
+        damage: 72 * strength * run.player.powerMultiplier,
+        delay: 0.08,
+        maxDelay: 0.08,
+        hostile: false,
+        canProc: false,
+      });
+    }
+  } else if (action.kind === "releasePearlRows") {
+    const first = context.firstTarget ?? target ?? pickNearest(run);
+    if (first) {
+      const rows = Math.max(1, action.count ?? 3);
+      for (let row = 0; row < rows; row += 1) {
+        const offset = (row - (rows - 1) / 2) * 0.13;
+        spawnPerkProjectile(
+          run,
+          "abacus",
+          run.player.x,
+          run.player.y,
+          first,
+          28 * strength * run.player.powerMultiplier,
+          offset,
+          ["ledger"],
+        );
+      }
+    }
+  } else if (action.kind === "placeTemporaryTurret") {
+    spawnSummons(
+      run,
+      {
+        id: "perk-crossbow-turret",
+        kind: "summon",
+        trigger: "periodic",
+        tags: ["mechanism"],
+        summonKey: "perk-crossbow-turret",
+        count: action.count ?? 1,
+        duration: (action.durationSeconds ?? 4) * strength,
+        attackDamage: 24 * run.player.powerMultiplier,
+        attackCooldown: 0.48,
+        moveSpeed: 80,
+      },
+      "crossbow",
+      1,
+      false,
+    );
+  } else if (action.kind === "returnChainToFirst") {
+    const first = context.firstTarget ?? target;
+    if (first?.hp && first.hp > 0) {
+      run.strikes.push({
+        id: nextId(run),
+        owner: "pipa",
+        artKey: "perk/pipa/return-note",
+        x: first.x,
+        y: first.y,
+        radius: 52,
+        damage:
+          64 *
+          (action.value ?? 0.6) *
+          strength *
+          run.player.powerMultiplier,
+        delay: 0.1,
+        maxDelay: 0.1,
+        hostile: false,
+        canProc: false,
+      });
+    }
+  } else if (action.kind === "extendInkAndBurstCross") {
+    const cross = target ?? pickNearest(run);
+    const x = cross?.x ?? run.player.x;
+    const y = cross?.y ?? run.player.y;
+    run.zones.push({
+      id: nextId(run),
+      owner: "inkline",
+      artKey: "perk/inkline/cross-stay",
+      x,
+      y,
+      radius: 88,
+      damagePerSecond: 36 * strength * run.player.powerMultiplier,
+      life: (action.durationSeconds ?? 1.5) * strength,
+      maxLife: (action.durationSeconds ?? 1.5) * strength,
+      tick: 0,
+      tickRate: 0.25,
+      followsPlayer: false,
+      slow: 0.16,
+      canProc: false,
+      enteredEnemyIds: new Set(),
+    });
+    run.strikes.push({
+      id: nextId(run),
+      owner: "inkline",
+      artKey: "perk/inkline/cross-burst",
+      x,
+      y,
+      radius: 82,
+      damage: 54 * strength * run.player.powerMultiplier,
+      delay: 0.12,
+      maxDelay: 0.12,
+      hostile: false,
+      canProc: false,
+    });
+  } else if (action.kind === "storeLanternFire") {
+    run.perkCombat.lanternFireCharges = Math.min(
+      action.maxActive ?? 1,
+      run.perkCombat.lanternFireCharges + (action.count ?? 1),
+    );
+  } else if (action.kind === "leaveLightningRelay") {
+    const relay = context.lastTarget ?? target ?? pickNearest(run);
+    if (relay) {
+      run.zones.push({
+        id: nextId(run),
+        owner: "thunderSeal",
+        artKey: "perk/thunder/relay",
+        x: relay.x,
+        y: relay.y,
+        radius: 78,
+        damagePerSecond: 34 * strength * run.player.powerMultiplier,
+        life: (action.durationSeconds ?? 3) * strength,
+        maxLife: (action.durationSeconds ?? 3) * strength,
+        tick: 0,
+        tickRate: 0.3,
+        followsPlayer: false,
+        slow: 0,
+        canProc: false,
+        enteredEnemyIds: new Set(),
+      });
+    }
+  } else if (action.kind === "reverseNextCycle") {
+    run.perkCombat.weaveDirection = -1;
+  } else if (action.kind === "addCounterCursor") {
+    run.perkCombat.weaveCounterScale = action.value ?? 0.55;
+  } else if (action.kind === "chargeNextNode") {
+    run.perkCombat.weaveNextNodeScale += (action.value ?? 0.2) * strength;
+  } else if (action.kind === "repeatPreviousNode") {
+    if (run.weave && context.nodeIndex !== undefined) {
+      const index =
+        (context.nodeIndex - run.perkCombat.weaveDirection +
+          run.weave.nodes.length) %
+        run.weave.nodes.length;
+      const previous = run.weave.nodes[index];
+      if (previous) fireWeaveNode(run, previous, 1);
+    }
+  } else if (action.kind === "repeatFirstNode") {
+    run.perkCombat.weaveRepeatFirst += action.count ?? 1;
+  } else if (action.kind === "scaleCycleAndFinish") {
+    if (event.type === "weaveCycleStarted") {
+      run.perkCombat.weaveCycleScale *= action.value ?? 1;
+      run.perkCombat.weaveFinishScale *= action.secondaryValue ?? 1;
+    }
+  } else if (action.kind === "replayFinish") {
+    if (context.terminal) {
+      run.perkCombat.pendingFinishReplays.push({
+        delay: action.durationSeconds ?? 0.8,
+        effects: context.terminal.effects,
+        damageScale: action.value ?? 0.55,
+      });
+    }
+  } else if (action.kind === "carryFinishDamage") {
+    run.perkCombat.weaveNextNodeScale += action.value ?? 0.3;
+  } else if (action.kind === "spawnHealingLeaf") {
+    const active = run.pickups.filter(
+      (pickup) => pickup.kind === "healingLeaf" && pickup.value > 0,
+    ).length;
+    if (active < (action.maxActive ?? 1)) {
+      run.pickups.push({
+        id: nextId(run),
+        x: clamp(run.player.x + randomRange(run, -90, 90), 24, GAME_WIDTH - 24),
+        y: clamp(run.player.y + randomRange(run, -70, 70), 28, GAME_HEIGHT - 28),
+        value: strength,
+        age: 0,
+        tier: 2,
+        kind: "healingLeaf",
+        magnetRadius: 180,
+      });
+    }
+  } else if (action.kind === "acceleratePickupMerge") {
+    if (context.pickup) {
+      context.pickup.mergeMultiplier =
+        1 + ((action.value ?? 1.8) - 1) * strength;
+      context.pickup.magnetRadius = (action.radius ?? 190) * strength;
+    }
+  } else if (action.kind === "conductLightningFromZone") {
+    const origin = target ?? pickNearest(run);
+    if (origin) {
+      const next = pickNearest(run, origin.x, origin.y, new Set([origin.id]));
+      if (next) {
+        run.strikes.push({
+          id: nextId(run),
+          owner: context.zone?.owner ?? "thunderSeal",
+          artKey: "perk/season/lotus-conduct",
+          x: next.x,
+          y: next.y,
+          radius: 48,
+          damage: 30 * strength * run.player.powerMultiplier,
+          delay: 0.12,
+          maxDelay: 0.12,
+          hostile: false,
+          canProc: false,
+        });
+      }
+    }
+  } else if (action.kind === "accelerateAndExtendProjectile") {
+    const projectile = context.projectile;
+    if (projectile) {
+      const factor = 1 + ((action.value ?? 1.35) - 1) * strength;
+      projectile.vx *= factor;
+      projectile.vy *= factor;
+      projectile.life += (action.durationSeconds ?? 0.6) * strength;
+    }
+  } else if (action.kind === "bundleKillDrops") {
+    const ids = new Set(context.pickupIds ?? []);
+    const bundled = run.pickups.filter((pickup) => ids.has(pickup.id));
+    if (bundled.length > 0) {
+      const total =
+        bundled.reduce((sum, pickup) => sum + pickup.value, 0) * strength;
+      const x =
+        bundled.reduce((sum, pickup) => sum + pickup.x, 0) / bundled.length;
+      const y =
+        bundled.reduce((sum, pickup) => sum + pickup.y, 0) / bundled.length;
+      run.pickups = run.pickups.filter((pickup) => !ids.has(pickup.id));
+      addExperiencePickup(run, x, y, total);
+    }
+  } else if (action.kind === "sweepDistantPickups") {
+    const radius = (action.radius ?? 520) * strength;
+    for (const pickup of run.pickups) {
+      const distance = Math.sqrt(
+        distanceSquared(
+          pickup.x,
+          pickup.y,
+          run.player.x,
+          run.player.y,
+        ),
+      );
+      if (distance <= 170 || distance > radius) continue;
+      const direction = normalized(
+        run.player.x - pickup.x,
+        run.player.y - pickup.y,
+      );
+      const sweep = Math.min(distance - 150, 150 * strength);
+      pickup.x += direction.x * sweep;
+      pickup.y += direction.y * sweep;
+    }
+  } else if (action.kind === "grantLanternGuard") {
+    run.perkCombat.lanternGuardCharges = Math.min(
+      (action.maxActive ?? 1) * strength,
+      run.perkCombat.lanternGuardCharges + (action.count ?? 1) * strength,
+    );
+  } else if (action.kind === "slowFirstZoneEntry") {
+    if (target) {
+      target.slow = Math.max(
+        target.slow,
+        (action.durationSeconds ?? 1.2) * strength,
+      );
+    }
+  } else if (action.kind === "emitPickupWind") {
+    pushEnemiesFrom(
+      run,
+      run.player.x,
+      run.player.y,
+      action.radius ?? 132,
+      strength,
+    );
+  } else if (action.kind === "preventLethalDamage") {
+    run.player.life = Math.max(action.value ?? 1, 1);
+    run.player.invulnerability = Math.max(
+      run.player.invulnerability,
+      action.durationSeconds ?? 1,
+    );
+  } else if (action.kind === "grantHumanGuard") {
+    run.perkCombat.temporaryGuardCharges = Math.max(
+      run.perkCombat.temporaryGuardCharges,
+      action.count ?? 1,
+    );
+    run.perkCombat.temporaryGuardUntil = Math.max(
+      run.perkCombat.temporaryGuardUntil,
+      run.elapsed + (action.durationSeconds ?? 0.5),
+    );
+  } else if (action.kind === "empowerNextSignatureAttack") {
+    run.perkCombat.signatureCharges = Math.max(
+      run.perkCombat.signatureCharges,
+      action.count ?? 1,
+    );
+    run.perkCombat.signatureMultiplier = Math.max(
+      run.perkCombat.signatureMultiplier,
+      action.value ?? 1.35,
+    );
+  } else if (action.kind === "pushOnSharpTurn") {
+    pushEnemiesFrom(
+      run,
+      run.player.x,
+      run.player.y,
+      action.radius ?? 138,
+      strength,
+    );
+  } else if (action.kind === "healWhileIdle") {
+    run.player.life = Math.min(
+      run.player.maxLife,
+      run.player.life + (action.value ?? 0.2) * strength,
+    );
+  }
+}
+
+export function dispatchEndlessPerkEvent(
+  run: RunState,
+  event: EndlessPerkRuntimeEvent,
+  context: EndlessPerkDispatchContext = {},
+): readonly EndlessPerkProc[] {
+  if (Object.keys(run.endlessPerks.ranks).length === 0) return [];
+  const completeEvent: EndlessPerkRuntimeEvent = {
+    ...event,
+    season: event.season ?? getSolarTermState(run.elapsed, true).season,
+    ownedWeaponIds: event.ownedWeaponIds ?? ownedWeaponIds(run),
+  };
+  const result = consumeEndlessPerkEvent(run.endlessPerks, completeEvent);
+  run.endlessPerks = result.state;
+  for (const proc of result.procs) {
+    for (const action of proc.actions) {
+      executeEndlessPerkAction(
+        run,
+        action,
+        proc.seasonalMultiplier,
+        completeEvent,
+        context,
+      );
+    }
+  }
+  return result.procs;
+}
+
+function dispatchSynergyEvent(
+  run: RunState,
+  event: CombatEventKind,
+  sourceWeapon?: WeaponId,
+  target?: Enemy,
+) {
+  for (const synergy of resolveChosenSynergies(
+    run.build.weapons,
+    run.activeSynergyIds,
+    run.build.synergyCapacity,
+  )) {
+    for (const rule of synergy.eventRules) {
+      if (rule.event !== event) continue;
+      if (rule.sourceWeapon && rule.sourceWeapon !== sourceWeapon) continue;
+      if (
+        !rule.sourceWeapon &&
+        sourceWeapon &&
+        !synergy.definition.weapons.includes(sourceWeapon)
+      ) continue;
+      const key = `synergy:${synergy.definition.id}:${rule.id}`;
+      const count = (run.synergyCounters.get(key) ?? 0) + 1;
+      const required = Math.max(1, rule.every ?? 1);
+      if (count < required) {
+        run.synergyCounters.set(key, count);
+        continue;
+      }
+      run.synergyCounters.set(key, count - required);
+      const owner: ProjectileOwner = `synergy:${synergy.definition.id}`;
+      for (const effect of rule.effects) {
+        fireEffect(run, effect, owner, target, 1, false);
+      }
+    }
+  }
+}
+
+function copySourceProjectile(
+  run: RunState,
+  effect: Extract<EffectSpec, { kind: "copy" }>,
+  owner: ProjectileOwner,
+  target?: Enemy,
+): Projectile | undefined {
+  const latest = (predicate: (projectile: Projectile) => boolean) =>
+    [...run.projectiles].reverse().find(predicate);
+  if (effect.source === "primaryWeapon") {
+    const primary = run.build.weapons[0]?.id;
+    return primary
+      ? latest((projectile) => projectile.owner === primary)
+      : undefined;
+  }
+  if (effect.source === "previousWeaveNode") {
+    if (owner.startsWith("weave:") && run.weave) {
+      const instanceId = owner.slice("weave:".length);
+      const index = run.weave.nodes.findIndex(
+        (node) => node.instanceId === instanceId,
+      );
+      if (index >= 0 && run.weave.nodes.length > 1) {
+        const previous =
+          run.weave.nodes[
+            (index - 1 + run.weave.nodes.length) % run.weave.nodes.length
+          ];
+        const previousOwner: ProjectileOwner = `weave:${previous.instanceId}`;
+        const found = latest(
+          (projectile) => projectile.owner === previousOwner,
+        );
+        if (found) return found;
+      }
+    }
+    const direct = directWeaponOwner(owner);
+    const index = direct
+      ? run.build.weapons.findIndex((weapon) => weapon.id === direct)
+      : -1;
+    if (index > 0) {
+      const previous = run.build.weapons[index - 1].id;
+      const found = latest((projectile) => projectile.owner === previous);
+      if (found) return found;
+    }
+    return latest((projectile) => projectile.owner !== owner);
+  }
+  if (target?.marked) {
+    const byTarget = latest(
+      (projectile) =>
+        projectile.owner !== owner && projectile.targetId === target.id,
+    );
+    if (byTarget) return byTarget;
+  }
+  const markedIds = new Set(
+    run.enemies
+      .filter((enemy) => enemy.marked > 0)
+      .map((enemy) => enemy.id),
+  );
+  return latest(
+    (projectile) =>
+      projectile.owner !== owner &&
+      projectile.targetId !== undefined &&
+      markedIds.has(projectile.targetId),
+  );
 }
 
 function fireEffect(
@@ -1016,7 +1887,7 @@ function fireEffect(
       });
     }
   } else if (effect.kind === "copy") {
-    const projectile = [...run.projectiles].reverse().find((item) => item.owner !== owner);
+    const projectile = copySourceProjectile(run, effect, owner, start);
     if (!projectile) return;
     for (let index = 0; index < effect.maxCopies; index += 1) {
       run.projectiles.push({
@@ -1028,6 +1899,7 @@ function fireEffect(
         vy: projectile.vx * Math.sin((index + 1) * 0.12) + projectile.vy * Math.cos((index + 1) * 0.12),
         hitAt: new Map(),
         canProc,
+        spawnDelay: 0,
       });
     }
   }
@@ -1064,8 +1936,45 @@ function dispatchEffectTrigger(
     if (cooldown > 0) run.cooldowns.set(key, cooldown);
     return;
   }
+  const sourceWeapon = directWeaponOwner(owner);
+  let damageScale = 1;
+  if (
+    activeTrigger &&
+    sourceWeapon !== undefined &&
+    sourceWeapon === run.build.weapons[0]?.id &&
+    run.perkCombat.signatureCharges > 0
+  ) {
+    damageScale = run.perkCombat.signatureMultiplier;
+    run.perkCombat.signatureCharges -= 1;
+    if (run.perkCombat.signatureCharges <= 0) {
+      run.perkCombat.signatureMultiplier = 1;
+    }
+  }
   const allowHitProcs = trigger !== "onHit" && trigger !== "onMarkedHit";
-  fireEffect(run, effect, owner, target, 1, allowHitProcs);
+  fireEffect(run, effect, owner, target, damageScale, allowHitProcs);
+  if (
+    activeTrigger &&
+    sourceWeapon === "lantern" &&
+    run.perkCombat.lanternFireCharges > 0
+  ) {
+    run.perkCombat.lanternFireCharges -= 1;
+    fireEffect(run, effect, owner, target, damageScale * 0.68, false);
+  }
+  if (sourceWeapon && activeTrigger) {
+    dispatchSynergyEvent(run, "weaponAttack", sourceWeapon, target);
+    if (sourceWeapon === "crossbow") {
+      dispatchEndlessPerkEvent(run, {
+        type: "crossbowVolleyCompleted",
+        weaponId: "crossbow",
+      });
+    } else if (sourceWeapon === "scissors") {
+      dispatchEndlessPerkEvent(
+        run,
+        { type: "scissorPathsCrossed", weaponId: "scissors" },
+        { target: target ?? pickNearest(run) },
+      );
+    }
+  }
   if (cooldown > 0) run.cooldowns.set(key, cooldown);
 }
 
@@ -1145,6 +2054,20 @@ function updateOrbits(run: RunState, delta: number) {
           ) {
             run.orbitHits.set(key, run.elapsed);
             damageEnemy(run, enemy, effect.damage * run.player.powerMultiplier, owner);
+            if (
+              directWeaponOwner(owner) === "scissors" &&
+              (run.cooldowns.get("perk:scissors-cross:event") ?? 0) <= 0
+            ) {
+              run.cooldowns.set("perk:scissors-cross:event", 0.65);
+              dispatchEndlessPerkEvent(
+                run,
+                {
+                  type: "scissorPathsCrossed",
+                  weaponId: "scissors",
+                },
+                { target: enemy },
+              );
+            }
           }
         }
       }
@@ -1333,6 +2256,40 @@ function executeBossSkill(run: RunState, enemy: Enemy) {
 
 function hurtPlayer(run: RunState) {
   if (run.player.invulnerability > 0) return false;
+  if (
+    run.perkCombat.temporaryGuardCharges > 0 &&
+    run.elapsed <= run.perkCombat.temporaryGuardUntil
+  ) {
+    run.perkCombat.temporaryGuardCharges -= 1;
+    addFx(
+      run,
+      "ring",
+      run.player.x,
+      run.player.y,
+      98,
+      0.34,
+      "#e0d7b4",
+      "perk/guard/temporary",
+    );
+    return false;
+  }
+  if (run.elapsed > run.perkCombat.temporaryGuardUntil) {
+    run.perkCombat.temporaryGuardCharges = 0;
+  }
+  if (run.perkCombat.lanternGuardCharges > 0) {
+    run.perkCombat.lanternGuardCharges -= 1;
+    addFx(
+      run,
+      "ring",
+      run.player.x,
+      run.player.y,
+      106,
+      0.4,
+      "#c47745",
+      "perk/lantern/guard",
+    );
+    return false;
+  }
   const blockKey = "guard:block";
   if ((run.cooldowns.get(blockKey) ?? 0) <= 0) {
     let blockStrength = 0;
@@ -1361,7 +2318,35 @@ function hurtPlayer(run: RunState) {
         "#d8c58d",
         "fx/guard-block",
       );
+      dispatchSynergyEvent(run, "guardBlock", "umbrella");
+      dispatchEndlessPerkEvent(run, {
+        type: "guardSucceeded",
+        weaponId: "umbrella",
+      });
       return false;
+    }
+  }
+  if (run.player.life <= 1) {
+    const procs = dispatchEndlessPerkEvent(run, { type: "lethalDamage" });
+    if (
+      procs.some((proc) =>
+        proc.actions.some(
+          (action) => action.kind === "preventLethalDamage",
+        ),
+      )
+    ) {
+      forceHumanForm(run.player);
+      addFx(
+        run,
+        "burst",
+        run.player.x,
+        run.player.y,
+        92,
+        0.6,
+        "#d8c58d",
+        "perk/journey/last-paper",
+      );
+      return true;
     }
   }
   run.player.life -= 1;
@@ -1444,6 +2429,10 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
 
 function updateProjectiles(run: RunState, delta: number) {
   for (const projectile of run.projectiles) {
+    if ((projectile.spawnDelay ?? 0) > 0) {
+      projectile.spawnDelay = Math.max(0, (projectile.spawnDelay ?? 0) - delta);
+      continue;
+    }
     projectile.life -= delta;
     for (const [enemyId, until] of projectile.hitAt) {
       if (until <= run.elapsed) projectile.hitAt.delete(enemyId);
@@ -1461,6 +2450,45 @@ function updateProjectiles(run: RunState, delta: number) {
     }
     projectile.x += projectile.vx * delta;
     projectile.y += projectile.vy * delta;
+    const travelFromPlayer = Math.sqrt(
+      distanceSquared(
+        projectile.x,
+        projectile.y,
+        run.player.x,
+        run.player.y,
+      ),
+    );
+    if (
+      !projectile.windTouched &&
+      travelFromPlayer >= 76 &&
+      hasEndlessPerk(run, "windDeflectShot") &&
+      ownedWeaponIds(run).includes("fan")
+    ) {
+      projectile.windTouched = true;
+      dispatchEndlessPerkEvent(
+        run,
+        {
+          type: "projectileCrossedWind",
+          weaponId: directWeaponOwner(projectile.owner),
+        },
+        { projectile },
+      );
+    }
+    if (
+      !projectile.weatherTouched &&
+      travelFromPlayer >= 112 &&
+      hasEndlessPerk(run, "summerWindShot")
+    ) {
+      projectile.weatherTouched = true;
+      dispatchEndlessPerkEvent(
+        run,
+        {
+          type: "projectileCrossedWeather",
+          weaponId: directWeaponOwner(projectile.owner),
+        },
+        { projectile },
+      );
+    }
     for (const enemy of run.enemies) {
       if (enemy.hp <= 0 || projectile.hitAt.has(enemy.id)) continue;
       if (distanceSquared(projectile.x, projectile.y, enemy.x, enemy.y) <= (projectile.radius + enemy.radius) ** 2) {
@@ -1500,10 +2528,34 @@ function updateZones(run: RunState, delta: number) {
       zone.x = run.player.x;
       zone.y = run.player.y;
     }
+    const insideNow = new Set<number>();
+    for (const enemy of run.enemies) {
+      if (
+        enemy.hp > 0 &&
+        distanceSquared(zone.x, zone.y, enemy.x, enemy.y) <=
+          (zone.radius + enemy.radius) ** 2
+      ) {
+        insideNow.add(enemy.id);
+        if (!zone.enteredEnemyIds.has(enemy.id)) {
+          dispatchEndlessPerkEvent(
+            run,
+            {
+              type: "enemyEnteredZone",
+              weaponId: directWeaponOwner(zone.owner),
+              targetId: enemy.id,
+            },
+            { target: enemy, zone },
+          );
+        }
+      }
+    }
+    zone.enteredEnemyIds = insideNow;
     if (zone.tick <= 0) {
       zone.tick += zone.tickRate;
+      let firstHit: Enemy | undefined;
       for (const enemy of run.enemies) {
         if (enemy.hp > 0 && distanceSquared(zone.x, zone.y, enemy.x, enemy.y) <= (zone.radius + enemy.radius) ** 2) {
+          firstHit ??= enemy;
           damageEnemy(
             run,
             enemy,
@@ -1514,6 +2566,17 @@ function updateZones(run: RunState, delta: number) {
           if (zone.slow > 0) enemy.slow = Math.max(enemy.slow, zone.tickRate * 2);
         }
       }
+      if (firstHit) {
+        dispatchEndlessPerkEvent(
+          run,
+          {
+            type: "zoneHit",
+            weaponId: directWeaponOwner(zone.owner),
+            targetId: firstHit.id,
+          },
+          { target: firstHit, zone },
+        );
+      }
     }
   }
   run.zones = run.zones.filter((zone) => zone.life > 0).slice(-36);
@@ -1521,11 +2584,53 @@ function updateZones(run: RunState, delta: number) {
 
 function updateSummons(run: RunState, delta: number) {
   for (const summon of run.summons) {
+    const beforeLife = summon.life;
     summon.life -= delta;
+    if (
+      beforeLife > 0 &&
+      summon.life <= 0 &&
+      directWeaponOwner(summon.owner) === "lantern"
+    ) {
+      dispatchEndlessPerkEvent(
+        run,
+        { type: "summonExpired", weaponId: "lantern" },
+        { summon },
+      );
+      continue;
+    }
     summon.cooldown -= delta;
-    summon.angle += delta * (0.7 + summon.index * 0.04);
+    const target = pickNearest(run);
+    if (target) {
+      const targetAngle = Math.atan2(
+        target.y - run.player.y,
+        target.x - run.player.x,
+      );
+      const angleDelta = normalizeAngle(targetAngle - summon.angle);
+      const turnLimit =
+        (summon.moveSpeed / Math.max(60, summon.radius)) * delta;
+      summon.angle += clamp(angleDelta, -turnLimit, turnLimit);
+      const targetRadius = clamp(
+        Math.sqrt(
+          distanceSquared(
+            run.player.x,
+            run.player.y,
+            target.x,
+            target.y,
+          ),
+        ) - 68,
+        64,
+        210,
+      );
+      summon.radius += clamp(
+        targetRadius - summon.radius,
+        -summon.moveSpeed * delta,
+        summon.moveSpeed * delta,
+      );
+    } else {
+      summon.angle +=
+        delta * (0.28 + summon.moveSpeed / 260 + summon.index * 0.025);
+    }
     if (summon.cooldown <= 0) {
-      const target = pickNearest(run);
       if (target) {
         const x = run.player.x + Math.cos(summon.angle) * summon.radius;
         const y = run.player.y + Math.sin(summon.angle) * summon.radius * 0.58;
@@ -1591,20 +2696,55 @@ function experienceTier(value: number): 1 | 2 | 3 {
   return value >= 8 ? 3 : value >= 3 ? 2 : 1;
 }
 
+function addExperiencePickup(
+  run: RunState,
+  x: number,
+  y: number,
+  value: number,
+): Pickup {
+  const pickup: Pickup = {
+    id: nextId(run),
+    x,
+    y,
+    value,
+    age: 0,
+    tier: experienceTier(value),
+    kind: "experience",
+  };
+  run.pickups.push(pickup);
+  dispatchEndlessPerkEvent(
+    run,
+    { type: "pickupCreated", value },
+    { pickup },
+  );
+  return pickup;
+}
+
 function mergeExperience(run: RunState) {
-  if (run.pickups.length < 92) return;
-  const low = run.pickups.filter((pickup) => pickup.value <= 2).slice(0, 18);
-  if (low.length < 8) return;
+  const mergeBoost = run.pickups.reduce(
+    (best, pickup) => Math.max(best, pickup.mergeMultiplier ?? 1),
+    1,
+  );
+  if (run.pickups.length < Math.ceil(92 / mergeBoost)) return;
+  const low = run.pickups
+    .filter(
+      (pickup) =>
+        pickup.kind !== "healingLeaf" && pickup.value <= 2,
+    )
+    .slice(0, Math.max(8, Math.ceil(18 / mergeBoost)));
+  if (low.length < Math.max(4, Math.ceil(8 / mergeBoost))) return;
   const total = low.reduce((sum, pickup) => sum + pickup.value, 0);
   const x = low.reduce((sum, pickup) => sum + pickup.x, 0) / low.length;
   const y = low.reduce((sum, pickup) => sum + pickup.y, 0) / low.length;
   const removed = new Set(low.map((pickup) => pickup.id));
   run.pickups = run.pickups.filter((pickup) => !removed.has(pickup.id));
-  run.pickups.push({ id: nextId(run), x, y, value: total, age: 0, tier: experienceTier(total) });
+  addExperiencePickup(run, x, y, total);
 }
 
 function removeDead(run: RunState, events: RunEvent[]) {
   const living: Enemy[] = [];
+  const killedThisFrame: Enemy[] = [];
+  const createdPickupIds: number[] = [];
   for (const enemy of run.enemies) {
     if (enemy.hp > 0) {
       living.push(enemy);
@@ -1613,27 +2753,43 @@ function removeDead(run: RunState, events: RunEvent[]) {
     const dead = { ...enemy, motion: "dead" as const, motionTime: 0 };
     run.deaths.push({ enemy: dead, life: 0.72 });
     run.kills += 1;
+    killedThisFrame.push(enemy);
     run.score += enemy.bossTier === "final" ? 3200 : enemy.bossTier === "mid" ? 1400 : enemy.elite ? 520 : 20;
     addFx(run, "ink", enemy.x, enemy.y, enemy.radius * 1.7, enemy.boss ? 0.85 : 0.42, enemy.boss ? "#a54535" : "#302f2b", "fx/enemy-death");
     if (enemy.lastHitOwner) {
       dispatchOwnerTrigger(run, enemy.lastHitOwner, "onKill", enemy);
+      const sourceWeapon = directWeaponOwner(enemy.lastHitOwner);
+      if (sourceWeapon) {
+        dispatchSynergyEvent(run, "weaponKill", sourceWeapon, enemy);
+        if (sourceWeapon === "sword" && enemy.marked > 0) {
+          dispatchEndlessPerkEvent(
+            run,
+            {
+              type: "markedTargetKilled",
+              weaponId: "sword",
+              targetId: enemy.id,
+            },
+            { target: enemy },
+          );
+        }
+      }
     }
 
     if (enemy.intrusionAvatar && run.weave) {
       run.weave = damageCelestialIntrusion(run.weave, Number.MAX_SAFE_INTEGER);
       run.intrusionAvatarId = undefined;
+      events.push({ type: "celestialReady" });
     }
 
     if (!enemy.boss && !enemy.intrusionAvatar) {
       const value = enemy.elite ? 12 : random(run) < 0.13 ? 3 : 1;
-      run.pickups.push({
-        id: nextId(run),
-        x: enemy.x + randomRange(run, -14, 14),
-        y: enemy.y + randomRange(run, -14, 14),
+      const pickup = addExperiencePickup(
+        run,
+        enemy.x + randomRange(run, -14, 14),
+        enemy.y + randomRange(run, -14, 14),
         value,
-        age: 0,
-        tier: experienceTier(value),
-      });
+      );
+      createdPickupIds.push(pickup.id);
     }
     if (enemy.bossTier === "mid") {
       run.currentBoss = null;
@@ -1651,6 +2807,19 @@ function removeDead(run: RunState, events: RunEvent[]) {
     }
   }
   run.enemies = living;
+  const ordinaryKills = killedThisFrame.filter(
+    (enemy) => !enemy.boss && !enemy.intrusionAvatar,
+  );
+  if (ordinaryKills.length >= 3) {
+    dispatchEndlessPerkEvent(
+      run,
+      { type: "multiKill", value: ordinaryKills.length },
+      {
+        killedEnemies: ordinaryKills,
+        pickupIds: createdPickupIds,
+      },
+    );
+  }
   mergeExperience(run);
 }
 
@@ -1658,7 +2827,10 @@ function updatePickups(run: RunState, delta: number, events: RunEvent[]) {
   for (const pickup of run.pickups) {
     pickup.age += delta;
     const distance = Math.sqrt(distanceSquared(pickup.x, pickup.y, run.player.x, run.player.y));
-    const magnet = 150 * run.player.magnetMultiplier;
+    const magnet = Math.max(
+      150 * run.player.magnetMultiplier,
+      pickup.magnetRadius ?? 0,
+    );
     if (distance < magnet) {
       const direction = normalized(run.player.x - pickup.x, run.player.y - pickup.y);
       const pull = 150 + (magnet - distance) * 4.6;
@@ -1666,9 +2838,23 @@ function updatePickups(run: RunState, delta: number, events: RunEvent[]) {
       pickup.y += direction.y * pull * delta;
     }
     if (distance < 25) {
-      run.player.xp += pickup.value;
+      const collectedValue = pickup.value;
+      if (pickup.kind === "healingLeaf") {
+        run.player.life = Math.min(
+          run.player.maxLife,
+          run.player.life + pickup.value,
+        );
+      } else {
+        run.player.xp += pickup.value;
+      }
       pickup.value = 0;
       events.push({ type: "pickup" });
+      if (pickup.tier === 3 && pickup.kind !== "healingLeaf") {
+        dispatchEndlessPerkEvent(run, {
+          type: "highTierPickupCollected",
+          value: collectedValue,
+        });
+      }
     }
   }
   run.pickups = run.pickups.filter((pickup) => pickup.value > 0);
@@ -1685,23 +2871,243 @@ function updateFx(run: RunState, delta: number) {
   run.terminalLabelLife = Math.max(0, run.terminalLabelLife - delta);
 }
 
+function wrappedNodeIndex(index: number, length: number) {
+  return ((index % length) + length) % length;
+}
+
+function fireWeaveNode(
+  run: RunState,
+  node: WeaveNode,
+  damageScale = 1,
+) {
+  const owner: ProjectileOwner = node.kind === "fusion"
+    ? `fusion:${node.sourceId}`
+    : `weave:${node.instanceId}`;
+  for (const effect of node.passEffects) {
+    fireEffect(
+      run,
+      effect,
+      owner,
+      undefined,
+      damageScale,
+      false,
+    );
+  }
+}
+
+function beginPerkedWeaveCycle(
+  run: RunState,
+  preserveNextNodeScale = false,
+) {
+  if (!run.weave || run.weave.nodes.length === 0) return;
+  const combat = run.perkCombat;
+  const carriedScale = preserveNextNodeScale
+    ? combat.weaveNextNodeScale
+    : 1;
+  combat.weaveCycleInitialized = true;
+  combat.weaveCycleStartIndex = wrappedNodeIndex(
+    run.weave.pulse.nodeIndex,
+    run.weave.nodes.length,
+  );
+  combat.weaveDirection = 1;
+  combat.weaveCounterScale = 0;
+  combat.weaveCycleScale = hasEndlessPerk(run, "slowHeavyFinish")
+    ? 1.4
+    : 1;
+  combat.weaveFinishScale = 1;
+  combat.weaveRepeatFirst = 0;
+  combat.weaveFirstPassed = false;
+  combat.weaveNextNodeScale = carriedScale;
+  dispatchEndlessPerkEvent(run, { type: "weaveCycleStarted" });
+  combat.weaveCounterIndex = wrappedNodeIndex(
+    combat.weaveCycleStartIndex - combat.weaveDirection,
+    run.weave.nodes.length,
+  );
+}
+
+function orderedWeaveForDirection(
+  run: RunState,
+): readonly WeaveNode[] {
+  if (!run.weave) return [];
+  const nodes: WeaveNode[] = [];
+  for (let offset = 0; offset < run.weave.nodes.length; offset += 1) {
+    nodes.push(
+      run.weave.nodes[
+        wrappedNodeIndex(
+          run.perkCombat.weaveCycleStartIndex +
+            offset * run.perkCombat.weaveDirection,
+          run.weave.nodes.length,
+        )
+      ],
+    );
+  }
+  return nodes;
+}
+
+function stepPendingPerkReplays(run: RunState, delta: number) {
+  const pending: PendingPerkReplay[] = [];
+  for (const replay of run.perkCombat.pendingFinishReplays) {
+    const delay = replay.delay - delta;
+    if (delay > 0) {
+      pending.push({ ...replay, delay });
+      continue;
+    }
+    for (const effect of replay.effects) {
+      fireEffect(
+        run,
+        effect,
+        "terminal",
+        undefined,
+        replay.damageScale,
+        false,
+      );
+    }
+    addFx(
+      run,
+      "terminal",
+      run.player.x,
+      run.player.y,
+      240,
+      0.8,
+      "#8f5146",
+      "perk/weave/replay-finish",
+    );
+  }
+  run.perkCombat.pendingFinishReplays = pending;
+}
+
+function advancePerkedWeave(
+  run: RunState,
+  delta: number,
+  events: RunEvent[],
+) {
+  if (!run.weave || run.weave.nodes.length === 0) return;
+  if (!run.perkCombat.weaveCycleInitialized) {
+    beginPerkedWeaveCycle(run);
+  }
+  const nodeCount = run.weave.nodes.length;
+  const baseTerminal = deriveWeaveTerminal(run.weave);
+  const secondsPerNode =
+    (baseTerminal.chargeSeconds * run.perkCombat.weaveCycleScale) /
+    nodeCount;
+  let nodeIndex = wrappedNodeIndex(run.weave.pulse.nodeIndex, nodeCount);
+  let nodeProgress =
+    run.weave.pulse.nodeProgress + delta / Math.max(0.01, secondsPerNode);
+
+  while (nodeProgress >= 1) {
+    nodeProgress -= 1;
+    const node = run.weave.nodes[nodeIndex];
+    const nodeScale = run.perkCombat.weaveNextNodeScale;
+    run.perkCombat.weaveNextNodeScale = 1;
+    fireWeaveNode(run, node, nodeScale);
+
+    if (!run.perkCombat.weaveFirstPassed) {
+      run.perkCombat.weaveFirstPassed = true;
+      for (
+        let repeat = 0;
+        repeat < run.perkCombat.weaveRepeatFirst;
+        repeat += 1
+      ) {
+        fireWeaveNode(run, node, 1);
+      }
+    }
+
+    if (run.perkCombat.weaveCounterScale > 0 && nodeCount > 1) {
+      const counterNode =
+        run.weave.nodes[run.perkCombat.weaveCounterIndex];
+      fireWeaveNode(
+        run,
+        counterNode,
+        run.perkCombat.weaveCounterScale,
+      );
+      run.perkCombat.weaveCounterIndex = wrappedNodeIndex(
+        run.perkCombat.weaveCounterIndex -
+          run.perkCombat.weaveDirection,
+        nodeCount,
+      );
+    }
+
+    dispatchEndlessPerkEvent(
+      run,
+      {
+        type: "weaveNodePassed",
+        value: Math.max(0, run.weave.maxNodes - nodeCount),
+      },
+      { node, nodeIndex },
+    );
+
+    const nextIndex = wrappedNodeIndex(
+      nodeIndex + run.perkCombat.weaveDirection,
+      nodeCount,
+    );
+    const completed =
+      nextIndex === run.perkCombat.weaveCycleStartIndex;
+    nodeIndex = nextIndex;
+    run.weave = {
+      ...run.weave,
+      pulse: {
+        nodeIndex,
+        nodeProgress,
+        completedCycles:
+          run.weave.pulse.completedCycles + (completed ? 1 : 0),
+      },
+    };
+
+    if (!completed) continue;
+    const directedTerminal = deriveWeaveTerminal({
+      ...run.weave,
+      nodes: orderedWeaveForDirection(run),
+    });
+    for (const effect of directedTerminal.effects) {
+      fireEffect(
+        run,
+        effect,
+        "terminal",
+        undefined,
+        run.perkCombat.weaveFinishScale,
+        false,
+      );
+    }
+    dispatchEndlessPerkEvent(
+      run,
+      { type: "weaveFinishReleased" },
+      { terminal: directedTerminal },
+    );
+    run.terminalLabel = directedTerminal.name;
+    run.terminalLabelLife = 2.1;
+    addFx(
+      run,
+      "terminal",
+      run.player.x,
+      run.player.y,
+      285,
+      1.1,
+      "#a44338",
+      directedTerminal.artKey,
+      { label: directedTerminal.name },
+    );
+    events.push({ type: "terminal", name: directedTerminal.name });
+    beginPerkedWeaveCycle(run, true);
+    nodeIndex = run.weave.pulse.nodeIndex;
+  }
+
+  if (run.weave) {
+    run.weave = {
+      ...run.weave,
+      pulse: {
+        nodeIndex,
+        nodeProgress,
+        completedCycles: run.weave.pulse.completedCycles,
+      },
+    };
+  }
+}
+
 function updateEndless(run: RunState, delta: number, events: RunEvent[]) {
   if (!run.endless || !run.weave) return;
 
-  const advanced = advanceWeavePulse(run.weave, delta);
-  run.weave = advanced.state;
-  for (const node of advanced.passedNodes) {
-    for (const effect of node.passEffects) fireEffect(run, effect, `weave:${node.instanceId}`);
-  }
-  if (advanced.terminal) {
-    for (const effect of advanced.terminal.effects) fireEffect(run, effect, "terminal");
-    run.terminalLabel = advanced.terminal.name;
-    run.terminalLabelLife = 2.1;
-    addFx(run, "terminal", run.player.x, run.player.y, 285, 1.1, "#a44338", advanced.terminal.artKey, {
-      label: advanced.terminal.name,
-    });
-    events.push({ type: "terminal", name: advanced.terminal.name });
-  }
+  stepPendingPerkReplays(run, delta);
+  advancePerkedWeave(run, delta, events);
 
   const beforePhase = run.weave.activeIntrusion?.phase;
   run.weave = stepCelestialIntrusion(run.weave, delta);
@@ -1786,27 +3192,40 @@ function updateEndless(run: RunState, delta: number, events: RunEvent[]) {
 }
 
 function grantForgeOpportunity(run: RunState, events: RunEvent[]) {
-  run.forgeCredits = Math.min(1, run.forgeCredits + 1);
+  run.forgeCredits = Math.min(3, run.forgeCredits + 2);
   events.push({ type: "forge" });
+}
+
+function resetWeaveCycleRuntime(run: RunState) {
+  run.perkCombat.weaveCycleInitialized = false;
+  run.perkCombat.weaveNextNodeScale = 1;
+  run.perkCombat.weaveRepeatFirst = 0;
+  run.perkCombat.weaveFirstPassed = false;
+  run.perkCombat.weaveCounterScale = 0;
 }
 
 export function startEndless(run: RunState) {
   run.endless = true;
   run.weave = createWeaveState(run.build);
+  resetWeaveCycleRuntime(run);
   run.forgeAt = run.elapsed + 120;
   run.forgeCredits = 0;
   run.endlessBossAt = run.elapsed + 240;
   run.endlessBossCount = 0;
   run.intrusionAt = run.elapsed + 70;
-  run.terminalLabel = "万器经纬·开盘";
+  run.terminalLabel = "器盘开始转动";
   run.terminalLabelLife = 2.2;
 }
 
-export function insertEndlessWeapon(run: RunState, weaponId: WeaponId) {
+export function insertEndlessWeapon(
+  run: RunState,
+  weapon: WeaponId | WeaponState,
+) {
   if (!run.weave || run.forgeCredits <= 0) return false;
-  const result = insertWeaponNode(run.weave, weaponId);
+  const result = insertWeaponNode(run.weave, weapon);
   if (!result.ok) return false;
   run.weave = result.state;
+  resetWeaveCycleRuntime(run);
   run.forgeCredits -= 1;
   return true;
 }
@@ -1816,6 +3235,7 @@ export function swapEndlessNodes(run: RunState, first: number, second: number) {
   const swapped = swapWeaveNodes(run.weave, first, second);
   if (swapped === run.weave) return false;
   run.weave = swapped;
+  resetWeaveCycleRuntime(run);
   run.forgeCredits -= 1;
   return true;
 }
@@ -1829,6 +3249,7 @@ export function fuseEndlessNodesWithName(
   const result = fuseAdjacentNodes(run.weave, first, second);
   if (!result.ok) return;
   run.weave = result.state;
+  resetWeaveCycleRuntime(run);
   run.forgeCredits -= 1;
   addFx(run, "terminal", run.player.x, run.player.y, 210, 0.9, "#c18b45", `fusion/${result.node.sourceId}`, {
     label: result.node.name,
@@ -1841,6 +3262,7 @@ export function captureEndlessCelestial(run: RunState) {
   const result = captureDefeatedIntrusion(run.weave);
   if (!result.ok) return;
   run.weave = result.state;
+  resetWeaveCycleRuntime(run);
   return result.node.name;
 }
 
@@ -1854,16 +3276,64 @@ export function availableEndlessWeapons(run: RunState): WeaponId[] {
   return WEAPON_IDS.filter((id) => !used.has(id));
 }
 
+function syncSynergySelection(run: RunState, events: RunEvent[]) {
+  const eligible = getEligibleSynergies(run.build.weapons);
+  const capacity = Math.max(0, Math.floor(run.build.synergyCapacity));
+  const signature = synergyQualificationSignature(run);
+  if (signature === run.synergyChoiceSignature) return;
+
+  run.synergyChoiceSignature = signature;
+  const eligibleIds = eligible.map((synergy) => synergy.definition.id);
+  const eligibleIdSet = new Set(eligibleIds);
+  const previousActive = new Set(run.activeSynergyIds);
+
+  if (eligible.length <= capacity) {
+    run.activeSynergyIds = eligibleIds;
+    run.pendingSynergyChoiceIds = [];
+    for (const synergy of eligible) {
+      if (!previousActive.has(synergy.definition.id)) {
+        events.push({ type: "synergy", name: synergy.name });
+      }
+    }
+    return;
+  }
+
+  // Keep the player's still-qualified prior picks live while the modal is
+  // open. Newly qualified entries never activate by authored array order.
+  run.activeSynergyIds = run.activeSynergyIds.filter((id) =>
+    eligibleIdSet.has(id)
+  );
+  run.pendingSynergyChoiceIds = eligibleIds;
+  events.push({
+    type: "synergyChoice",
+    choices: eligible.map(synergyChoiceOption),
+    capacity,
+    selectedIds: [...run.activeSynergyIds],
+  });
+}
+
 export function stepRun(run: RunState, deltaSeconds: number, moveInput: MoveInput): RunEvent[] {
   const delta = Math.min(0.034, Math.max(0, deltaSeconds));
   const events: RunEvent[] = [];
   run.elapsed += delta;
   run.player.invulnerability = Math.max(0, run.player.invulnerability - delta);
+  run.endlessPerks = stepEndlessPerkState(run.endlessPerks, delta);
 
   const magnitude = length(moveInput.x, moveInput.y);
   const moving = magnitude > 0.08;
   const direction = moving ? normalized(moveInput.x, moveInput.y) : { x: 0, y: 0 };
   const beforeForm = run.player.formState;
+  const beforeProgress = run.player.formProgress;
+  const previousMoveX = run.player.lastMoveX;
+  const previousMoveY = run.player.lastMoveY;
+  const hadPreviousDirection =
+    Math.hypot(previousMoveX, previousMoveY) > 0.5;
+  const sharpTurn =
+    moving &&
+    hadPreviousDirection &&
+    direction.x * previousMoveX + direction.y * previousMoveY <
+      Math.cos((70 * Math.PI) / 180) &&
+    beforeProgress > 0.04;
   stepPlayerForm(run.player, moving, direction.x, direction.y, delta);
   if (moving) {
     run.player.facing = Math.atan2(direction.y, direction.x);
@@ -1874,6 +3344,52 @@ export function stepRun(run: RunState, deltaSeconds: number, moveInput: MoveInpu
   if (beforeForm !== run.player.formState) {
     if (run.player.formState === "foldingToPlane") events.push({ type: "fold", folded: true });
     if (run.player.formState === "foldingToHuman") events.push({ type: "fold", folded: false });
+    if (run.player.formState === "human") {
+      dispatchEndlessPerkEvent(run, {
+        type: "formChanged",
+        form: "human",
+      });
+    }
+  }
+  if (sharpTurn) {
+    dispatchEndlessPerkEvent(run, {
+      type: "sharpTurn",
+      form: "human",
+    });
+  }
+  if (run.player.formState === "plane") {
+    run.perkCombat.planeSeconds += delta;
+    if (
+      run.perkCombat.planeSeconds >= 3 &&
+      !run.perkCombat.planeTriggered
+    ) {
+      run.perkCombat.planeTriggered = true;
+      dispatchEndlessPerkEvent(run, {
+        type: "formDuration",
+        form: "plane",
+        value: run.perkCombat.planeSeconds,
+      });
+    }
+  } else {
+    run.perkCombat.planeSeconds = 0;
+    run.perkCombat.planeTriggered = false;
+  }
+  if (!moving && run.player.formState === "human") {
+    run.perkCombat.idleSeconds += delta;
+    if (run.perkCombat.idleSeconds >= 0.8) {
+      run.perkCombat.idleHealClock += delta;
+      if (run.perkCombat.idleHealClock >= 1) {
+        run.perkCombat.idleHealClock -= 1;
+        dispatchEndlessPerkEvent(run, {
+          type: "idleDuration",
+          form: "human",
+          value: run.perkCombat.idleSeconds,
+        });
+      }
+    }
+  } else {
+    run.perkCombat.idleSeconds = 0;
+    run.perkCombat.idleHealClock = 0;
   }
   run.lastFormState = run.player.formState;
 
@@ -1882,6 +3398,7 @@ export function stepRun(run: RunState, deltaSeconds: number, moveInput: MoveInpu
     run.lastTermIndex = termState.current.index;
     events.push({ type: "term", name: termState.current.name, ambience: termState.current.ambience });
   }
+  dispatchEndlessPerkEvent(run, { type: "interval" });
 
   updateSpawning(run, delta, events);
   updateActiveEffects(run, delta);
@@ -1896,10 +3413,7 @@ export function stepRun(run: RunState, deltaSeconds: number, moveInput: MoveInpu
   updateEndless(run, delta, events);
   updateFx(run, delta);
 
-  const synergies = resolveActiveSynergies(run.build.weapons, run.build.synergyCapacity);
-  const newSynergy = synergies.find((synergy) => !run.activeSynergyIds.includes(synergy.definition.id));
-  if (newSynergy) events.push({ type: "synergy", name: newSynergy.name });
-  run.activeSynergyIds = synergies.map((synergy) => synergy.definition.id);
+  syncSynergySelection(run, events);
 
   if (run.player.xp >= run.player.nextXp) {
     run.player.xp -= run.player.nextXp;

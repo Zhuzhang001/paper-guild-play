@@ -1,6 +1,8 @@
 import type {
   CombatBuild,
+  EffectPatch,
   EffectSpec,
+  ResolvedWeaponKit,
   RunModifierId,
   UpgradeOption,
   WeaponId,
@@ -302,28 +304,152 @@ export function applyUpgradeOption(
   return { ...build, weapons };
 }
 
-export function resolveWeaponEffects(state: WeaponState): readonly EffectSpec[] {
-  const definition = getWeaponDefinition(state.id);
-  const effects: EffectSpec[] = [...definition.baseEffects];
-  if (state.level >= 2) {
-    effects.push(...definition.refinedEffects);
+function stagePatches(
+  stageId: string,
+  target: EffectPatch["target"],
+  current: readonly EffectSpec[],
+  authored: readonly EffectSpec[],
+  replacePrimary: boolean,
+): readonly EffectPatch[] {
+  const claimed = new Set<number>();
+  return authored.map((effect, authoredIndex): EffectPatch => {
+    let matchIndex = current.findIndex(
+      (candidate, index) =>
+        !claimed.has(index) && candidate.kind === effect.kind,
+    );
+    const activeEmitter =
+      effect.trigger === "onAttack" || effect.trigger === "periodic";
+    if (
+      matchIndex < 0 &&
+      replacePrimary &&
+      authoredIndex === 0 &&
+      activeEmitter &&
+      current.length > 0
+    ) {
+      matchIndex = 0;
+    }
+    if (matchIndex >= 0) claimed.add(matchIndex);
+    return {
+      id: `${stageId}:${authoredIndex}`,
+      target,
+      mode: matchIndex >= 0 ? "replace" : "append",
+      matchKind: matchIndex >= 0 ? current[matchIndex].kind : undefined,
+      matchIndex: matchIndex >= 0 ? matchIndex : undefined,
+      effect,
+    };
+  });
+}
+
+export function applyEffectPatches(
+  effects: readonly EffectSpec[],
+  patches: readonly EffectPatch[],
+): readonly EffectSpec[] {
+  const resolved = [...effects];
+  for (const patch of patches) {
+    if (patch.mode === "append") {
+      resolved.push(patch.effect);
+      continue;
+    }
+    const index =
+      patch.matchIndex !== undefined &&
+      resolved[patch.matchIndex]?.kind === patch.matchKind
+        ? patch.matchIndex
+        : resolved.findIndex((effect) => effect.kind === patch.matchKind);
+    if (index < 0) resolved.push(patch.effect);
+    else resolved[index] = patch.effect;
   }
+  return resolved;
+}
+
+/**
+ * Resolves one weapon as an evolving attack kit. Tier two and tier four replace
+ * their logical emitter instead of silently adding another full-rate emitter.
+ * A route replaces the core delivery, while a chain mastery adds a new proc.
+ */
+export function resolveWeaponKit(state: WeaponState): ResolvedWeaponKit {
+  const definition = getWeaponDefinition(state.id);
+  let core: readonly EffectSpec[] = [...definition.baseEffects];
+  if (state.level >= 2) {
+    core = applyEffectPatches(
+      core,
+      stagePatches(
+        `${state.id}:refinement`,
+        "core",
+        core,
+        definition.refinedEffects,
+        true,
+      ),
+    );
+  }
+  let routeEffects: readonly EffectSpec[] = [];
   if (state.level >= 3) {
     if (!state.routeId) {
       throw new Error(`Weapon ${state.id} at level ${state.level} is missing a route`);
     }
-    effects.push(...getWeaponRoute(state.routeId).tier3Effects);
+    const route = getWeaponRoute(state.routeId);
+    const combined = applyEffectPatches(
+      core,
+      stagePatches(
+        `${route.id}:route`,
+        "route",
+        core,
+        route.tier3Effects,
+        true,
+      ),
+    );
+    core = combined.slice(0, Math.min(core.length, combined.length));
+    routeEffects = combined.slice(core.length);
   }
   if (state.level >= 4 && state.routeId) {
-    effects.push(...getWeaponRoute(state.routeId).tier4Effects);
+    const route = getWeaponRoute(state.routeId);
+    const combined = [...core, ...routeEffects];
+    const enhanced = applyEffectPatches(
+      combined,
+      stagePatches(
+        `${route.id}:enhancement`,
+        "route",
+        combined,
+        route.tier4Effects,
+        true,
+      ),
+    );
+    core = enhanced.slice(0, Math.min(core.length, enhanced.length));
+    routeEffects = enhanced.slice(core.length);
   }
+  let masteryEffects: readonly EffectSpec[] = [];
   if (state.level >= 5) {
     if (!state.masteryId) {
       throw new Error(`Weapon ${state.id} at level five is missing a mastery`);
     }
-    effects.push(...getMasteryDefinition(state.masteryId).effects);
+    const mastery = getMasteryDefinition(state.masteryId);
+    if (mastery.key === "focus") {
+      const combined = [...core, ...routeEffects];
+      const mastered = applyEffectPatches(
+        combined,
+        stagePatches(
+          `${mastery.id}:mastery`,
+          "route",
+          combined,
+          mastery.effects,
+          true,
+        ),
+      );
+      core = mastered.slice(0, Math.min(core.length, mastered.length));
+      routeEffects = mastered.slice(core.length);
+    } else {
+      masteryEffects = [...mastery.effects];
+    }
   }
-  return effects;
+  return {
+    core,
+    route: routeEffects,
+    mastery: masteryEffects,
+    effects: [...core, ...routeEffects, ...masteryEffects],
+  };
+}
+
+export function resolveWeaponEffects(state: WeaponState): readonly EffectSpec[] {
+  return resolveWeaponKit(state).effects;
 }
 
 export function incrementModifier(

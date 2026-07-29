@@ -5,9 +5,9 @@ import {
   type LoadedArt,
 } from "./art";
 import {
-  drawEnemySprite,
   type EnemySpriteSheets,
 } from "./actors/enemySprites";
+import { drawEnemyAnimation } from "./visual/enemyAnimation";
 import {
   drawFusionSprite,
   drawHeroSprite,
@@ -15,6 +15,7 @@ import {
   drawProjectileSprite,
   drawWeaponSprite,
   drawXpPickup,
+  resolveHeroWeaponSocket,
   type VisualPack,
 } from "./visual";
 import {
@@ -66,7 +67,7 @@ export async function loadSolarTermAtlas(): Promise<HTMLImageElement | null> {
     image.decoding = "async";
     image.onload = () => resolve(image);
     image.onerror = () => resolve(null);
-    image.src = "/terms-v3/solar-terms.webp";
+    image.src = "/terms-v3/solar-terms-runtime.webp";
   });
 }
 
@@ -162,7 +163,7 @@ function fallbackWeapon(
   ctx.translate(x, y);
   ctx.rotate(rotation);
   ctx.globalAlpha *= alpha;
-  ctx.font = `900 ${Math.max(14, size * 0.62)}px "Noto Serif SC", serif`;
+  ctx.font = `700 ${Math.max(14, size * 0.62)}px "Paper Guild Text", serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.lineWidth = Math.max(2, size * 0.07);
@@ -215,10 +216,17 @@ function weaponVisualProgress(run: RunState, weaponId: WeaponId) {
 
 function drawPickupGlow(ctx: CanvasRenderingContext2D, run: RunState) {
   for (const pickup of run.pickups) {
-    const radius = pickup.tier === 3 ? 29 : pickup.tier === 2 ? 23 : 18;
+    const radius = pickup.tier === 3 ? 38 : pickup.tier === 2 ? 30 : 22;
     const gradient = ctx.createRadialGradient(pickup.x, pickup.y, 1, pickup.x, pickup.y, radius);
-    gradient.addColorStop(0, pickup.tier === 3 ? "rgba(180,62,46,.68)" : "rgba(255,246,214,.72)");
-    gradient.addColorStop(0.45, "rgba(255,248,218,.28)");
+    gradient.addColorStop(
+      0,
+      pickup.tier === 3
+        ? "rgba(180,62,46,.72)"
+        : pickup.tier === 2
+          ? "rgba(224,164,41,.74)"
+          : "rgba(255,246,214,.72)",
+    );
+    gradient.addColorStop(0.45, "rgba(255,248,218,.34)");
     gradient.addColorStop(1, "rgba(255,248,218,0)");
     ctx.fillStyle = gradient;
     ctx.beginPath();
@@ -242,8 +250,10 @@ function drawPickups(
           y: pickup.y,
           tier: pickup.tier,
           time: time + pickup.id * 0.07,
-          size: pickup.tier === 3 ? 32 : pickup.tier === 2 ? 24 : 18,
+          size: pickup.tier === 3 ? 36 : pickup.tier === 2 ? 28 : 18,
           magnetProgress,
+          targetX: run.player.x,
+          targetY: run.player.y,
         })
       : false;
     if (!drawn) {
@@ -430,10 +440,13 @@ function drawEnemies(
   sheets: EnemySpriteSheets | null,
 ) {
   for (const actor of run.deaths) {
-    drawEnemySprite(ctx, sheets, {
+    drawEnemyAnimation(ctx, sheets, {
+      id: actor.enemy.id,
       type: actor.enemy.type,
       x: actor.enemy.x,
       y: actor.enemy.y,
+      vx: actor.enemy.vx,
+      vy: actor.enemy.vy,
       radius: actor.enemy.radius,
       heading: actor.enemy.heading,
       travelled: actor.enemy.travelled,
@@ -442,28 +455,40 @@ function drawEnemies(
       hitFlash: 0,
       elite: actor.enemy.elite,
       boss: actor.enemy.boss,
+      bossTier: actor.enemy.bossTier,
     });
   }
   for (const enemy of run.enemies) {
-    drawEnemySprite(ctx, sheets, {
+    const velocity = Math.hypot(enemy.vx, enemy.vy);
+    const visualHeading =
+      enemy.motion === "moving" && velocity > 3
+        ? Math.atan2(enemy.vy, enemy.vx)
+        : enemy.heading;
+    drawEnemyAnimation(ctx, sheets, {
+      id: enemy.id,
       type: enemy.type,
       x: enemy.x,
       y: enemy.y,
+      vx: enemy.vx,
+      vy: enemy.vy,
       radius: enemy.radius,
-      heading: enemy.heading,
+      heading: visualHeading,
       travelled: enemy.travelled,
       state: enemy.motion,
       stateProgress: enemy.motion === "attacking"
         ? clamp(enemy.motionTime / (enemy.boss ? 1.32 : 0.58), 0, 1)
-        : 0,
+        : enemy.motion === "hurt"
+          ? clamp(enemy.motionTime / 0.12, 0, 1)
+          : 0,
       hitFlash: enemy.hitFlash,
       elite: enemy.elite,
       boss: enemy.boss,
+      bossTier: enemy.bossTier,
     });
     if (enemy.marked > 0) {
       ctx.save();
       ctx.globalAlpha = 0.7;
-      ctx.font = `900 ${enemy.boss ? 28 : 18}px "Noto Serif SC", serif`;
+      ctx.font = `700 ${enemy.boss ? 28 : 18}px "Paper Guild Text", serif`;
       ctx.textAlign = "center";
       ctx.fillStyle = "#a33d32";
       ctx.fillText("印", enemy.x, enemy.y - enemy.radius * 1.45);
@@ -484,7 +509,7 @@ function drawBossBars(ctx: CanvasRenderingContext2D, run: RunState) {
   ctx.fillStyle = boss.bossTier === "final" ? "#ad3d32" : "#4c716a";
   ctx.fillRect(x, y, width * clamp(boss.hp / boss.maxHp, 0, 1), 8);
   ctx.fillStyle = "#f9efd9";
-  ctx.font = '700 14px "Noto Serif SC", serif';
+  ctx.font = '700 14px "Paper Guild Text", serif';
   ctx.textAlign = "center";
   ctx.fillText(boss.type === "nian" ? "岁夜年兽" : "吞卷饕餮", GAME_WIDTH / 2, y - 9);
   ctx.restore();
@@ -569,17 +594,29 @@ function drawPlayer(
   pack: VisualPack | null,
   time: number,
 ) {
+  const motion = samplePlayerVisualMotion(run, time);
   const alpha = run.player.invulnerability > 0 && Math.floor(run.player.invulnerability * 16) % 2 === 0 ? 0.42 : 1;
-  const state = run.player.invulnerability > 0 ? "hurt" : lengthOfInput(run.player.formState) > 0 ? "move" : "idle";
+  const state =
+    run.player.invulnerability > 0
+      ? "hurt"
+      : motion.speed > 8
+        ? "move"
+        : "idle";
+  const transitionFacing =
+    run.player.formState === "foldingToPlane" ||
+    run.player.formState === "foldingToHuman"
+      ? run.player.formFacing
+      : run.player.facing;
   const drawn = pack
     ? drawHeroSprite(ctx, pack, {
         x: run.player.x,
         y: run.player.y,
         size: 98,
-        direction: run.player.facing,
+        direction: transitionFacing,
         formProgress: run.player.formProgress,
         state,
         time,
+        travelled: motion.travelled,
         alpha,
       })
     : false;
@@ -598,15 +635,64 @@ function drawPlayer(
 
   const held = run.build.weapons[0];
   if (held) {
-    const distance = run.player.formProgress > 0.55 ? 46 : 31;
-    const x = run.player.x + Math.cos(run.player.facing) * distance;
-    const y = run.player.y + Math.sin(run.player.facing) * distance;
-    drawWeaponAt(ctx, pack, run, held.id, x, y, 52, run.player.facing, time);
+    const socket = resolveHeroWeaponSocket(
+      run.player.x,
+      run.player.y,
+      98,
+      transitionFacing,
+      run.player.formProgress,
+    );
+    drawWeaponAt(
+      ctx,
+      pack,
+      run,
+      held.id,
+      socket.x,
+      socket.y,
+      52,
+      socket.rotation,
+      time,
+    );
   }
 }
 
-function lengthOfInput(state: RunState["player"]["formState"]) {
-  return state === "plane" || state === "foldingToPlane" ? 1 : 0;
+type PlayerVisualMotion = {
+  x: number;
+  y: number;
+  time: number;
+  travelled: number;
+  speed: number;
+};
+
+const PLAYER_VISUAL_MOTION = new WeakMap<RunState, PlayerVisualMotion>();
+
+function samplePlayerVisualMotion(run: RunState, time: number) {
+  const previous = PLAYER_VISUAL_MOTION.get(run);
+  if (!previous) {
+    const initial = {
+      x: run.player.x,
+      y: run.player.y,
+      time,
+      travelled: 0,
+      speed: 0,
+    };
+    PLAYER_VISUAL_MOTION.set(run, initial);
+    return initial;
+  }
+  const distance = Math.hypot(
+    run.player.x - previous.x,
+    run.player.y - previous.y,
+  );
+  const elapsed = Math.max(1 / 240, Math.min(0.1, time - previous.time));
+  const next = {
+    x: run.player.x,
+    y: run.player.y,
+    time,
+    travelled: previous.travelled + distance,
+    speed: distance / elapsed,
+  };
+  PLAYER_VISUAL_MOTION.set(run, next);
+  return next;
 }
 
 function drawJoystick(ctx: CanvasRenderingContext2D, joystick: JoystickVisual) {

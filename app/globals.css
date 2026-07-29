@@ -1,5 +1,21 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Paper Guild Text";
+  src: url("/fonts/LXGWWenKaiScreen-Game.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Paper Guild Display";
+  src: url("/fonts/MaShanZheng-Game.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
 :root {
   --ink: #26231f;
   --paper: #eee7d6;
@@ -7,6 +23,12 @@
   --cinnabar: #a54535;
   --jade: #50766a;
   --gold: #c18b45;
+  --font-ink:
+    "Paper Guild Text",
+    "LXGW WenKai Screen",
+    "Kaiti SC",
+    "Noto Serif SC",
+    serif;
 }
 
 * {
@@ -24,11 +46,13 @@ body {
 }
 
 body {
-  font-family: "Noto Serif SC", "Songti SC", "SimSun", Georgia, serif;
+  font-family: var(--font-ink);
+  font-synthesis: none;
 }
 
 button {
-  font: inherit;
+  font-family: var(--font-ink);
+  font-size: inherit;
 }
 
 .page {
@@ -118,10 +142,11 @@ button {
 
 .title {
   margin: 0;
+  font-family: "Paper Guild Display", "Paper Guild Text", cursive;
   font-size: clamp(48px, 7.3vw, 104px);
-  line-height: 0.96;
-  letter-spacing: -0.05em;
-  font-weight: 900;
+  line-height: 1.02;
+  letter-spacing: 0.015em;
+  font-weight: 400;
 }
 
 .title span {
@@ -303,7 +328,7 @@ button {
 }
 
 .timer {
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-ink);
   font-size: clamp(17px, 2vw, 26px);
   font-weight: 800;
 }
@@ -343,7 +368,7 @@ button {
 
 .weapon-mini-art {
   grid-row: 1 / 3;
-  width: 30px;
+  width: 34px;
   height: 34px;
   align-self: center;
   background-repeat: no-repeat;
@@ -385,9 +410,10 @@ button {
 }
 
 .season-mark {
+  font-family: "Paper Guild Display", "Paper Guild Text", cursive;
   font-size: clamp(15px, 1.5vw, 20px);
-  font-weight: 900;
-  letter-spacing: 0.22em;
+  font-weight: 400;
+  letter-spacing: 0.16em;
 }
 
 .season-spring { color: #916254; }
@@ -527,6 +553,8 @@ button {
 }
 
 .terminal-callout strong {
+  font-family: "Paper Guild Display", "Paper Guild Text", cursive;
+  font-weight: 400;
   font-size: clamp(22px, 3vw, 38px);
   letter-spacing: 0.14em;
 }
@@ -591,6 +619,8 @@ button {
 .result-panel h2,
 .pause-panel h2 {
   margin: 0;
+  font-family: "Paper Guild Display", "Paper Guild Text", cursive;
+  font-weight: 400;
   font-size: clamp(28px, 4vw, 50px);
   line-height: 1;
 }
@@ -629,7 +659,7 @@ button {
   top: 42px;
   right: 10px;
   width: clamp(76px, 10vw, 118px);
-  aspect-ratio: 8 / 9;
+  aspect-ratio: 1;
   background-repeat: no-repeat;
   filter: drop-shadow(0 7px 5px rgba(32, 28, 23, 0.24));
   opacity: 0.94;
@@ -715,7 +745,7 @@ button {
   color: #f9edda;
   background: var(--cinnabar);
   font-size: 30px;
-  font-weight: 900;
+  font-weight: 800;
   transform: rotate(-4deg);
 }
 
@@ -767,6 +797,138 @@ button {
   background:
     radial-gradient(circle at 78% 18%, rgba(81, 112, 103, 0.13), transparent 34%),
     rgba(255, 252, 241, 0.72);
+}
+
+.synergy-panel {
+  width: min(94%, 1060px);
+  border-top: 5px solid #3f665f;
+}
+
+.synergy-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  max-height: min(52vh, 430px);
+  padding: 2px;
+  overflow-y: auto;
+  scrollbar-color: rgba(63, 102, 95, 0.65) rgba(38, 35, 31, 0.08);
+}
+
+.synergy-choice-card {
+  position: relative;
+  min-height: 142px;
+  padding: 14px 108px 14px 16px;
+  color: #282621;
+  background:
+    linear-gradient(120deg, rgba(255, 252, 241, 0.88), rgba(231, 224, 204, 0.78));
+  border: 1px solid rgba(38, 35, 31, 0.24);
+  text-align: left;
+  overflow: hidden;
+}
+
+.synergy-choice-card::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 1px solid transparent;
+  pointer-events: none;
+}
+
+.synergy-choice-card.is-selected {
+  background:
+    linear-gradient(120deg, rgba(244, 237, 212, 0.98), rgba(212, 226, 215, 0.94));
+  border-color: var(--accent, #3f665f);
+  box-shadow: inset 5px 0 0 var(--accent, #3f665f);
+}
+
+.synergy-choice-card.is-selected::after {
+  border-color: rgba(255, 252, 241, 0.78);
+}
+
+.synergy-choice-card:disabled {
+  cursor: not-allowed;
+  filter: saturate(0.45);
+  opacity: 0.58;
+}
+
+.synergy-choice-card strong,
+.synergy-choice-card small,
+.synergy-choice-card em {
+  position: relative;
+  z-index: 1;
+  display: block;
+}
+
+.synergy-choice-card strong {
+  margin: 10px 0 5px;
+  font-size: clamp(18px, 2vw, 25px);
+  line-height: 1.1;
+}
+
+.synergy-choice-card small {
+  color: #625c53;
+  font-size: clamp(10px, 1vw, 13px);
+  line-height: 1.5;
+}
+
+.synergy-choice-card em {
+  margin-top: 8px;
+  color: var(--accent, #3f665f);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.synergy-pair-art {
+  position: absolute;
+  z-index: 0;
+  top: 33px;
+  right: 10px;
+  width: 94px;
+  height: 82px;
+  pointer-events: none;
+}
+
+.synergy-pair-art i {
+  position: absolute;
+  width: 64px;
+  aspect-ratio: 1;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 5px 4px rgba(32, 28, 23, 0.2));
+}
+
+.synergy-pair-art i:first-child {
+  top: 0;
+  left: 0;
+  transform: rotate(-7deg);
+}
+
+.synergy-pair-art i:last-child {
+  right: 0;
+  bottom: 0;
+  transform: rotate(7deg);
+}
+
+.synergy-confirm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(38, 35, 31, 0.17);
+}
+
+.synergy-confirm-row > span {
+  color: #3f665f;
+  font-weight: 700;
+}
+
+.synergy-confirm-row small {
+  display: block;
+  margin-top: 2px;
+  color: #746d61;
+  font-size: 10px;
+  font-weight: 400;
 }
 
 .audio-settings {
@@ -898,7 +1060,7 @@ button {
 }
 
 .weave-node span {
-  font-weight: 900;
+  font-weight: 800;
   font-size: clamp(12px, 1.25vw, 16px);
 }
 
@@ -953,7 +1115,7 @@ button {
 }
 
 .weave-core strong {
-  font: 900 24px ui-monospace, monospace;
+  font: 800 24px var(--font-ink);
 }
 
 .forge-controls {
@@ -1011,6 +1173,666 @@ button {
   color: #f1ebf6;
   background: #596780;
   border: 1px solid #abb7ce;
+}
+
+.forge-panel {
+  width: min(98%, 1220px);
+  height: min(96%, 690px);
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 7px;
+  padding: clamp(12px, 1.5vw, 22px);
+  overflow: hidden;
+}
+
+.forge-panel button,
+.forge-panel select {
+  font-family: var(--font-ink);
+  touch-action: manipulation;
+}
+
+.forge-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.47;
+}
+
+.forge-heading-row {
+  align-items: center;
+}
+
+.forge-ledger {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.forge-fire {
+  padding: 7px 10px;
+  color: #fff0ca;
+  background: #8a432f;
+  border: 1px solid #d39a5d;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.forge-message {
+  min-height: 18px;
+  margin: 0;
+}
+
+.forge-perk-section {
+  padding: 7px;
+  background:
+    linear-gradient(90deg, rgba(69, 95, 86, 0.11), transparent),
+    rgba(255, 250, 235, 0.58);
+  border: 1px solid rgba(46, 57, 50, 0.2);
+}
+
+.forge-perk-section.chosen {
+  border-color: rgba(72, 105, 96, 0.48);
+}
+
+.forge-section-heading,
+.forge-zone-title,
+.preview-ring-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.forge-section-heading {
+  margin-bottom: 6px;
+}
+
+.forge-section-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+}
+
+.forge-section-heading strong,
+.forge-zone-title strong,
+.preview-ring-label strong {
+  color: #35332d;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.forge-section-heading small,
+.forge-zone-title small,
+.preview-ring-label small {
+  color: #71695d;
+  font-size: 9px;
+  line-height: 1.25;
+}
+
+.forge-refresh {
+  flex: none;
+  padding: 4px 9px;
+  color: #455f57;
+  background: #f9f2df;
+  border: 1px solid rgba(69, 95, 87, 0.34);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.forge-perk-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.forge-perk-card {
+  position: relative;
+  min-width: 0;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-content: start;
+  gap: 2px 6px;
+  padding: 7px 9px;
+  color: #302e29;
+  text-align: left;
+  background: rgba(255, 252, 241, 0.82);
+  border: 1px solid rgba(49, 47, 41, 0.18);
+  cursor: pointer;
+}
+
+.forge-perk-card > span {
+  color: #a34c39;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.forge-perk-card > strong {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-perk-card > small {
+  grid-column: 1 / -1;
+  display: -webkit-box;
+  overflow: hidden;
+  color: #686156;
+  font-size: 9px;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.forge-perk-card > em {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  color: #587168;
+  font-size: 8px;
+  font-style: normal;
+}
+
+.forge-perk-card:hover,
+.forge-option-card:hover {
+  border-color: #a34c39;
+}
+
+.forge-workbench {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(250px, 0.62fr);
+  gap: 8px;
+}
+
+.forge-main-column {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 5px;
+}
+
+.forge-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.forge-mode-tabs button {
+  min-height: 30px;
+  padding: 5px 7px;
+  color: #554f45;
+  background: rgba(249, 242, 224, 0.78);
+  border: 1px solid rgba(49, 46, 39, 0.2);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.forge-mode-tabs button.active {
+  color: #fff2d6;
+  background: #4a675e;
+  border-color: #354c45;
+}
+
+.forge-zones {
+  min-height: 0;
+  display: block;
+}
+
+.forge-zone {
+  min-width: 0;
+  min-height: 0;
+  display: none;
+  flex-direction: column;
+  padding: 7px;
+  overflow: hidden;
+  background: rgba(255, 252, 241, 0.58);
+  border: 1px solid rgba(48, 45, 39, 0.17);
+}
+
+.forge-zones.tab-recipes .forge-zone-recipes,
+.forge-zones.tab-temper .forge-zone-temper,
+.forge-zones.tab-arrange .forge-zone-arrange,
+.forge-zones.tab-celestial .forge-zone-celestial {
+  display: flex;
+  height: 100%;
+}
+
+.forge-zone-recipes {
+  grid-area: recipes;
+}
+
+.forge-zone-temper {
+  grid-area: temper;
+}
+
+.forge-zone-arrange {
+  grid-area: arrange;
+}
+
+.forge-zone-celestial {
+  grid-area: celestial;
+}
+
+.forge-zone-title {
+  flex: none;
+  margin-bottom: 5px;
+}
+
+.forge-zone-title small {
+  max-width: 65%;
+  text-align: right;
+}
+
+.forge-option-list {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.forge-option-card {
+  position: relative;
+  min-width: 0;
+  min-height: 62px;
+  display: grid;
+  align-content: start;
+  gap: 1px;
+  padding: 6px 29px 6px 7px;
+  color: #34312b;
+  text-align: left;
+  background: rgba(249, 243, 227, 0.9);
+  border: 1px solid rgba(49, 46, 39, 0.17);
+  cursor: pointer;
+}
+
+.recipe-card {
+  min-height: 88px;
+  padding-left: 58px;
+}
+
+.recipe-card > .recipe-fusion-art {
+  position: absolute;
+  top: 24px;
+  left: 7px;
+  width: 44px;
+  aspect-ratio: 1;
+  background-color: rgba(236, 224, 195, 0.76);
+  background-repeat: no-repeat;
+  border: 1px solid rgba(67, 55, 41, 0.22);
+  box-shadow: inset 0 0 0 2px rgba(255, 248, 226, 0.7);
+}
+
+.recipe-card > .recipe-terminal-preview {
+  color: #51655e;
+  -webkit-line-clamp: 1;
+}
+
+.forge-option-card > span {
+  color: #7a5a45;
+  font-size: 8px;
+}
+
+.forge-option-card > strong {
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-option-card > small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #6f675b;
+  font-size: 8px;
+  line-height: 1.2;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.forge-option-card > em {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 4px;
+  color: #fff0d2;
+  background: #88432f;
+  font-size: 8px;
+  font-style: normal;
+}
+
+.forge-option-card.is-insufficient {
+  background: rgba(239, 233, 219, 0.7);
+}
+
+.forge-option-card.is-insufficient > em {
+  background: #766c5f;
+}
+
+.forge-empty {
+  grid-column: 1 / -1;
+  margin: auto;
+  padding: 8px;
+  color: #776e61;
+  font-size: 9px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.forge-add-flow {
+  flex: none;
+  display: grid;
+  gap: 4px;
+  margin-bottom: 5px;
+  padding-bottom: 5px;
+  border-bottom: 1px dashed rgba(57, 52, 45, 0.22);
+}
+
+.forge-weapon-picks {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.forge-weapon-picks button,
+.forge-route-picks button,
+.forge-gap-row button,
+.forge-selection button,
+.dismantle-button,
+.preview-cancel {
+  color: #423d35;
+  background: rgba(250, 244, 228, 0.92);
+  border: 1px solid rgba(49, 45, 38, 0.2);
+  cursor: pointer;
+}
+
+.forge-weapon-picks button {
+  flex: none;
+  padding: 4px 7px;
+  font-size: 9px;
+}
+
+.forge-weapon-picks button.active,
+.forge-route-picks button.active {
+  color: #fff3db;
+  background: #526e65;
+  border-color: #526e65;
+}
+
+.forge-route-picks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.forge-route-picks button {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  font-size: 8px;
+  text-align: left;
+}
+
+.forge-route-picks i,
+.temper-card > i {
+  width: 24px;
+  aspect-ratio: 1;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 2px 2px rgba(35, 30, 24, 0.25));
+}
+
+.forge-route-picks span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-gap-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 4px;
+}
+
+.forge-gap-row label {
+  display: grid;
+  gap: 2px;
+  color: #71685b;
+  font-size: 8px;
+}
+
+.forge-gap-row select {
+  min-width: 0;
+  padding: 3px 5px;
+  color: #3b3730;
+  background: #faf4e5;
+  border: 1px solid rgba(53, 48, 41, 0.2);
+  font-size: 9px;
+}
+
+.forge-gap-row button {
+  min-height: 28px;
+  padding: 4px 7px;
+  font-size: 9px;
+}
+
+.temper-card {
+  padding-left: 36px;
+}
+
+.temper-card > i {
+  position: absolute;
+  top: 20px;
+  left: 6px;
+}
+
+.forge-selection,
+.celestial-actions {
+  min-height: 0;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+}
+
+.forge-selection > span {
+  overflow: hidden;
+  color: #615a50;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-selection > div,
+.celestial-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.forge-selection > div {
+  display: grid;
+  gap: 4px;
+}
+
+.forge-selection button,
+.dismantle-button,
+.celestial-actions .celestial-button {
+  min-height: 30px;
+  padding: 5px 7px;
+  font-size: 9px;
+}
+
+.celestial-actions .forge-empty {
+  margin: 0;
+}
+
+.forge-preview-rail {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(126px, 0.8fr) auto auto;
+  gap: 5px;
+  padding: 7px;
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(47, 53, 47, 0.04), rgba(164, 71, 54, 0.06)),
+    rgba(246, 239, 220, 0.72);
+  border: 1px solid rgba(42, 40, 34, 0.2);
+}
+
+.preview-ring-label {
+  display: grid;
+}
+
+.weave-ring-preview {
+  width: min(100%, 280px);
+  min-height: 126px;
+  aspect-ratio: 1.72;
+  margin: 0 auto;
+  overflow: visible;
+}
+
+.weave-ring-preview .weave-node {
+  width: 58px;
+  min-height: 40px;
+  padding: 3px;
+  transform:
+    translate(-50%, -50%)
+    rotate(var(--angle))
+    translateX(min(6.3vw, 72px))
+    rotate(calc(var(--angle) * -1));
+  box-shadow: 2px 3px 0 rgba(47, 42, 34, 0.09);
+}
+
+.weave-ring-preview .weave-node b {
+  top: -6px;
+  left: -6px;
+  width: 17px;
+  height: 17px;
+  font-size: 8px;
+}
+
+.weave-ring-preview .weave-node span {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weave-ring-preview .weave-node small {
+  font-size: 7px;
+}
+
+.weave-ring-preview .weave-node:disabled {
+  opacity: 1;
+}
+
+.weave-ring-preview .weave-core {
+  width: 84px;
+  height: 48px;
+  padding: 4px;
+  border-width: 2px;
+}
+
+.weave-ring-preview .weave-core span {
+  font-size: 7px;
+}
+
+.weave-ring-preview .weave-core strong {
+  font-size: 14px;
+}
+
+.forge-preview-card {
+  position: relative;
+  min-height: 100px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 8px;
+  color: #4e493f;
+  background: rgba(255, 252, 241, 0.66);
+  border: 1px dashed rgba(53, 49, 42, 0.24);
+  font-size: 9px;
+}
+
+.forge-preview-card.ready {
+  color: #302e29;
+  background: rgba(255, 248, 229, 0.9);
+  border-style: solid;
+  border-color: rgba(150, 70, 49, 0.42);
+}
+
+.forge-preview-card > strong {
+  padding-right: 42px;
+  font-size: 13px;
+}
+
+.forge-preview-card > p {
+  margin: 0;
+  color: #696155;
+  line-height: 1.3;
+}
+
+.forge-cost-badge {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  padding: 2px 5px;
+  color: #fff1d5;
+  background: #8b432f;
+}
+
+.forge-terminal-change {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+}
+
+.forge-terminal-change > span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 9px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-terminal-change small {
+  display: block;
+  color: #85796a;
+  font-size: 7px;
+  font-weight: 400;
+}
+
+.forge-preview-card .primary-button.compact,
+.forge-close {
+  min-height: 32px;
+}
+
+.preview-cancel {
+  padding: 3px 6px;
+  font-size: 8px;
+}
+
+.forge-close {
+  width: 100%;
+  padding: 7px 9px;
+  font-size: 10px;
 }
 
 .boss-choice button {
@@ -1073,6 +1895,10 @@ button {
 
   .upgrade-card {
     min-height: 130px;
+  }
+
+  .synergy-choice-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .tao-note {
@@ -1141,6 +1967,79 @@ button {
 }
 
 @media (orientation: landscape) and (max-height: 500px) {
+  .menu {
+    align-items: stretch;
+  }
+
+  .menu-panel {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 9px 22px;
+  }
+
+  .menu-panel .kicker {
+    gap: 8px;
+    margin-bottom: 4px;
+    font-size: 9px;
+  }
+
+  .menu-panel .seal {
+    width: 25px;
+    height: 25px;
+    border-width: 1px;
+  }
+
+  .menu-panel .title {
+    font-size: clamp(34px, 12vh, 50px);
+  }
+
+  .menu-panel .subtitle {
+    margin: 5px 0 7px;
+    max-width: 470px;
+    font-size: 10px;
+    line-height: 1.45;
+  }
+
+  .menu-panel .feature-row {
+    gap: 4px;
+    margin-bottom: 7px;
+  }
+
+  .menu-panel .feature-row span {
+    padding: 3px 7px;
+    font-size: 9px;
+  }
+
+  .menu-panel .button-row {
+    gap: 8px;
+  }
+
+  .menu-panel .primary-button {
+    min-width: 172px;
+    padding: 10px 20px;
+    font-size: 13px;
+  }
+
+  .menu-panel .secondary-button {
+    padding: 8px 16px;
+    font-size: 11px;
+  }
+
+  .menu-panel .trial-area {
+    margin-top: 7px;
+  }
+
+  .menu-panel .trial-label {
+    margin-bottom: 4px;
+    font-size: 9px;
+  }
+
+  .menu-panel .trial {
+    padding: 4px 7px;
+    font-size: 10px;
+  }
+
   .modal-shade {
     display: block;
     padding: 8px;
@@ -1208,6 +2107,65 @@ button {
   .level-dots {
     bottom: 8px;
     left: 11px;
+  }
+
+  .synergy-panel {
+    padding: 9px 12px;
+  }
+
+  .synergy-panel .upgrade-note {
+    margin-bottom: 6px;
+  }
+
+  .synergy-choice-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    max-height: 202px;
+  }
+
+  .synergy-choice-card {
+    min-height: 92px;
+    padding: 8px 68px 8px 9px;
+  }
+
+  .synergy-choice-card strong {
+    margin: 5px 0 3px;
+    font-size: 16px;
+  }
+
+  .synergy-choice-card small {
+    display: -webkit-box;
+    font-size: 9px;
+    line-height: 1.3;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .synergy-choice-card em {
+    margin-top: 3px;
+    font-size: 9px;
+  }
+
+  .synergy-pair-art {
+    top: 24px;
+    right: 5px;
+    width: 62px;
+    height: 58px;
+  }
+
+  .synergy-pair-art i {
+    width: 44px;
+  }
+
+  .synergy-confirm-row {
+    margin-top: 6px;
+    padding-top: 6px;
+  }
+
+  .synergy-confirm-row .primary-button {
+    min-height: 34px;
+    padding: 7px 14px;
   }
 
   .forge-panel {
@@ -1339,6 +2297,392 @@ button {
     gap: 6px;
     margin: 9px auto;
     padding: 7px 10px;
+  }
+
+  .forge-panel {
+    width: min(99%, 1120px);
+    height: calc(100dvh - 16px);
+    min-height: 0;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    gap: 3px;
+    padding: 5px 7px;
+    overflow: hidden;
+  }
+
+  .forge-heading-row .upgrade-heading {
+    font-size: 20px;
+  }
+
+  .forge-ledger {
+    flex-wrap: nowrap;
+  }
+
+  .forge-fire,
+  .capacity {
+    padding: 3px 6px;
+    font-size: 8px;
+    white-space: nowrap;
+  }
+
+  .forge-message {
+    min-height: 11px;
+    margin: 0;
+    font-size: 8px;
+    line-height: 1.2;
+  }
+
+  .forge-perk-section {
+    padding: 3px;
+  }
+
+  .forge-section-heading {
+    margin-bottom: 2px;
+  }
+
+  .forge-section-heading strong,
+  .forge-zone-title strong,
+  .preview-ring-label strong {
+    font-size: 9px;
+  }
+
+  .forge-section-heading small,
+  .forge-zone-title small,
+  .preview-ring-label small {
+    font-size: 7px;
+  }
+
+  .forge-refresh {
+    padding: 2px 6px;
+    font-size: 8px;
+  }
+
+  .forge-perk-row {
+    gap: 3px;
+  }
+
+  .forge-perk-card {
+    min-height: 44px;
+    padding: 4px 5px;
+  }
+
+  .forge-perk-card > span,
+  .forge-perk-card > em {
+    font-size: 7px;
+  }
+
+  .forge-perk-card > strong {
+    font-size: 10px;
+  }
+
+  .forge-perk-card > small {
+    -webkit-line-clamp: 1;
+    font-size: 7px;
+  }
+
+  .forge-perk-card > em {
+    top: 4px;
+    right: 5px;
+  }
+
+  .forge-workbench {
+    grid-template-columns: minmax(0, 1fr) minmax(168px, 0.38fr);
+    gap: 4px;
+  }
+
+  .forge-zones {
+    gap: 3px;
+  }
+
+  .forge-zone {
+    padding: 3px;
+  }
+
+  .forge-zone-title {
+    margin-bottom: 2px;
+  }
+
+  .forge-option-list {
+    gap: 2px;
+  }
+
+  .forge-option-card {
+    min-height: 38px;
+    padding: 3px 22px 3px 4px;
+  }
+
+  .forge-option-card > span,
+  .forge-option-card > small,
+  .forge-option-card > em,
+  .forge-empty {
+    font-size: 6px;
+  }
+
+  .forge-option-card > strong {
+    font-size: 8px;
+  }
+
+  .forge-option-card > small {
+    -webkit-line-clamp: 1;
+  }
+
+  .forge-option-card > em {
+    top: 3px;
+    right: 3px;
+  }
+
+  .forge-add-flow {
+    gap: 2px;
+    margin-bottom: 2px;
+    padding-bottom: 2px;
+  }
+
+  .forge-weapon-picks button {
+    padding: 2px 4px;
+    font-size: 7px;
+  }
+
+  .forge-route-picks button {
+    grid-template-columns: 17px minmax(0, 1fr);
+    padding: 1px;
+    font-size: 6px;
+  }
+
+  .forge-route-picks i,
+  .temper-card > i {
+    width: 17px;
+  }
+
+  .forge-gap-row label,
+  .forge-gap-row select,
+  .forge-gap-row button,
+  .forge-selection > span,
+  .forge-selection button,
+  .dismantle-button,
+  .celestial-actions .celestial-button {
+    font-size: 7px;
+  }
+
+  .forge-gap-row button,
+  .forge-selection button,
+  .dismantle-button,
+  .celestial-actions .celestial-button {
+    min-height: 22px;
+    padding: 2px 4px;
+  }
+
+  .temper-card {
+    padding-left: 24px;
+  }
+
+  .temper-card > i {
+    top: 12px;
+    left: 3px;
+  }
+
+  .forge-preview-rail {
+    grid-template-rows: auto minmax(82px, 0.7fr) auto auto;
+    gap: 2px;
+    padding: 3px;
+  }
+
+  .weave-ring-preview {
+    min-height: 82px;
+    aspect-ratio: 1.85;
+  }
+
+  .weave-ring-preview .weave-node {
+    width: 37px;
+    min-height: 25px;
+    transform:
+      translate(-50%, -50%)
+      rotate(var(--angle))
+      translateX(min(5.6vw, 43px))
+      rotate(calc(var(--angle) * -1));
+  }
+
+  .weave-ring-preview .weave-node span {
+    font-size: 6px;
+  }
+
+  .weave-ring-preview .weave-node small {
+    display: none;
+  }
+
+  .weave-ring-preview .weave-node b {
+    width: 12px;
+    height: 12px;
+    font-size: 6px;
+  }
+
+  .weave-ring-preview .weave-core {
+    width: 54px;
+    height: 31px;
+  }
+
+  .weave-ring-preview .weave-core span {
+    font-size: 5px;
+  }
+
+  .weave-ring-preview .weave-core strong {
+    font-size: 9px;
+  }
+
+  .forge-preview-card {
+    min-height: 66px;
+    gap: 2px;
+    padding: 4px;
+    font-size: 7px;
+  }
+
+  .forge-preview-card > strong {
+    font-size: 9px;
+  }
+
+  .forge-preview-card > p {
+    font-size: 6px;
+  }
+
+  .forge-terminal-change > span {
+    font-size: 7px;
+  }
+
+  .forge-preview-card .primary-button.compact,
+  .forge-close {
+    min-height: 24px;
+    padding: 3px 5px;
+    font-size: 8px;
+  }
+
+  .preview-cancel {
+    padding: 1px 4px;
+    font-size: 6px;
+  }
+
+  .status-line,
+  .weapon-chip,
+  .resonance-list span,
+  .weave-hud {
+    font-size: 12px;
+  }
+
+  .forge-fire,
+  .capacity,
+  .forge-message,
+  .forge-refresh,
+  .forge-mode-tabs button {
+    font-size: 10px;
+  }
+
+  .forge-mode-tabs button {
+    min-height: 28px;
+    padding: 4px 5px;
+  }
+
+  .forge-section-heading strong,
+  .forge-zone-title strong,
+  .preview-ring-label strong {
+    font-size: 11px;
+  }
+
+  .forge-section-heading small,
+  .forge-zone-title small,
+  .preview-ring-label small {
+    font-size: 9px;
+  }
+
+  .forge-perk-card {
+    min-height: 58px;
+    padding: 5px 6px;
+  }
+
+  .forge-perk-card > span,
+  .forge-perk-card > em,
+  .forge-perk-card > small {
+    font-size: 9px;
+  }
+
+  .forge-perk-card > strong {
+    font-size: 12px;
+  }
+
+  .forge-workbench {
+    grid-template-columns: minmax(0, 1fr) minmax(200px, 0.42fr);
+  }
+
+  .forge-option-card {
+    min-height: 68px;
+    padding: 5px 31px 5px 6px;
+  }
+
+  .recipe-card {
+    min-height: 82px;
+    padding-left: 52px;
+  }
+
+  .recipe-card > .recipe-fusion-art {
+    top: 25px;
+    left: 6px;
+    width: 40px;
+  }
+
+  .forge-option-card > span,
+  .forge-option-card > small,
+  .forge-option-card > em,
+  .forge-empty,
+  .forge-gap-row label,
+  .forge-gap-row select,
+  .forge-gap-row button,
+  .forge-selection > span,
+  .forge-selection button,
+  .dismantle-button,
+  .celestial-actions .celestial-button {
+    font-size: 9px;
+  }
+
+  .forge-option-card > strong,
+  .forge-route-picks button,
+  .forge-weapon-picks button {
+    font-size: 11px;
+  }
+
+  .weave-ring-preview .weave-node span,
+  .weave-ring-preview .weave-node b,
+  .weave-ring-preview .weave-core span {
+    font-size: 8px;
+  }
+
+  .weave-ring-preview .weave-core strong,
+  .forge-preview-card > strong,
+  .forge-terminal-change > span {
+    font-size: 11px;
+  }
+
+  .forge-preview-card,
+  .forge-preview-card > p,
+  .forge-preview-card .primary-button.compact,
+  .forge-close,
+  .preview-cancel {
+    font-size: 9px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 380px) {
+  .forge-heading-row .kicker,
+  .forge-message,
+  .capacity {
+    display: none;
+  }
+
+  .forge-panel {
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+  }
+
+  .forge-perk-card {
+    min-height: 52px;
+  }
+
+  .forge-workbench {
+    grid-template-columns: minmax(0, 1fr) 195px;
   }
 }
 

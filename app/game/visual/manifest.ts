@@ -26,53 +26,55 @@ export const HERO_ATLASES = {
     3,
     4,
   ),
-  fold: atlas("hero.fold", "/art-v3/hero-fold-v3.webp", 4, 3),
+  // v4 contract: 12 fold phases across five authored directions
+  // (south, south-east, east, north-east, north).
+  fold: atlas(
+    "hero.fold",
+    "/art-v4/hero-fold-runtime-v4.webp",
+    12,
+    5,
+    0,
+  ),
 } as const;
 
+const weaponAtlas = (id: string, src: string) =>
+  atlas(id, src, 7, 2, 2);
+
 export const WEAPON_ATLASES: Readonly<Record<WeaponId, AtlasSpec>> = {
-  sword: atlas("weapon.sword", "/art-v3/weapon-sword-v3.webp", 3, 2),
-  fan: atlas("weapon.fan", "/art-v3/weapon-fan-v3.webp", 3, 2),
-  umbrella: atlas(
+  sword: weaponAtlas("weapon.sword", "/art-v4/weapon-sword-runtime-v4.webp"),
+  fan: weaponAtlas("weapon.fan", "/art-v4/weapon-fan-runtime-v4.webp"),
+  umbrella: weaponAtlas(
     "weapon.umbrella",
-    "/art-v3/weapon-umbrella-v3.webp",
-    3,
-    2,
+    "/art-v4/weapon-umbrella-runtime-v4.webp",
   ),
-  scissors: atlas(
+  scissors: weaponAtlas(
     "weapon.scissors",
-    "/art-v3/weapon-scissors-v3.webp",
-    3,
-    2,
+    "/art-v4/weapon-scissors-runtime-v4.webp",
   ),
-  abacus: atlas("weapon.abacus", "/art-v3/weapon-abacus-v3.webp", 3, 2),
-  crossbow: atlas(
+  abacus: weaponAtlas("weapon.abacus", "/art-v4/weapon-abacus-runtime-v4.webp"),
+  crossbow: weaponAtlas(
     "weapon.crossbow",
-    "/art-v3/weapon-crossbow-v3.webp",
-    3,
-    2,
+    "/art-v4/weapon-crossbow-runtime-v4.webp",
   ),
-  pipa: atlas("weapon.pipa", "/art-v3/weapon-pipa-v3.webp", 3, 2),
-  inkline: atlas(
+  pipa: weaponAtlas("weapon.pipa", "/art-v4/weapon-pipa-runtime-v4.webp"),
+  inkline: weaponAtlas(
     "weapon.inkline",
-    "/art-v3/weapon-inkline-v3.webp",
-    3,
-    2,
+    "/art-v4/weapon-inkline-runtime-v4.webp",
   ),
-  lantern: atlas(
+  lantern: weaponAtlas(
     "weapon.lantern",
-    "/art-v3/weapon-lantern-v3.webp",
-    3,
-    2,
+    "/art-v4/weapon-lantern-runtime-v4.webp",
   ),
-  thunderSeal: atlas(
+  thunderSeal: weaponAtlas(
     "weapon.thunderSeal",
-    "/art-v3/weapon-thunder-v3.webp",
-    3,
-    2,
+    "/art-v4/weapon-thunder-runtime-v4.webp",
   ),
 };
 
-export const FUSION_ATLASES: Readonly<Record<FusionId, AtlasSpec>> = {
+export type FoldAtlasManifest = typeof HERO_ATLASES;
+export type WeaponVisualManifest = typeof WEAPON_ATLASES;
+
+const BASE_FUSION_ATLASES = {
   mistCanopy: atlas(
     "fusion.mistCanopy",
     "/art-v3/fusion-wind-rain-v3.webp",
@@ -160,6 +162,100 @@ export const FUSION_ATLASES: Readonly<Record<FusionId, AtlasSpec>> = {
   myriadLanternCanopy: atlas(
     "fusion.myriadLanternCanopy",
     "/art-v3/fusion-umbrella-lantern-v3.webp",
+    2,
+    2,
+  ),
+} as const;
+
+export const FUSION_ATLASES: Readonly<Record<FusionId, AtlasSpec>> = {
+  ...BASE_FUSION_ATLASES,
+  galeBamboo: atlas(
+    "fusion.galeBamboo",
+    "/art-v4/fusion-galeBamboo-runtime-v4.webp",
+    2,
+    2,
+  ),
+  hiddenSwordCanopy: atlas(
+    "fusion.hiddenSwordCanopy",
+    "/art-v4/fusion-hiddenSwordCanopy-runtime-v4.webp",
+    2,
+    2,
+  ),
+  twinTailorBlades: atlas(
+    "fusion.twinTailorBlades",
+    "/art-v4/fusion-twinTailorBlades-runtime-v4.webp",
+    2,
+    2,
+  ),
+  inkRuleSword: atlas(
+    "fusion.inkRuleSword",
+    "/art-v4/fusion-inkRuleSword-runtime-v4.webp",
+    2,
+    2,
+  ),
+  windRepeater: atlas(
+    "fusion.windRepeater",
+    "/art-v4/fusion-windRepeater-runtime-v4.webp",
+    2,
+    2,
+  ),
+  windStringPass: atlas(
+    "fusion.windStringPass",
+    "/art-v4/fusion-windStringPass-runtime-v4.webp",
+    2,
+    2,
+  ),
+  inkRainBoundary: atlas(
+    "fusion.inkRainBoundary",
+    "/art-v4/fusion-inkRainBoundary-runtime-v4.webp",
+    2,
+    2,
+  ),
+  rainStringCanopy: atlas(
+    "fusion.rainStringCanopy",
+    "/art-v4/fusion-rainStringCanopy-runtime-v4.webp",
+    2,
+    2,
+  ),
+  stringScissor: atlas(
+    "fusion.stringScissor",
+    "/art-v4/fusion-stringScissor-runtime-v4.webp",
+    2,
+    2,
+  ),
+  shadowScissor: atlas(
+    "fusion.shadowScissor",
+    "/art-v4/fusion-shadowScissor-runtime-v4.webp",
+    2,
+    2,
+  ),
+  pearlInkLine: atlas(
+    "fusion.pearlInkLine",
+    "/art-v4/fusion-pearlInkLine-runtime-v4.webp",
+    2,
+    2,
+  ),
+  countedLantern: atlas(
+    "fusion.countedLantern",
+    "/art-v4/fusion-countedLantern-runtime-v4.webp",
+    2,
+    2,
+  ),
+  pearlThunder: atlas(
+    "fusion.pearlThunder",
+    "/art-v4/fusion-pearlThunder-runtime-v4.webp",
+    2,
+    2,
+  ),
+  thunderBoltRoad: atlas(
+    "fusion.thunderBoltRoad",
+    "/art-v4/fusion-thunderBoltRoad-runtime-v4.webp",
+    2,
+    2,
+  ),
+  inkScore: atlas(
+    "fusion.inkScore",
+    "/art-v4/fusion-inkScore-runtime-v4.webp",
     2,
     2,
   ),

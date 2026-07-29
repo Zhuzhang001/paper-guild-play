@@ -8,10 +8,15 @@ import {
   type EnemySpriteSheets,
 } from "./game/actors/enemySprites";
 import {
+  findFusionDefinition,
   getWeaponDefinition,
+  type EndlessPerkDefinition,
   type FusionId,
   type UpgradeOption,
   type WeaponId,
+  type WeaponRouteId,
+  type WeaponState,
+  type WeaveState,
   WEAPON_IDS,
 } from "./game/content";
 import { finishHumanForm } from "./game/form";
@@ -24,34 +29,53 @@ import {
 import {
   applyRareChoice,
   applyUpgrade,
-  captureEndlessCelestial,
+  chooseActiveSynergies as commitSynergyChoice,
   createRun,
-  fuseEndlessNodesWithName,
   GAME_HEIGHT,
   GAME_WIDTH,
   getUpgradeChoices,
-  insertEndlessWeapon,
+  getSynergyChoices as listSynergyChoices,
   RARE_CHOICES,
   snapshotRun,
   STANDARD_SECONDS,
   startEndless,
   stepRun,
-  swapEndlessNodes,
   type RareChoice,
   type RunEvent,
   type RunSnapshot,
   type RunState,
+  type SynergyChoiceOption,
   type TrialId,
 } from "./game/survivor";
+import {
+  applyEndlessPerkChoice,
+  applyForgeOffer,
+  captureDefeatedIntrusion,
+  createForgeState,
+  createRngState,
+  deriveWeaveTerminal,
+  fuseAdjacentNodes,
+  generateEndlessPerkChoices,
+  generateForgeOffers,
+  insertWeaponNode,
+  refreshEndlessPerkChoices,
+  removeWeaveNode,
+  swapWeaveNodes,
+  type ForgeOffer,
+} from "./game/runtime";
 import {
   loadVisualPack,
   preloadFusionVisuals,
   preloadWeaponVisuals,
+  pruneVisualPack,
+  resolveWeaponVisualFrame,
+  FUSION_ATLASES,
   WEAPON_ATLASES,
   type VisualPack,
 } from "./game/visual";
 import {
   AudioManager,
+  getFusionSfxCue,
   getSolarTermState,
   getTermAmbienceCue,
   type AudioSettings,
@@ -62,6 +86,7 @@ type Mode =
   | "menu"
   | "playing"
   | "upgrade"
+  | "synergy"
   | "rare"
   | "paused"
   | "forge"
@@ -73,7 +98,59 @@ type ResultState = {
   title: string;
 };
 
-type QueuedModal = "upgrade" | "rare" | "forge" | "bossChoice";
+type ForgePreview = {
+  kind:
+    | "fusion"
+    | "swap"
+    | "insert"
+    | "temper"
+    | "celestial"
+    | "dismantle";
+  title: string;
+  description: string;
+  cost: 0 | 1 | 2;
+  before: string;
+  after: string;
+  weave: WeaveState;
+  fusionId?: FusionId;
+};
+
+type ForgeRecipeCard = {
+  id: string;
+  firstIndex: number;
+  secondIndex: number;
+  fusionId: FusionId;
+  title: string;
+  pairLabel: string;
+  description: string;
+  cost: 1 | 2;
+  firstWeaponId: WeaponId;
+  secondWeaponId: WeaponId;
+  before: string;
+  after: string;
+  nodesBefore: number;
+  nodesAfter: number;
+};
+
+type TemperForgeOffer = Extract<ForgeOffer, { kind: "temper" }>;
+
+type SavedProgressV4 = {
+  version: 4;
+  cleared: boolean;
+  unlockedWeapons: readonly WeaponId[];
+  settings?: Partial<AudioSettings>;
+};
+
+type QueuedModal =
+  | "upgrade"
+  | "synergy"
+  | "rare"
+  | "forge"
+  | "celestial"
+  | "bossChoice";
+
+type ForgePurpose = "cycle" | "celestial";
+type ForgeTab = "recipes" | "temper" | "arrange" | "celestial";
 
 type GamepadUiState = {
   direction: -1 | 0 | 1;
@@ -126,6 +203,14 @@ const TRIAL_DEFINITIONS: Array<{
   { id: "elite", name: "强敌", description: "精英和 Boss 更坚韧" },
 ];
 
+const PROGRESS_KEY_V4 = "paper-guild.progress.v4";
+const PROGRESS_KEYS_V3 = [
+  "paper-guild.progress.v3",
+  "paper-guild-progress-v3",
+] as const;
+const LEGACY_CLEAR_KEY = "paper-guild-cleared-v3";
+const AUDIO_KEY_V1 = "paper-guild.audio.v1";
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -141,11 +226,11 @@ function formatTime(seconds: number) {
 }
 
 function optionKind(option: UpgradeOption) {
-  if (option.kind === "route") return "择路 · 三选一";
-  if (option.kind === "mastery") return "成器刻印 · 二选一";
-  if (option.kind === "acquire") return "新器入匣";
+  if (option.kind === "route") return "改法 · 三选一";
+  if (option.kind === "mastery") return "定型 · 二选一";
+  if (option.kind === "acquire") return "拿到新器";
   if (option.kind === "utility") return "行旅札记";
-  return option.kind === "refine" ? "基础精炼" : "路线再造";
+  return option.kind === "refine" ? "做细" : "再磨";
 }
 
 function weaponSubline(snapshot: RunSnapshot, weaponId: WeaponId) {
@@ -155,51 +240,181 @@ function weaponSubline(snapshot: RunSnapshot, weaponId: WeaponId) {
   if (weapon.masteryId) {
     const route = definition.routes.find((candidate) => candidate.id === weapon.routeId);
     const mastery = route?.masteries.find((candidate) => candidate.id === weapon.masteryId);
-    return mastery?.name ?? "已成器";
+    return mastery?.name ?? "已定型";
   }
   if (weapon.routeId) {
     return definition.routes.find((candidate) => candidate.id === weapon.routeId)?.name ?? "";
   }
-  return weapon.level === 2 ? "待择路线" : definition.description;
+  return weapon.level === 2 ? "待改法" : definition.description;
 }
 
-function weaponAtlasFrame(level: number, routeId?: string) {
-  if (level <= 1) return 0;
-  if (level === 2) return 1;
-  if (level >= 5) return 5;
-  const route = routeId?.split(":")[1];
-  return route === "b" ? 3 : route === "c" ? 4 : 2;
-}
-
-function weaponThumbStyle(weaponId: WeaponId, frame: number): React.CSSProperties {
-  const column = frame % 3;
-  const row = Math.floor(frame / 3);
+function weaponThumbStyle(
+  weaponId: WeaponId,
+  selection: {
+    level: number;
+    route?: string;
+    mastery?: string;
+  },
+): React.CSSProperties {
+  const frame = resolveWeaponVisualFrame(selection);
+  const column = frame % 7;
+  const row = Math.floor(frame / 7);
   return {
     backgroundImage: `url("${WEAPON_ATLASES[weaponId].src}")`,
-    backgroundPosition: `${column * 50}% ${row * 100}%`,
-    backgroundSize: "300% 200%",
+    backgroundPosition: `${(column / 6) * 100}% ${row * 100}%`,
+    backgroundSize: "700% 200%",
   };
+}
+
+function fusionThumbStyle(fusionId: FusionId): React.CSSProperties {
+  return {
+    backgroundImage: `url("${FUSION_ATLASES[fusionId].src}")`,
+    backgroundPosition: "0% 0%",
+    backgroundSize: "200% 200%",
+  };
+}
+
+function parseProgress(raw: string | null): Partial<SavedProgressV4> | undefined {
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw) as Partial<SavedProgressV4>;
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return;
+  }
+}
+
+function readProgress(): SavedProgressV4 {
+  const fallback: SavedProgressV4 = {
+    version: 4,
+    cleared: false,
+    unlockedWeapons: WEAPON_IDS,
+  };
+  if (typeof window === "undefined") return fallback;
+  try {
+    const current = parseProgress(localStorage.getItem(PROGRESS_KEY_V4));
+    const legacy = PROGRESS_KEYS_V3
+      .map((key) => parseProgress(localStorage.getItem(key)))
+      .find(Boolean);
+    const source = current ?? legacy;
+    const unlockedWeapons = Array.isArray(source?.unlockedWeapons)
+      ? source.unlockedWeapons.filter((id): id is WeaponId =>
+          WEAPON_IDS.includes(id as WeaponId)
+        )
+      : fallback.unlockedWeapons;
+    return {
+      version: 4,
+      cleared:
+        source?.cleared === true ||
+        localStorage.getItem(LEGACY_CLEAR_KEY) === "yes",
+      unlockedWeapons:
+        unlockedWeapons.length > 0 ? unlockedWeapons : fallback.unlockedWeapons,
+      settings: source?.settings,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveProgress(update: Partial<Omit<SavedProgressV4, "version">>) {
+  if (typeof window === "undefined") return;
+  try {
+    const current = readProgress();
+    localStorage.setItem(
+      PROGRESS_KEY_V4,
+      JSON.stringify({ ...current, ...update, version: 4 }),
+    );
+  } catch {
+    // The current run stays playable if private browsing disables storage.
+  }
 }
 
 function initialAudioSettings(): AudioSettings {
   const fallback: AudioSettings = {
     muted: false,
-    master: 0.8,
-    music: 0.62,
-    sfx: 0.78,
+    master: 0.72,
+    music: 0.6,
+    sfx: 0.56,
+    ambient: 0.4,
   };
   if (typeof window === "undefined") return fallback;
   try {
-    const saved = JSON.parse(localStorage.getItem("paper-guild.audio.v1") ?? "{}") as Partial<AudioSettings>;
+    const progressSettings = readProgress().settings;
+    const saved = progressSettings ??
+      JSON.parse(localStorage.getItem(AUDIO_KEY_V1) ?? "{}") as Partial<AudioSettings>;
     return {
       muted: typeof saved.muted === "boolean" ? saved.muted : fallback.muted,
       master: clamp(saved.master ?? fallback.master, 0, 1),
       music: clamp(saved.music ?? fallback.music, 0, 1),
       sfx: clamp(saved.sfx ?? fallback.sfx, 0, 1),
+      ambient: clamp(saved.ambient ?? fallback.ambient ?? 0.5, 0, 1),
     };
   } catch {
     return fallback;
   }
+}
+
+function areRingAdjacent(first: number, second: number, length: number) {
+  return (
+    length >= 2 &&
+    first !== second &&
+    ((first + 1) % length === second || (second + 1) % length === first)
+  );
+}
+
+function circularDistance(first: number, second: number, length: number) {
+  const direct = Math.abs(first - second);
+  return Math.min(direct, length - direct);
+}
+
+function routeAndMasteryForOption(
+  option: Exclude<UpgradeOption, { kind: "utility" }>,
+  current?: WeaponState,
+) {
+  return {
+    route:
+      option.kind === "route" || option.kind === "mastery"
+        ? option.routeId
+        : current?.routeId,
+    mastery: option.kind === "mastery" ? option.masteryId : current?.masteryId,
+  };
+}
+
+function perkCategoryLabel(category: EndlessPerkDefinition["category"]) {
+  return {
+    weapon: "器物",
+    weave: "器盘",
+    season: "天时",
+    journey: "行旅",
+  }[category];
+}
+
+function currentVisualIds(run: RunState) {
+  const weaponIds = new Set<WeaponId>(
+    run.build.weapons.map((weapon) => weapon.id),
+  );
+  const fusionIds = new Set<FusionId>();
+  for (const node of run.weave?.nodes ?? []) {
+    if (node.kind === "weapon") {
+      weaponIds.add(node.sourceId as WeaponId);
+    } else if (node.kind === "fusion") {
+      fusionIds.add(node.sourceId as FusionId);
+    }
+    node.consumedWeapons?.forEach((weapon) => weaponIds.add(weapon.id));
+  }
+  return {
+    weaponIds: [...weaponIds],
+    fusionIds: [...fusionIds],
+  };
+}
+
+function endlessChoiceContext(run: RunState) {
+  const { weaponIds } = currentVisualIds(run);
+  return {
+    ownedWeaponIds: weaponIds,
+    weaveNodeCount: run.weave?.nodes.length ?? 0,
+    weaveMaxNodes: run.weave?.maxNodes ?? 0,
+  };
 }
 
 export function PaperGuildGame() {
@@ -225,7 +440,8 @@ export function PaperGuildGame() {
   const lastFrameRef = useRef(0);
   const hudClockRef = useRef(0);
   const queuedModalsRef = useRef<QueuedModal[]>([]);
-  const forgeConsumedRef = useRef(false);
+  const forgeFireRef = useRef(0);
+  const forgeCycleRef = useRef(0);
   const gamepadUiRef = useRef<GamepadUiState>({
     direction: 0,
     repeatAt: 0,
@@ -243,21 +459,34 @@ export function PaperGuildGame() {
   const [mode, setModeState] = useState<Mode>("menu");
   const [snapshot, setSnapshot] = useState<RunSnapshot>(emptySnapshot);
   const [upgradeOptions, setUpgradeOptions] = useState<readonly UpgradeOption[]>([]);
+  const [synergyOptions, setSynergyOptions] = useState<
+    readonly SynergyChoiceOption[]
+  >([]);
+  const [selectedSynergyIds, setSelectedSynergyIds] = useState<string[]>([]);
+  const [synergyCapacity, setSynergyCapacity] = useState(3);
   const [trials, setTrials] = useState<Set<TrialId>>(new Set());
   const [selectedNodes, setSelectedNodes] = useState<number[]>([]);
-  const [forgeAction, setForgeAction] = useState<"swap" | "fuse">("fuse");
-  const [forgeMessage, setForgeMessage] = useState("点选相邻节点，可合铸为独立新器。");
+  const [forgeMessage, setForgeMessage] = useState("先选一项无尽手艺，再用炉火整理器盘。");
+  const [forgeFire, setForgeFire] = useState(0);
+  const [forgeCycle, setForgeCycle] = useState(0);
+  const [forgePurpose, setForgePurpose] =
+    useState<ForgePurpose>("cycle");
+  const [forgeTab, setForgeTab] = useState<ForgeTab>("recipes");
+  const [forgePreview, setForgePreview] = useState<ForgePreview | null>(null);
+  const [insertWeaponId, setInsertWeaponId] = useState<WeaponId | null>(null);
+  const [insertRouteId, setInsertRouteId] = useState<WeaponRouteId | null>(null);
+  const [insertAfter, setInsertAfter] = useState(-1);
+  const [endlessPerkOptions, setEndlessPerkOptions] = useState<
+    readonly EndlessPerkDefinition[]
+  >([]);
+  const [endlessPerkChosen, setEndlessPerkChosen] = useState<string | null>(null);
+  const [perkRefreshAvailable, setPerkRefreshAvailable] = useState(false);
   const [result, setResult] = useState<ResultState>({ victory: false, title: "纸尽人归" });
   const [loading, setLoading] = useState({ season: 0, enemy: 0, visual: 0, terms: 0 });
   const [assetsReady, setAssetsReady] = useState(false);
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(initialAudioSettings);
   const [trialsUnlocked, setTrialsUnlocked] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return localStorage.getItem("paper-guild-cleared-v3") === "yes";
-    } catch {
-      return false;
-    }
+    return readProgress().cleared;
   });
   const [tutorialNonce, setTutorialNonce] = useState(0);
 
@@ -267,6 +496,7 @@ export function PaperGuildGame() {
   }, []);
 
   useEffect(() => {
+    saveProgress({});
     const manager = new AudioManager();
     audioRef.current = manager;
 
@@ -334,6 +564,19 @@ export function PaperGuildGame() {
     joystickRef.current.pointerId = -1;
   }, []);
 
+  const syncRunVisuals = useCallback(async (run: RunState) => {
+    const pack = assetsRef.current.visuals;
+    if (!pack) return;
+    const { weaponIds, fusionIds } = currentVisualIds(run);
+    await Promise.all([
+      preloadWeaponVisuals(pack, weaponIds),
+      fusionIds.length > 0
+        ? preloadFusionVisuals(pack, fusionIds)
+        : Promise.resolve(),
+    ]);
+    pruneVisualPack(pack, weaponIds, fusionIds);
+  }, []);
+
   const pauseGame = useCallback(() => {
     const run = runRef.current;
     if (run) finishHumanForm(run.player);
@@ -355,23 +598,102 @@ export function PaperGuildGame() {
     setMode("upgrade");
   }, [releaseMovementInput, setMode]);
 
-  const openForge = useCallback((run: RunState, message?: string) => {
+  const openForge = useCallback((
+    run: RunState,
+    message?: string,
+    purpose: ForgePurpose = "cycle",
+  ) => {
     finishHumanForm(run.player);
     releaseMovementInput();
-    forgeConsumedRef.current = false;
+    setForgePurpose(purpose);
+    setForgeTab(purpose === "celestial" ? "celestial" : "recipes");
+    forgeFireRef.current = run.forgeCredits;
+    setForgeFire(run.forgeCredits);
     setSelectedNodes([]);
-    setForgeMessage(message ?? "器息暂歇。添器、换位或将相邻节点合铸。");
+    setForgePreview(null);
+    setInsertWeaponId(null);
+    setInsertRouteId(null);
+    setInsertAfter(-1);
+
+    if (purpose === "celestial") {
+      setForgeMessage(
+        message ?? "天变化身已伏。此次炼成天时不耗炉火，也不占铸器周期。",
+      );
+      setEndlessPerkOptions([]);
+      setEndlessPerkChosen("即时炼化");
+      setPerkRefreshAvailable(false);
+      setSnapshot(snapshotRun(run));
+      setMode("forge");
+      return;
+    }
+
+    const nextCycle = forgeCycleRef.current + 1;
+    forgeCycleRef.current = nextCycle;
+    setForgeCycle(nextCycle);
+    setForgeMessage(
+      message ?? "器盘游标暂歇。先取一项无尽手艺，再使用留下的炉火。",
+    );
+    run.endlessPerks = {
+      ...run.endlessPerks,
+      refreshesRemaining: 1,
+    };
+    const perkResult = generateEndlessPerkChoices(
+      run.endlessPerks,
+      run.rng,
+      4,
+      endlessChoiceContext(run),
+    );
+    run.endlessPerks = perkResult.state;
+    run.rng = perkResult.rngState;
+    setEndlessPerkOptions(perkResult.choices);
+    setEndlessPerkChosen(
+      perkResult.choices.length === 0 ? "暂无可学手艺" : null,
+    );
+    setPerkRefreshAvailable(perkResult.choices.length > 0);
     const used = new Set(
       (run.weave?.nodes ?? [])
         .filter((node) => node.kind === "weapon")
         .map((node) => node.sourceId as WeaponId),
     );
-    const candidates = WEAPON_IDS.filter((weaponId) => !used.has(weaponId)).slice(0, 6);
+    const candidates = WEAPON_IDS.filter((weaponId) => !used.has(weaponId))
+      .slice(0, 6);
     const visuals = assetsRef.current.visuals;
-    if (visuals && candidates.length > 0) void preloadWeaponVisuals(visuals, candidates);
+    if (visuals && candidates.length > 0) {
+      void preloadWeaponVisuals(visuals, candidates);
+    }
     setSnapshot(snapshotRun(run));
     setMode("forge");
   }, [releaseMovementInput, setMode]);
+
+  const chooseEndlessPerk = useCallback((choice: EndlessPerkDefinition) => {
+    const run = runRef.current;
+    if (!run || endlessPerkChosen) return;
+    run.endlessPerks = applyEndlessPerkChoice(run.endlessPerks, choice.id);
+    setEndlessPerkChosen(choice.name);
+    setPerkRefreshAvailable(false);
+    setForgeMessage(`已收下无尽手艺「${choice.name}」，炉火仍可继续使用。`);
+    setSnapshot(snapshotRun(run));
+    play("sfx.upgrade");
+  }, [endlessPerkChosen, play]);
+
+  const refreshEndlessPerkRow = useCallback(() => {
+    const run = runRef.current;
+    if (!run || !perkRefreshAvailable || endlessPerkChosen) return;
+    const result = refreshEndlessPerkChoices(
+      run.endlessPerks,
+      run.rng,
+      4,
+      endlessChoiceContext(run),
+    );
+    if (!result) return;
+    run.endlessPerks = result.state;
+    run.rng = result.rngState;
+    setEndlessPerkOptions(result.choices);
+    setPerkRefreshAvailable(false);
+    setForgeMessage("整行无尽手艺已免费换过一次。");
+    setSnapshot(snapshotRun(run));
+    play("sfx.ui-confirm");
+  }, [endlessPerkChosen, perkRefreshAvailable, play]);
 
   const endRun = useCallback((victory: boolean, title?: string) => {
     const run = runRef.current;
@@ -380,11 +702,7 @@ export function PaperGuildGame() {
     finishHumanForm(run.player);
     releaseMovementInput();
     if (victory) {
-      try {
-        localStorage.setItem("paper-guild-cleared-v3", "yes");
-      } catch {
-        // Progress still applies for this session when storage is unavailable.
-      }
+      saveProgress({ cleared: true });
       setTrialsUnlocked(true);
     }
     setResult({ victory, title: title ?? (victory ? "绘卷已收" : "纸尽人归") });
@@ -402,6 +720,19 @@ export function PaperGuildGame() {
     }
     if (next === "upgrade") {
       openUpgrade(run);
+    } else if (next === "synergy") {
+      finishHumanForm(run.player);
+      releaseMovementInput();
+      const choices = listSynergyChoices(run);
+      const eligibleIds = new Set(choices.map((choice) => choice.id));
+      setSynergyOptions(choices);
+      setSynergyCapacity(run.build.synergyCapacity);
+      setSelectedSynergyIds(
+        run.activeSynergyIds.filter((id) => eligibleIds.has(id)),
+      );
+      setSnapshot(snapshotRun(run));
+      setMode("synergy");
+      syncMusic();
     } else if (next === "rare") {
       finishHumanForm(run.player);
       releaseMovementInput();
@@ -409,7 +740,14 @@ export function PaperGuildGame() {
       setMode("rare");
       syncMusic();
     } else if (next === "forge") {
-      openForge(run, "阶段战已毕，万器天盘获得一次铸器机会。");
+      openForge(run, "阶段战已毕，器盘添得两点炉火（最多留三点）。");
+      syncMusic();
+    } else if (next === "celestial") {
+      openForge(
+        run,
+        "天变化身已伏。现在可免费炼成天时，不必等下次开炉。",
+        "celestial",
+      );
       syncMusic();
     } else {
       finishHumanForm(run.player);
@@ -420,6 +758,26 @@ export function PaperGuildGame() {
     }
     return true;
   }, [openForge, openUpgrade, releaseMovementInput, setMode, syncMusic]);
+
+  const toggleSynergyChoice = useCallback((id: string) => {
+    const run = runRef.current;
+    if (!run) return;
+    setSelectedSynergyIds((current) => {
+      if (current.includes(id)) return current.filter((item) => item !== id);
+      if (current.length >= run.build.synergyCapacity) return current;
+      return [...current, id];
+    });
+    play("sfx.ui-confirm");
+  }, [play]);
+
+  const confirmSynergyChoice = useCallback(() => {
+    const run = runRef.current;
+    if (!run) return;
+    if (!commitSynergyChoice(run, selectedSynergyIds)) return;
+    setSnapshot(snapshotRun(run));
+    play("sfx.synergy");
+    openNextQueuedModal(run);
+  }, [openNextQueuedModal, play, selectedSynergyIds]);
 
   const handleEvents = useCallback((run: RunState, events: RunEvent[]) => {
     for (const event of events) {
@@ -448,6 +806,12 @@ export function PaperGuildGame() {
     }
 
     const queued: QueuedModal[] = [];
+    if (events.some((event) => event.type === "synergyChoice")) {
+      queued.push("synergy");
+    }
+    if (events.some((event) => event.type === "celestialReady")) {
+      queued.push("celestial");
+    }
     if (events.some((event) => event.type === "finalBoss")) queued.push("bossChoice");
     if (events.some((event) => event.type === "midBoss")) queued.push("rare");
     if (events.some((event) => event.type === "forge")) queued.push("forge");
@@ -476,10 +840,29 @@ export function PaperGuildGame() {
             const synergy = applyUpgrade(run, option);
             if (synergy) play("sfx.synergy");
             else play("sfx.upgrade");
+            void syncRunVisuals(run);
             refreshSnapshot();
             openNextQueuedModal(run);
           }
         }
+      }
+      if (
+        modeRef.current === "forge" &&
+        !endlessPerkChosen &&
+        ["1", "2", "3", "4"].includes(key)
+      ) {
+        const option = endlessPerkOptions[Number(key) - 1];
+        if (option) chooseEndlessPerk(option);
+      }
+      if (
+        modeRef.current === "synergy" &&
+        /^[1-9]$/.test(key)
+      ) {
+        const option = synergyOptions[Number(key) - 1];
+        if (option) toggleSynergyChoice(option.id);
+      }
+      if (modeRef.current === "synergy" && key === "enter") {
+        confirmSynergyChoice();
       }
     };
     const onKeyUp = (event: KeyboardEvent) => keysRef.current.delete(event.key.toLowerCase());
@@ -496,7 +879,21 @@ export function PaperGuildGame() {
       window.removeEventListener("keyup", onKeyUp);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [openNextQueuedModal, pauseGame, play, refreshSnapshot, setMode, upgradeOptions]);
+  }, [
+    chooseEndlessPerk,
+    confirmSynergyChoice,
+    endlessPerkChosen,
+    endlessPerkOptions,
+    openNextQueuedModal,
+    pauseGame,
+    play,
+    refreshSnapshot,
+    setMode,
+    syncRunVisuals,
+    synergyOptions,
+    toggleSynergyChoice,
+    upgradeOptions,
+  ]);
 
   const pollGamepadUi = useCallback((gamepad: Gamepad, time: number) => {
     const state = gamepadUiRef.current;
@@ -604,6 +1001,10 @@ export function PaperGuildGame() {
     }
     for (const owner of newOwners) {
       if (WEAPON_IDS.includes(owner as WeaponId)) play(WEAPON_AUDIO[owner as WeaponId].fire);
+      if (owner.startsWith("fusion:")) {
+        const fusionId = owner.slice("fusion:".length) as FusionId;
+        if (fusionId in FUSION_ATLASES) play(getFusionSfxCue(fusionId));
+      }
     }
     if (run.kills > previous.kills) play("sfx.enemy-death");
 
@@ -707,9 +1108,21 @@ export function PaperGuildGame() {
     ]);
     const run = createRun(trials);
     runRef.current = run;
+    await syncRunVisuals(run);
     releaseMovementInput();
     queuedModalsRef.current = [];
-    forgeConsumedRef.current = false;
+    forgeFireRef.current = 0;
+    forgeCycleRef.current = 0;
+    setForgeFire(0);
+    setForgeCycle(0);
+    setForgePurpose("cycle");
+    setForgeTab("recipes");
+    setForgePreview(null);
+    setEndlessPerkOptions([]);
+    setEndlessPerkChosen(null);
+    setSynergyOptions([]);
+    setSelectedSynergyIds([]);
+    setSynergyCapacity(3);
     bossPreloadRef.current = { taotie: false, nian: false };
     combatAudioRef.current = {
       actorIds: new Set(),
@@ -729,6 +1142,7 @@ export function PaperGuildGame() {
     if (!run) return;
     const synergy = applyUpgrade(run, option);
     play(synergy ? "sfx.synergy" : "sfx.upgrade");
+    void syncRunVisuals(run);
     setSnapshot(snapshotRun(run));
     openNextQueuedModal(run);
   };
@@ -747,6 +1161,7 @@ export function PaperGuildGame() {
     const run = runRef.current;
     if (!run) return;
     startEndless(run);
+    void syncRunVisuals(run);
     setSnapshot(snapshotRun(run));
     play("sfx.ultimate");
     syncMusic();
@@ -757,9 +1172,22 @@ export function PaperGuildGame() {
     runRef.current = null;
     releaseMovementInput();
     queuedModalsRef.current = [];
-    forgeConsumedRef.current = false;
+    forgeFireRef.current = 0;
+    forgeCycleRef.current = 0;
+    setForgeFire(0);
+    setForgeCycle(0);
+    setForgePurpose("cycle");
+    setForgeTab("recipes");
+    setForgePreview(null);
+    setEndlessPerkOptions([]);
+    setEndlessPerkChosen(null);
+    setSynergyOptions([]);
+    setSelectedSynergyIds([]);
+    setSynergyCapacity(3);
     setSnapshot(emptySnapshot);
     setSelectedNodes([]);
+    const visuals = assetsRef.current.visuals;
+    if (visuals) pruneVisualPack(visuals, ["sword"], []);
     setMode("menu");
     audioRef.current?.stopMusic();
   };
@@ -776,7 +1204,12 @@ export function PaperGuildGame() {
 
   const updateAudio = (update: Partial<AudioSettings>) => {
     audioRef.current?.setSettings(update);
-    setAudioSettings(audioRef.current?.getSettings() ?? audioSettings);
+    const settings = audioRef.current?.getSettings() ?? {
+      ...audioSettings,
+      ...update,
+    };
+    setAudioSettings(settings);
+    saveProgress({ settings });
     if (update.muted === false) {
       void audioRef.current?.initFromGesture().then(() => syncMusic());
     }
@@ -828,78 +1261,273 @@ export function PaperGuildGame() {
       if (current.length >= 2) return [index];
       return [...current, index];
     });
+    setForgePreview(null);
   };
 
-  const executeForgeAction = async () => {
+  const previewFusion = (first: number, second: number) => {
     const run = runRef.current;
-    if (!run?.weave || selectedNodes.length !== 2 || forgeConsumedRef.current) return;
+    if (!run?.weave) return;
+    const weave = run.weave;
+    const firstNode = weave.nodes[first];
+    const secondNode = weave.nodes[second];
+    if (
+      !firstNode ||
+      !secondNode ||
+      firstNode.kind !== "weapon" ||
+      secondNode.kind !== "weapon"
+    ) {
+      setForgeMessage("只有两件本命器可以合器。");
+      play("sfx.ui-back");
+      return;
+    }
+    const definition = findFusionDefinition(
+      firstNode.sourceId as WeaponId,
+      secondNode.sourceId as WeaponId,
+    );
+    if (!definition) {
+      setForgeMessage("所选两器尚无合器谱。请从“可做配方”选择。");
+      play("sfx.ui-back");
+      return;
+    }
+
+    let arranged = weave;
+    let fusionSecond = second;
+    let cost: 1 | 2 = 1;
+    if (!areRingAdjacent(first, second, weave.nodes.length)) {
+      const clockwise = (first + 1) % weave.nodes.length;
+      const counterClockwise =
+        (first - 1 + weave.nodes.length) % weave.nodes.length;
+      fusionSecond =
+        circularDistance(second, clockwise, weave.nodes.length) <=
+        circularDistance(second, counterClockwise, weave.nodes.length)
+          ? clockwise
+          : counterClockwise;
+      arranged = swapWeaveNodes(weave, second, fusionSecond);
+      cost = 2;
+    }
+    const result = fuseAdjacentNodes(arranged, first, fusionSecond);
+    if (!result.ok) {
+      setForgeMessage("当前器盘无法完成这张配方。");
+      play("sfx.ui-back");
+      return;
+    }
+    setForgePreview({
+      kind: "fusion",
+      title: definition.canonicalName,
+      description:
+        cost === 1
+          ? `${definition.pairLabel}相邻，直接合器并空出一格。`
+          : `${definition.pairLabel}不相邻：自动采用最短调位，再完成合器。`,
+      cost,
+      before: deriveWeaveTerminal(weave).name,
+      after: deriveWeaveTerminal(result.state).name,
+      weave: result.state,
+      fusionId: definition.id,
+    });
+    setForgeMessage("配方已排好，核对收势变化后再落锤。");
+  };
+
+  const previewSelectedSwap = () => {
+    const run = runRef.current;
+    if (!run?.weave || selectedNodes.length !== 2) return;
     const [first, second] = selectedNodes;
-    if (forgeAction === "swap") {
-      swapEndlessNodes(run, first, second);
-      setForgeMessage("节点次序已交换；下一轮终式签名会随之改变。");
-      play("sfx.ui-confirm");
-      forgeConsumedRef.current = true;
-    } else {
-      const existingFusions = new Set(
-        run.weave.nodes
-          .filter((node) => node.kind === "fusion")
-          .map((node) => node.sourceId),
+    const swapped = swapWeaveNodes(run.weave, first, second);
+    if (swapped === run.weave) return;
+    setForgePreview({
+      kind: "swap",
+      title: "调位",
+      description: `交换「${run.weave.nodes[first].name}」与「${run.weave.nodes[second].name}」，器盘顺序会改变收势。`,
+      cost: 1,
+      before: deriveWeaveTerminal(run.weave).name,
+      after: deriveWeaveTerminal(swapped).name,
+      weave: swapped,
+    });
+    setForgeMessage("调位预览已生成；器盘本身只展示落锤后的结果。");
+  };
+
+  const previewInsert = () => {
+    const run = runRef.current;
+    if (!run?.weave || !insertWeaponId || !insertRouteId) return;
+    const weaponState: WeaponState = {
+      id: insertWeaponId,
+      level: 3,
+      routeId: insertRouteId,
+    };
+    const result = insertWeaponNode(run.weave, weaponState, insertAfter);
+    if (!result.ok) {
+      setForgeMessage(
+        result.reason === "node-capacity"
+          ? "器盘已满，先合器释放盘位。"
+          : "该武器已经在器盘中。",
       );
-      const name = fuseEndlessNodesWithName(run, first, second);
-      if (name) {
-        const fusion = run.weave.nodes.find((node) =>
-          node.kind === "fusion" && !existingFusions.has(node.sourceId)
-        );
-        const visuals = assetsRef.current.visuals;
-        if (visuals && fusion) {
-          await preloadFusionVisuals(visuals, [fusion.sourceId as FusionId]);
-        }
-        setForgeMessage(`合铸完成：${name}。两个节点已归一，并释放一个盘位。`);
-        play("sfx.fusion");
-        forgeConsumedRef.current = true;
-      } else {
-        setForgeMessage("这两个节点必须相邻，且属于十五组精选合铸配方之一。");
+      play("sfx.ui-back");
+      return;
+    }
+    const definition = getWeaponDefinition(insertWeaponId);
+    const route = definition.routes.find(
+      (candidate) => candidate.id === insertRouteId,
+    );
+    setForgePreview({
+      kind: "insert",
+      title: `添器 · ${definition.name}`,
+      description: `以「${route?.name ?? "既定改法"}」插入${
+        insertAfter < 0 ? "盘首" : `「${run.weave.nodes[insertAfter]?.name}」之后`
+      }。`,
+      cost: 1,
+      before: deriveWeaveTerminal(run.weave).name,
+      after: deriveWeaveTerminal(result.state).name,
+      weave: result.state,
+    });
+    setForgeMessage("新器位置与改法已排好，确认后才会消耗炉火。");
+  };
+
+  const previewTemper = (offer: TemperForgeOffer) => {
+    const run = runRef.current;
+    if (!run?.weave || offer.kind !== "temper") return;
+    const nextWeave = applyForgeOffer(run.weave, offer);
+    if (nextWeave === run.weave) {
+      setForgeMessage("这件器物目前不能继续做细。");
+      return;
+    }
+    const weapon = nextWeave.nodes[offer.nodeIndex]?.weaponState;
+    setForgePreview({
+      kind: "temper",
+      title: offer.title,
+      description: `${offer.description}${
+        weapon?.level === 3
+          ? " 此次将确定改法。"
+          : weapon?.level === 5
+            ? " 此次将完成定型。"
+            : ""
+      }`,
+      cost: 1,
+      before: deriveWeaveTerminal(run.weave).name,
+      after: deriveWeaveTerminal(nextWeave).name,
+      weave: nextWeave,
+    });
+    setForgeMessage("做细预览已生成，确认后推进一阶。");
+  };
+
+  const previewCelestial = () => {
+    const run = runRef.current;
+    if (!run?.weave) return;
+    let baseWeave = run.weave;
+    let celestialInsertAfter = insertAfter;
+    let replacedName: string | undefined;
+    if (baseWeave.nodes.length >= baseWeave.maxNodes) {
+      if (selectedNodes.length !== 1) {
+        setForgeMessage("器盘已满：先点一格作为替换位，炼化仍然免费。");
         play("sfx.ui-back");
+        return;
       }
+      const selectedIndex = selectedNodes[0];
+      replacedName = baseWeave.nodes[selectedIndex]?.name;
+      baseWeave = removeWeaveNode(baseWeave, selectedIndex);
+      celestialInsertAfter = selectedIndex === 0 ? -1 : selectedIndex - 1;
     }
+    const result = captureDefeatedIntrusion(
+      baseWeave,
+      celestialInsertAfter,
+    );
+    if (!result.ok) {
+      setForgeMessage("需先击败敌对天变化身，并确保器盘仍有空位。");
+      play("sfx.ui-back");
+      return;
+    }
+    setForgePreview({
+      kind: "celestial",
+      title: `炼天时 · ${result.node.name}`,
+      description: replacedName
+        ? `以「${replacedName}」的盘位换入己方天时。`
+        : `将已伏天变炼为己方天时，插入${
+            celestialInsertAfter < 0
+              ? "盘首"
+              : `「${baseWeave.nodes[celestialInsertAfter]?.name}」之后`
+          }。`,
+      cost: 0,
+      before: deriveWeaveTerminal(run.weave).name,
+      after: deriveWeaveTerminal(result.state).name,
+      weave: result.state,
+    });
+    setForgeMessage("天时已排入预览；此次炼化不耗炉火。");
+  };
+
+  const previewDismantle = () => {
+    const run = runRef.current;
+    if (!run?.weave || selectedNodes.length !== 1) return;
+    const nodeIndex = selectedNodes[0];
+    const node = run.weave.nodes[nodeIndex];
+    if (!node || run.weave.nodes.length <= 1) {
+      setForgeMessage("器盘至少要留一件器物。");
+      play("sfx.ui-back");
+      return;
+    }
+    const nextWeave = removeWeaveNode(run.weave, nodeIndex);
+    if (nextWeave === run.weave) return;
+    setForgePreview({
+      kind: "dismantle",
+      title: `拆下 · ${node.name}`,
+      description: "拆下这一格并留出盘位；原器不会自动回到盘中。",
+      cost: 1,
+      before: deriveWeaveTerminal(run.weave).name,
+      after: deriveWeaveTerminal(nextWeave).name,
+      weave: nextWeave,
+    });
+    setForgeMessage("拆器结果已排好，确认后才会扣一火。");
+  };
+
+  const confirmForgePreview = async () => {
+    const run = runRef.current;
+    const preview = forgePreview;
+    if (!run?.weave || !preview) return;
+    if (run.forgeCredits < preview.cost) {
+      setForgeMessage(`炉火不足：此操作需要 ${preview.cost} 点。`);
+      play("sfx.ui-back");
+      return;
+    }
+    run.weave = preview.weave;
+    run.forgeCredits -= preview.cost;
+    forgeFireRef.current = run.forgeCredits;
+    setForgeFire(run.forgeCredits);
+    await syncRunVisuals(run);
+    play(
+      preview.kind === "fusion"
+        ? "sfx.fusion"
+        : preview.kind === "celestial"
+          ? "sfx.ultimate"
+          : preview.kind === "swap"
+            ? "sfx.ui-confirm"
+            : "sfx.upgrade",
+    );
+    setForgeMessage(
+      preview.cost === 0
+        ? `${preview.title}已完成，炉火不减。`
+        : `${preview.title}已完成。余 ${run.forgeCredits} 点炉火，可继续操作。`,
+    );
     setSelectedNodes([]);
+    setForgePreview(null);
+    setInsertWeaponId(null);
+    setInsertRouteId(null);
     setSnapshot(snapshotRun(run));
-    if (forgeConsumedRef.current) openNextQueuedModal(run);
-  };
-
-  const addEndlessWeapon = (weaponId: WeaponId) => {
-    const run = runRef.current;
-    if (!run || forgeConsumedRef.current) return;
-    if (!insertEndlessWeapon(run, weaponId)) {
-      setForgeMessage("天盘已满，先合铸相邻节点释放盘位。");
-      return;
-    }
-    forgeConsumedRef.current = true;
-    setForgeMessage(`${getWeaponDefinition(weaponId).name}已插入天盘末位。`);
-    play("sfx.upgrade");
-    setSnapshot(snapshotRun(run));
-    openNextQueuedModal(run);
-  };
-
-  const captureCelestial = () => {
-    const run = runRef.current;
-    if (!run || forgeConsumedRef.current) return;
-    const name = captureEndlessCelestial(run);
-    if (!name) {
-      setForgeMessage("需先击败敌对天罚化身，并确保天盘仍有空位。");
-      return;
-    }
-    forgeConsumedRef.current = true;
-    setForgeMessage(`${name}已炼入天盘，敌对天罚转为己方天律。`);
-    play("sfx.ultimate");
-    setSnapshot(snapshotRun(run));
-    openNextQueuedModal(run);
   };
 
   const closeForge = () => {
     const run = runRef.current;
-    forgeConsumedRef.current = true;
+    if (
+      forgePurpose === "celestial" &&
+      run?.weave?.activeIntrusion?.phase === "defeated"
+    ) {
+      setForgeMessage("先把已伏天变炼入器盘；满盘时可点一格免费替换。");
+      play("sfx.ui-back");
+      return;
+    }
+    if (!endlessPerkChosen) {
+      setForgeMessage("先从四项无尽手艺中取一项，才可定盘续战。");
+      play("sfx.ui-back");
+      return;
+    }
     setSelectedNodes([]);
+    setForgePreview(null);
     if (run) openNextQueuedModal(run);
     else setMode("playing");
   };
@@ -914,8 +1542,103 @@ export function PaperGuildGame() {
         .filter((node) => node.kind === "weapon")
         .map((node) => node.sourceId as WeaponId),
     );
-    return WEAPON_IDS.filter((weaponId) => !used.has(weaponId)).slice(0, 6);
+    if (
+      !snapshot.weave ||
+      snapshot.weave.nodes.length >= snapshot.weave.maxNodes
+    ) {
+      return [];
+    }
+    return WEAPON_IDS.filter((weaponId) => !used.has(weaponId));
   }, [snapshot.weave]);
+
+  const fusionRecipes = useMemo<readonly ForgeRecipeCard[]>(() => {
+    const weave = snapshot.weave;
+    if (!weave) return [];
+    if (
+      weave.nodes.filter((node) => node.kind === "fusion").length >=
+      weave.maxFusions
+    ) {
+      return [];
+    }
+    const recipes: ForgeRecipeCard[] = [];
+    for (let first = 0; first < weave.nodes.length; first += 1) {
+      for (let second = first + 1; second < weave.nodes.length; second += 1) {
+        const firstNode = weave.nodes[first];
+        const secondNode = weave.nodes[second];
+        if (firstNode.kind !== "weapon" || secondNode.kind !== "weapon") continue;
+        const definition = findFusionDefinition(
+          firstNode.sourceId as WeaponId,
+          secondNode.sourceId as WeaponId,
+        );
+        if (!definition) continue;
+        let arranged = weave;
+        let fusionSecond = second;
+        const adjacent = areRingAdjacent(first, second, weave.nodes.length);
+        if (!adjacent) {
+          const clockwise = (first + 1) % weave.nodes.length;
+          const counterClockwise =
+            (first - 1 + weave.nodes.length) % weave.nodes.length;
+          fusionSecond =
+            circularDistance(second, clockwise, weave.nodes.length) <=
+            circularDistance(second, counterClockwise, weave.nodes.length)
+              ? clockwise
+              : counterClockwise;
+          arranged = swapWeaveNodes(weave, second, fusionSecond);
+        }
+        const result = fuseAdjacentNodes(arranged, first, fusionSecond);
+        if (!result.ok) continue;
+        recipes.push({
+          id: `${firstNode.instanceId}:${secondNode.instanceId}:${definition.id}`,
+          firstIndex: first,
+          secondIndex: second,
+          fusionId: definition.id,
+          title: definition.canonicalName,
+          pairLabel: definition.pairLabel,
+          description: definition.description,
+          cost: adjacent ? 1 : 2,
+          firstWeaponId: firstNode.sourceId as WeaponId,
+          secondWeaponId: secondNode.sourceId as WeaponId,
+          before: deriveWeaveTerminal(weave).name,
+          after: deriveWeaveTerminal(result.state).name,
+          nodesBefore: weave.nodes.length,
+          nodesAfter: result.state.nodes.length,
+        });
+      }
+    }
+    return recipes;
+  }, [snapshot.weave]);
+
+  const temperOffers = useMemo<readonly TemperForgeOffer[]>(() => {
+    const weave = snapshot.weave;
+    if (!weave) return [];
+    const generated = generateForgeOffers(
+      weave,
+      createRngState(`forge-ui-${forgeCycle}-${weave.nextInstance}`),
+      { ...createForgeState(0), cycle: forgeCycle },
+      96,
+    );
+    return generated.offers.filter(
+      (offer): offer is TemperForgeOffer => offer.kind === "temper",
+    );
+  }, [forgeCycle, snapshot.weave]);
+  const selectedRecipe =
+    selectedNodes.length === 2
+      ? fusionRecipes.find(
+          (recipe) =>
+            recipe.firstIndex === selectedNodes[0] &&
+            recipe.secondIndex === selectedNodes[1],
+        ) ??
+        fusionRecipes.find(
+          (recipe) =>
+            recipe.firstIndex === selectedNodes[1] &&
+            recipe.secondIndex === selectedNodes[0],
+        )
+      : undefined;
+  const previewWeave = forgePreview?.weave ?? snapshot.weave;
+  const requiredSynergyCount = Math.min(
+    synergyCapacity,
+    synergyOptions.length,
+  );
 
   return (
     <main className="page">
@@ -936,7 +1659,7 @@ export function PaperGuildGame() {
               <div className="status-card">
                 <div className="status-line">
                   <span>纸命 <b className="hearts">{"◆".repeat(Math.max(0, snapshot.life))}{"◇".repeat(Math.max(0, snapshot.maxLife - snapshot.life))}</b></span>
-                  <strong>第 {snapshot.level} 境</strong>
+                  <strong>等级 {snapshot.level}</strong>
                 </div>
                 <div className="xp-track" aria-label="经验进度">
                   <span style={{ width: `${clamp(snapshot.xp / snapshot.nextXp, 0, 1) * 100}%` }} />
@@ -957,7 +1680,7 @@ export function PaperGuildGame() {
 
             {snapshot.weave && (
               <div className="weave-hud">
-                <span className="weave-title">万器经纬</span>
+                <span className="weave-title">器盘</span>
                 <div className="weave-mini-ring">
                   {snapshot.weave.nodes.map((node, index) => (
                     <i
@@ -970,11 +1693,11 @@ export function PaperGuildGame() {
                   ))}
                 </div>
                 <span className="weave-charge">
-                  器息 {Math.round(snapshot.weave.pulse.nodeProgress * 100)}%
+                  游标 {Math.round(snapshot.weave.pulse.nodeProgress * 100)}%
                 </span>
                 {snapshot.weave.activeIntrusion && (
                   <span className={`intrusion ${snapshot.weave.activeIntrusion.phase}`}>
-                    天罚 · {snapshot.weave.activeIntrusion.phase === "warning" ? "将临" : snapshot.weave.activeIntrusion.phase === "defeated" ? "可炼化" : "入阵"}
+                    天变 · {snapshot.weave.activeIntrusion.phase === "warning" ? "将临" : snapshot.weave.activeIntrusion.phase === "defeated" ? "可炼化" : "入阵"}
                   </span>
                 )}
               </div>
@@ -989,7 +1712,11 @@ export function PaperGuildGame() {
                       aria-hidden="true"
                       style={weaponThumbStyle(
                         weapon.id,
-                        weaponAtlasFrame(weapon.level, weapon.routeId),
+                        {
+                          level: weapon.level,
+                          route: weapon.routeId,
+                          mastery: weapon.masteryId,
+                        },
                       )}
                     />
                     <b>{getWeaponDefinition(weapon.id).shortName}</b>
@@ -999,7 +1726,7 @@ export function PaperGuildGame() {
                 ))}
               </div>
               <div className="resonance-list">
-                {snapshot.synergies.map((name) => <span key={name}>合鸣 · {name}</span>)}
+                {snapshot.synergies.map((name) => <span key={name}>搭手 · {name}</span>)}
               </div>
             </div>
           </div>
@@ -1007,7 +1734,7 @@ export function PaperGuildGame() {
 
         {snapshot.terminalLabelLife > 0 && (
           <div className="terminal-callout">
-            <span>终式</span>
+            <span>收势</span>
             <strong>{snapshot.terminalLabel}</strong>
           </div>
         )}
@@ -1024,17 +1751,18 @@ export function PaperGuildGame() {
               <p className="kicker"><span className="seal">百工</span> 水墨绘本 · 剪纸肉鸽</p>
               <h1 className="title">纸上<span>百工</span></h1>
               <p className="subtitle">
-                清俊纸旅人携十般百工器物走过二十四节气。只需移动，让三路进化、双刻成器与万器经纬自动写成你的战局。
+                清俊纸旅人携十般百工器物走过二十四节气。只需移动，让「拿到、做细、改法、再磨、定型」与器盘自然接成一局。
               </p>
               <div className="feature-row">
                 <span>10 把本命器</span>
-                <span>30 条路线</span>
-                <span>12 套合鸣</span>
-                <span>15 件合铸器</span>
+                <span>30 种改法</span>
+                <span>12 套搭手</span>
+                <span>30 件合器</span>
+                <span>32 项无尽手艺</span>
                 <span>二十四节气</span>
               </div>
               <p className="tao-note">
-                少量道门元素位于「五雷令、雷音琵琶、雷部天罚与法铃音色」，其余仍是市井百工与岁时行旅。
+                少量道门元素只放在「五雷木令、伞骨接雷、弦尾落雷、雷部天变与法铃音色」，其余仍是市井百工与岁时行旅。
               </p>
               <div className="button-row">
                 <button className="primary-button" onClick={startGame} disabled={!assetsReady}>
@@ -1073,27 +1801,24 @@ export function PaperGuildGame() {
               <p className="kicker">器物自择 · 战局暂停</p>
               <h2 className="upgrade-heading">
                 {upgradeOptions[0]?.kind === "route"
-                  ? "择定一条器路"
+                  ? "选定一种改法"
                   : upgradeOptions[0]?.kind === "mastery"
-                    ? "镌下一枚成器刻印"
+                    ? "给器物定型"
                     : "拾取一页百工谱"}
               </h2>
               <p className="upgrade-note">
-                三级固定同时展示三条路线，五级固定展示两种刻印；选择后本局不可反悔。
+                第三阶固定同时展示三种改法，第五阶固定展示两种定型；选择后本局不可反悔。
               </p>
               <div className={`upgrade-grid count-${upgradeOptions.length}`}>
                 {upgradeOptions.map((option, index) => {
                   const color = option.kind === "utility"
                     ? "#886b42"
                     : getWeaponDefinition(option.weaponId).color;
-                  const currentRoute =
-                    option.kind === "utility"
-                      ? undefined
-                      : option.kind === "route" || option.kind === "mastery"
-                        ? option.routeId
-                        : snapshot.weapons.find(
-                            (weapon) => weapon.id === option.weaponId,
-                          )?.routeId;
+                  const currentWeapon = option.kind === "utility"
+                    ? undefined
+                    : snapshot.weapons.find(
+                        (weapon) => weapon.id === option.weaponId,
+                      );
                   const targetLevel =
                     option.kind === "acquire"
                       ? 1
@@ -1119,7 +1844,10 @@ export function PaperGuildGame() {
                           aria-hidden="true"
                           style={weaponThumbStyle(
                             option.weaponId,
-                            weaponAtlasFrame(targetLevel, currentRoute),
+                            {
+                              level: targetLevel,
+                              ...routeAndMasteryForOption(option, currentWeapon),
+                            },
                           )}
                         />
                       )}
@@ -1151,12 +1879,89 @@ export function PaperGuildGame() {
           </div>
         )}
 
+        {mode === "synergy" && (
+          <div className="overlay modal-shade">
+            <section className="upgrade-panel synergy-panel">
+              <p className="kicker">搭手已多 · 战局暂停</p>
+              <h2 className="upgrade-heading">这回让哪几门手艺搭手</h2>
+              <p className="upgrade-note">
+                已有 {synergyOptions.length} 种搭法，器位只能留 {requiredSynergyCount} 种。
+                点选后按确认；下次新搭法出现时仍可重排。
+              </p>
+              <div className="synergy-choice-grid">
+                {synergyOptions.map((option, index) => {
+                  const selected = selectedSynergyIds.includes(option.id);
+                  const locked =
+                    !selected &&
+                    selectedSynergyIds.length >= requiredSynergyCount;
+                  return (
+                    <button
+                      key={option.id}
+                      className={`synergy-choice-card ${selected ? "is-selected" : ""}`}
+                      aria-pressed={selected}
+                      disabled={locked}
+                      onClick={() => toggleSynergyChoice(option.id)}
+                      style={{
+                        "--accent": getWeaponDefinition(option.weapons[0]).color,
+                      } as React.CSSProperties}
+                    >
+                      <span className="card-type">
+                        {index + 1} · {option.weapons
+                          .map((weaponId) => getWeaponDefinition(weaponId).shortName)
+                          .join(" × ")}
+                      </span>
+                      <span className="synergy-pair-art" aria-hidden="true">
+                        {option.weapons.map((weaponId) => (
+                          <i
+                            key={weaponId}
+                            style={weaponThumbStyle(
+                              weaponId,
+                              (() => {
+                                const weapon = snapshot.weapons.find(
+                                  (weapon) => weapon.id === weaponId,
+                                );
+                                return {
+                                  level: weapon?.level ?? 3,
+                                  route: weapon?.routeId,
+                                  mastery: weapon?.masteryId,
+                                };
+                              })(),
+                            )}
+                          />
+                        ))}
+                      </span>
+                      <strong>{option.name}</strong>
+                      <small>{option.description}</small>
+                      <em>{selected ? "已留" : locked ? "先取消一项" : "可选"}</em>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="synergy-confirm-row">
+                <span>
+                  已选 {selectedSynergyIds.length}/{requiredSynergyCount}
+                  <small>键盘 1–9 勾选，Enter 确认</small>
+                </span>
+                <button
+                  className="primary-button compact"
+                  disabled={
+                    selectedSynergyIds.length !== requiredSynergyCount
+                  }
+                  onClick={confirmSynergyChoice}
+                >
+                  留下这些搭手
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+
         {mode === "rare" && (
           <div className="overlay modal-shade">
             <section className="upgrade-panel rare-panel">
-              <p className="kicker">饕餮遗珍 · 质变奖励</p>
-              <h2 className="upgrade-heading">饕餮遗珍，择一改局</h2>
-              <p className="upgrade-note">三件遗珍都会改变后半局的构筑走向。</p>
+              <p className="kicker">吞卷饕餮已退 · 特别奖励</p>
+              <h2 className="upgrade-heading">从三种做法里选一项</h2>
+              <p className="upgrade-note">每项都会直接改变后半程的做法。</p>
               <div className="upgrade-grid">
                 {RARE_CHOICES.map((choice, index) => (
                   <button
@@ -1164,7 +1969,7 @@ export function PaperGuildGame() {
                     className="upgrade-card rare-card"
                     onClick={() => chooseRare(choice.id)}
                   >
-                    <span className="card-type">{index + 1} · 饕餮遗珍</span>
+                    <span className="card-type">{index + 1} · 特别做法</span>
                     <h3>{choice.name}</h3>
                     <p>{choice.description}</p>
                   </button>
@@ -1179,53 +1984,368 @@ export function PaperGuildGame() {
             <section className="forge-panel">
               <div className="forge-heading-row">
                 <div>
-                  <p className="kicker">无尽铸器 · 每两分钟一次</p>
-                  <h2 className="upgrade-heading">万器经纬天盘</h2>
+                  <p className="kicker">
+                    {forgePurpose === "celestial"
+                      ? "天变化身已伏 · 即刻炼化"
+                      : "无尽手艺 · 每两分钟开炉"}
+                  </p>
+                  <h2 className="upgrade-heading">
+                    {forgePurpose === "celestial" ? "炼成天时" : "器盘作坊"}
+                  </h2>
                 </div>
-                <span className="capacity">节点 {snapshot.weave.nodes.length}/{snapshot.weave.maxNodes} · 合铸 {snapshot.weave.nodes.filter((node) => node.kind === "fusion").length}/{snapshot.weave.maxFusions}</span>
+                <div className="forge-ledger">
+                  <span className="forge-fire" aria-label={`剩余${forgeFire}点炉火`}>
+                    炉火 {"◆".repeat(forgeFire)}{"◇".repeat(3 - forgeFire)}
+                  </span>
+                  <span className="capacity">
+                    节点 {snapshot.weave.nodes.length}/{snapshot.weave.maxNodes}
+                    {" · "}合器 {snapshot.weave.nodes.filter((node) => node.kind === "fusion").length}/{snapshot.weave.maxFusions}
+                  </span>
+                </div>
               </div>
               <p className="forge-message">{forgeMessage}</p>
-              <div className="forge-layout">
-                <div className="weave-ring-large">
-                  {snapshot.weave.nodes.map((node, index) => (
-                    <button
-                      key={node.instanceId}
-                      className={`weave-node ${node.kind} ${selectedNodes.includes(index) ? "selected" : ""} ${index === snapshot.weave?.pulse.nodeIndex ? "pulse" : ""}`}
-                      onClick={() => onNodeSelect(index)}
-                      style={{ "--node-index": index, "--node-count": snapshot.weave?.nodes.length ?? 1 } as React.CSSProperties}
-                    >
-                      <b>{index + 1}</b>
-                      <span>{node.name}</span>
-                      <small>{node.kind === "fusion" ? "合铸器" : node.kind === "celestial" ? "天律" : "本命器"}</small>
-                    </button>
-                  ))}
-                  <div className="weave-core">
-                    <span>顺时针器息</span>
-                    <strong>{Math.round(snapshot.weave.pulse.nodeProgress * 100)}%</strong>
-                  </div>
-                </div>
 
-                <div className="forge-controls">
-                  <div className="forge-tabs">
-                    <button className={forgeAction === "fuse" ? "active" : ""} onClick={() => setForgeAction("fuse")}>相邻合铸</button>
-                    <button className={forgeAction === "swap" ? "active" : ""} onClick={() => setForgeAction("swap")}>交换次序</button>
+              {forgePurpose === "cycle" && (
+              <section className={`forge-perk-section ${endlessPerkChosen ? "chosen" : ""}`}>
+                <div className="forge-section-heading">
+                  <div>
+                    <strong>无尽手艺 · 四选一</strong>
+                    <small>{endlessPerkChosen ? `已取「${endlessPerkChosen}」` : "键盘可按 1–4；本轮可免费整行换一次"}</small>
                   </div>
-                  <button className="primary-button compact" onClick={executeForgeAction} disabled={selectedNodes.length !== 2}>
-                    {forgeAction === "fuse" ? "合铸所选节点" : "交换所选节点"}
+                  <button
+                    className="forge-refresh"
+                    onClick={refreshEndlessPerkRow}
+                    disabled={!perkRefreshAvailable || Boolean(endlessPerkChosen)}
+                  >
+                    免费换一排
                   </button>
-                  <div className="new-node-list">
-                    <p>插入新器节点</p>
-                    {availableNodes.map((weaponId) => (
-                      <button key={weaponId} onClick={() => addEndlessWeapon(weaponId)}>
-                        {getWeaponDefinition(weaponId).name}
+                </div>
+                <div className="forge-perk-row">
+                  {endlessPerkOptions.map((choice, index) => {
+                    const rank = snapshot.endlessPerks?.ranks[choice.id] ?? 0;
+                    return (
+                      <button
+                        key={choice.id}
+                        className="forge-perk-card"
+                        onClick={() => chooseEndlessPerk(choice)}
+                        disabled={Boolean(endlessPerkChosen)}
+                      >
+                        <span>{index + 1} · {perkCategoryLabel(choice.category)}</span>
+                        <strong>{choice.name}</strong>
+                        <small>{choice.description}</small>
+                        <em>{rank > 0 ? `已有 ${rank}/${choice.maxRank}` : `上限 ${choice.maxRank}`}</em>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+              )}
+
+              <div className="forge-workbench">
+                <div className="forge-main-column">
+                  <nav className="forge-mode-tabs" aria-label="器盘操作">
+                    {([
+                      ["recipes", "可做配方"],
+                      ["temper", "添器 / 做细"],
+                      ["arrange", "调位"],
+                      ["celestial", "天时 / 拆器"],
+                    ] as const).map(([tab, label]) => (
+                      <button
+                        key={tab}
+                        className={forgeTab === tab ? "active" : ""}
+                        onClick={() => {
+                          setForgeTab(tab);
+                          setForgePreview(null);
+                        }}
+                      >
+                        {label}
                       </button>
                     ))}
-                  </div>
-                  {snapshot.weave.activeIntrusion?.phase === "defeated" && (
-                    <button className="celestial-button" onClick={captureCelestial}>炼化敌方天罚为天律</button>
-                  )}
-                  <button className="secondary-button" data-gamepad-cancel onClick={closeForge}>定盘续战</button>
+                  </nav>
+                <div className={`forge-zones tab-${forgeTab}`}>
+                  <section className="forge-zone forge-zone-recipes">
+                    <div className="forge-zone-title">
+                      <strong>可做配方</strong>
+                      <small>相邻 1 火；非相邻自动最短调位后合器，共 2 火</small>
+                    </div>
+                    <div className="forge-option-list recipe-list">
+                      {fusionRecipes.map((recipe) => (
+                        <button
+                          key={recipe.id}
+                          className={`forge-option-card recipe-card ${forgeFire < recipe.cost ? "is-insufficient" : ""}`}
+                          onClick={() => previewFusion(recipe.firstIndex, recipe.secondIndex)}
+                        >
+                          <span>{recipe.pairLabel}</span>
+                          <span
+                            className="recipe-fusion-art"
+                            aria-hidden="true"
+                            style={fusionThumbStyle(recipe.fusionId)}
+                          />
+                          <strong>{recipe.title}</strong>
+                          <small className="recipe-description">
+                            {recipe.description}
+                          </small>
+                          <small className="recipe-terminal-preview">
+                            {recipe.before} → {recipe.after}
+                          </small>
+                          <em>
+                            {recipe.nodesBefore}→{recipe.nodesAfter} 格 ·{" "}
+                            {recipe.cost} 火
+                          </em>
+                        </button>
+                      ))}
+                      {fusionRecipes.length === 0 && (
+                        <p className="forge-empty">当前器盘没有可做配方；可先添器或调位。</p>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="forge-zone forge-zone-temper">
+                    <div className="forge-zone-title">
+                      <strong>添器 / 做细</strong>
+                      <small>先定改法和插入缝隙，再看收势预览</small>
+                    </div>
+                    {availableNodes.length > 0 && (
+                      <div className="forge-add-flow">
+                        <div className="forge-weapon-picks">
+                          {availableNodes.map((weaponId) => (
+                            <button
+                              key={weaponId}
+                              className={insertWeaponId === weaponId ? "active" : ""}
+                              onClick={() => {
+                                setInsertWeaponId(weaponId);
+                                setInsertRouteId(null);
+                                setForgePreview(null);
+                              }}
+                            >
+                              {getWeaponDefinition(weaponId).shortName}
+                            </button>
+                          ))}
+                        </div>
+                        {insertWeaponId && (
+                          <div className="forge-route-picks">
+                            {getWeaponDefinition(insertWeaponId).routes.map((route) => (
+                              <button
+                                key={route.id}
+                                className={insertRouteId === route.id ? "active" : ""}
+                                onClick={() => {
+                                  setInsertRouteId(route.id);
+                                  setForgePreview(null);
+                                }}
+                              >
+                                <i
+                                  aria-hidden="true"
+                                  style={weaponThumbStyle(insertWeaponId, {
+                                    level: 3,
+                                    route: route.id,
+                                  })}
+                                />
+                                <span>{route.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {insertWeaponId && (
+                          <div className="forge-gap-row">
+                            <label>
+                              插入缝隙
+                              <select
+                                value={insertAfter}
+                                onChange={(event) => {
+                                  setInsertAfter(Number(event.target.value));
+                                  setForgePreview(null);
+                                }}
+                              >
+                                <option value={-1}>盘首</option>
+                                {snapshot.weave.nodes.map((node, index) => (
+                                  <option key={node.instanceId} value={index}>
+                                    {node.name}之后
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <button
+                              onClick={previewInsert}
+                              disabled={!insertRouteId}
+                            >
+                              预览添器 · 1 火
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {availableNodes.length === 0 && (
+                      <p className="forge-empty">器盘已满，添器入口已收起；可先完成合器。</p>
+                    )}
+                    <div className="forge-option-list temper-list">
+                      {temperOffers.map((offer) => (
+                        <button
+                          key={offer.id}
+                          className="forge-option-card temper-card"
+                          onClick={() => previewTemper(offer)}
+                        >
+                          <i
+                            aria-hidden="true"
+                            style={weaponThumbStyle(
+                              offer.weaponState.id,
+                              {
+                                level: offer.weaponState.level,
+                                route: offer.weaponState.routeId,
+                                mastery: offer.weaponState.masteryId,
+                              },
+                            )}
+                          />
+                          <span>第 {offer.nodeIndex + 1} 格</span>
+                          <strong>{offer.title}</strong>
+                          <small>{offer.description}</small>
+                          <em>1 火</em>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="forge-zone forge-zone-arrange">
+                    <div className="forge-zone-title">
+                      <strong>调位</strong>
+                      <small>点器盘上的两个节点；顺序不同，收势不同</small>
+                    </div>
+                    <div className="forge-selection">
+                      <span>
+                        {selectedNodes.length === 0
+                          ? "尚未选节点"
+                          : selectedNodes
+                              .map((index) => `${index + 1}.${snapshot.weave?.nodes[index]?.name}`)
+                              .join(" ＋ ")}
+                      </span>
+                      <div>
+                        <button
+                          onClick={previewSelectedSwap}
+                          disabled={selectedNodes.length !== 2}
+                        >
+                          预览调位 · 1 火
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (selectedNodes.length === 2) {
+                              previewFusion(selectedNodes[0], selectedNodes[1]);
+                            }
+                          }}
+                          disabled={!selectedRecipe}
+                        >
+                          {selectedRecipe ? `预览${selectedRecipe.title}` : "所选无合器谱"}
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="forge-zone forge-zone-celestial">
+                    <div className="forge-zone-title">
+                      <strong>天时 / 拆器</strong>
+                      <small>炼化免费；满盘时点一格替换，普通拆器耗一火</small>
+                    </div>
+                    <div className="celestial-actions">
+                      {snapshot.weave.activeIntrusion?.phase === "defeated" ? (
+                        <button className="celestial-button" onClick={previewCelestial}>
+                          预览炼化天时 · 免费
+                        </button>
+                      ) : (
+                        <p className="forge-empty">当前没有已伏的天变化身。</p>
+                      )}
+                      <button
+                        className="dismantle-button"
+                        onClick={previewDismantle}
+                        disabled={
+                          selectedNodes.length !== 1 ||
+                          snapshot.weave.nodes.length <= 1
+                        }
+                      >
+                        {selectedNodes.length === 1
+                          ? `预览拆下 ${snapshot.weave.nodes[selectedNodes[0]]?.name ?? "此格"} · 1 火`
+                          : "点一格后预览拆器"}
+                      </button>
+                    </div>
+                  </section>
                 </div>
+                </div>
+
+                <aside className="forge-preview-rail">
+                  <div className="preview-ring-label">
+                    <strong>器盘结果预览</strong>
+                    <small>点两个节点可用于调位或合器</small>
+                  </div>
+                  <div className="weave-ring-large weave-ring-preview">
+                    {(previewWeave?.nodes ?? []).map((node, index) => (
+                      <button
+                        key={node.instanceId}
+                        className={`weave-node ${node.kind} ${!forgePreview && selectedNodes.includes(index) ? "selected" : ""} ${index === previewWeave?.pulse.nodeIndex ? "pulse" : ""}`}
+                        onClick={() => {
+                          if (!forgePreview) onNodeSelect(index);
+                        }}
+                        disabled={Boolean(forgePreview)}
+                        style={{ "--node-index": index, "--node-count": previewWeave?.nodes.length ?? 1 } as React.CSSProperties}
+                      >
+                        <b>{index + 1}</b>
+                        <span>{node.name}</span>
+                        <small>{node.kind === "fusion" ? "合器" : node.kind === "celestial" ? "天时" : "本命器"}</small>
+                      </button>
+                    ))}
+                    <div className="weave-core">
+                      <span>器盘游标</span>
+                      <strong>{Math.round((previewWeave?.pulse.nodeProgress ?? 0) * 100)}%</strong>
+                    </div>
+                  </div>
+
+                  <div className={`forge-preview-card ${forgePreview ? "ready" : ""}`}>
+                    {forgePreview ? (
+                      <>
+                        <span className="forge-cost-badge">
+                          {forgePreview.cost === 0
+                            ? "不耗炉火"
+                            : `${forgePreview.cost} 火`}
+                        </span>
+                        <strong>{forgePreview.title}</strong>
+                        <p>{forgePreview.description}</p>
+                        <div className="forge-terminal-change">
+                          <span><small>原收势</small>{forgePreview.before}</span>
+                          <b>→</b>
+                          <span><small>新收势</small>{forgePreview.after}</span>
+                        </div>
+                        <button
+                          className="primary-button compact"
+                          onClick={confirmForgePreview}
+                          disabled={forgeFire < forgePreview.cost}
+                        >
+                          {forgeFire < forgePreview.cost
+                            ? "炉火不足"
+                            : forgePreview.cost === 0
+                              ? "确认炼成"
+                              : "确认落锤"}
+                        </button>
+                        <button
+                          className="preview-cancel"
+                          onClick={() => setForgePreview(null)}
+                        >
+                          取消预览
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <strong>先选一张合法操作</strong>
+                        <p>配方、添器、做细、调位和天时都会先显示变化前后；确认时才扣炉火。</p>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    className="secondary-button forge-close"
+                    data-gamepad-cancel
+                    onClick={closeForge}
+                    disabled={!endlessPerkChosen}
+                  >
+                    {forgePurpose === "celestial"
+                      ? "炼成后续战"
+                      : "定盘续战 · 余火保留"}
+                  </button>
+                </aside>
               </div>
             </section>
           </div>
@@ -1244,7 +2364,7 @@ export function PaperGuildGame() {
                     type="range"
                     min="0"
                     max="1"
-                    step="0.05"
+                    step="0.01"
                     value={audioSettings.music}
                     onChange={(event) => updateAudio({ music: Number(event.target.value) })}
                   />
@@ -1255,9 +2375,20 @@ export function PaperGuildGame() {
                     type="range"
                     min="0"
                     max="1"
-                    step="0.05"
+                    step="0.01"
                     value={audioSettings.sfx}
                     onChange={(event) => updateAudio({ sfx: Number(event.target.value) })}
+                  />
+                </label>
+                <label>
+                  <span>环境</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={audioSettings.ambient ?? 0.5}
+                    onChange={(event) => updateAudio({ ambient: Number(event.target.value) })}
                   />
                 </label>
               </div>
@@ -1283,7 +2414,7 @@ export function PaperGuildGame() {
               <h2>八分钟绘卷完成</h2>
               <div className="stats">
                 <div><strong>{snapshot.kills}</strong><span>降服</span></div>
-                <div><strong>{snapshot.synergies.length}</strong><span>合鸣</span></div>
+                <div><strong>{snapshot.synergies.length}</strong><span>搭手</span></div>
                 <div><strong>{snapshot.score}</strong><span>卷分</span></div>
               </div>
               <div className="boss-choice">
@@ -1296,8 +2427,8 @@ export function PaperGuildGame() {
                   <span className="choice-note">完成标准局并解锁试炼签</span>
                 </button>
                 <button className="secondary-button" onClick={continueEndless}>
-                  续卷 · 万器经纬
-                  <span className="choice-note">开启溢出武器、合铸、天罚与终式</span>
+                  续卷 · 器盘无尽
+                  <span className="choice-note">开启溢出武器、合器、天变与收势</span>
                 </button>
               </div>
             </section>

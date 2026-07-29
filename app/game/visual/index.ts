@@ -27,6 +27,8 @@ export type DrawHeroOptions = {
   formProgress: number;
   state: HeroVisualState;
   time: number;
+  /** Distance travelled in canvas pixels; drives gait without idle sliding. */
+  travelled?: number;
   alpha?: number;
 };
 
@@ -74,7 +76,21 @@ export type DrawXpOptions = {
   time: number;
   size?: number;
   magnetProgress?: number;
+  targetX?: number;
+  targetY?: number;
   alpha?: number;
+};
+
+export type WeaponVisualSelection = {
+  level: number;
+  route?: string;
+  mastery?: string;
+};
+
+export type HeroWeaponSocket = {
+  x: number;
+  y: number;
+  rotation: number;
 };
 
 export type DrawFusionOptions = {
@@ -115,6 +131,24 @@ function dimensions(image: VisualImage) {
   return { width: image.width, height: image.height };
 }
 
+type AtlasLayout = {
+  columns: number;
+  rows: number;
+};
+
+function atlasLayout(_image: VisualImage, spec: AtlasSpec): AtlasLayout {
+  return { columns: spec.columns, rows: spec.rows };
+}
+
+export async function ensureCanvasFontsReady() {
+  if (typeof document === "undefined" || !("fonts" in document)) return;
+  await Promise.allSettled([
+    document.fonts.load('600 16px "Paper Guild Text"'),
+    document.fonts.load('400 28px "Paper Guild Display"'),
+  ]);
+  await document.fonts.ready;
+}
+
 async function loadImage(src: string): Promise<VisualImage> {
   if (typeof createImageBitmap === "function" && typeof fetch === "function") {
     try {
@@ -146,10 +180,13 @@ async function loadSpecs(
   specs: readonly AtlasSpec[],
   onProgress?: (done: number, total: number) => void,
 ) {
+  const uniqueSpecs = [
+    ...new Map(specs.map((spec) => [spec.id, spec] as const)).values(),
+  ];
   let done = 0;
-  const total = specs.length;
+  const total = uniqueSpecs.length;
   await Promise.all(
-    specs.map(async (spec) => {
+    uniqueSpecs.map(async (spec) => {
       if (pack.images.has(spec.id) || pack.failed.has(spec.id)) {
         done += 1;
         onProgress?.(done, total);
@@ -181,7 +218,10 @@ export async function loadVisualPack(
     failed: new Set(),
     pending: new Set(),
   };
-  await loadSpecs(pack, CORE_VISUAL_ASSETS, onProgress);
+  await Promise.all([
+    ensureCanvasFontsReady(),
+    loadSpecs(pack, CORE_VISUAL_ASSETS, onProgress),
+  ]);
   return pack;
 }
 
@@ -203,6 +243,37 @@ export async function preloadFusionVisuals(
     ? fusionIds.map((id) => FUSION_ATLASES[id])
     : Object.values(FUSION_ATLASES);
   await loadSpecs(pack, specs);
+}
+
+/**
+ * Releases decoded optional atlases that the current build can no longer use.
+ * The boot set is always retained; held weapons and active fusion nodes are
+ * passed by the director after upgrade and forge changes.
+ */
+export function pruneVisualPack(
+  pack: VisualPack,
+  weaponIds: readonly WeaponId[],
+  fusionIds: readonly FusionId[] = [],
+) {
+  const keep = new Set(CORE_VISUAL_ASSETS.map((spec) => spec.id));
+  weaponIds.forEach((id) => keep.add(WEAPON_ATLASES[id].id));
+  fusionIds.forEach((id) => keep.add(FUSION_ATLASES[id].id));
+
+  let released = 0;
+  for (const [id, image] of pack.images) {
+    if (
+      (!id.startsWith("weapon.") && !id.startsWith("fusion.")) ||
+      keep.has(id)
+    ) {
+      continue;
+    }
+    if ("close" in image && typeof image.close === "function") {
+      image.close();
+    }
+    pack.images.delete(id);
+    released += 1;
+  }
+  return released;
 }
 
 export function getVisualLoadStats(pack: VisualPack) {
@@ -232,12 +303,13 @@ function drawFrame(
   const { width: imageWidth, height: imageHeight } = dimensions(image);
   if (imageWidth <= 0 || imageHeight <= 0) return false;
 
-  const count = spec.columns * spec.rows;
+  const layout = atlasLayout(image, spec);
+  const count = layout.columns * layout.rows;
   const safeFrame = ((Math.floor(frame) % count) + count) % count;
-  const cellWidth = imageWidth / spec.columns;
-  const cellHeight = imageHeight / spec.rows;
-  const column = safeFrame % spec.columns;
-  const row = Math.floor(safeFrame / spec.columns);
+  const cellWidth = imageWidth / layout.columns;
+  const cellHeight = imageHeight / layout.rows;
+  const column = safeFrame % layout.columns;
+  const row = Math.floor(safeFrame / layout.columns);
   const inset = spec.inset ?? 0;
 
   ctx.save();
@@ -277,6 +349,101 @@ function directionFrame(direction: number) {
   return frames[octant];
 }
 
+type FoldDirectionSample = {
+  row: 0 | 1 | 2 | 3 | 4;
+  flip: boolean;
+};
+
+function foldDirectionSample(direction: number): FoldDirectionSample {
+  const tau = Math.PI * 2;
+  const normalized = ((direction % tau) + tau) % tau;
+  const octant = Math.round(normalized / (Math.PI / 4)) % 8;
+  return [
+    { row: 2, flip: false }, // east
+    { row: 1, flip: false }, // south-east
+    { row: 0, flip: false }, // south
+    { row: 1, flip: true }, // south-west
+    { row: 2, flip: true }, // west
+    { row: 3, flip: true }, // north-west
+    { row: 4, flip: false }, // north
+    { row: 3, flip: false }, // north-east
+  ][octant] as FoldDirectionSample;
+}
+
+type FoldPoseAnchor = {
+  collisionX: number;
+  collisionY: number;
+  socketX: number;
+  socketY: number;
+};
+
+const FOLD_CELL_WIDTH = 160;
+const FOLD_CELL_HEIGHT = 192;
+const FOLD_COLLISION_Y: readonly (readonly number[])[] = [
+  [143, 143, 143, 143, 142, 142, 142, 142, 137, 132, 129, 128],
+  [133, 134, 134, 133, 130, 129, 129, 125, 120, 111, 100, 95],
+  [159, 159, 159, 159, 156, 156, 155, 155, 137, 126, 127, 126],
+  [141, 144, 145, 145, 140, 142, 144, 144, 132, 124, 125, 125],
+  [159, 159, 159, 159, 159, 159, 159, 159, 150, 141, 140, 140],
+] as const;
+const FOLD_SOCKET_X = [104, 105, 106, 107, 108, 109, 109, 110, 111, 112, 113, 114] as const;
+const FOLD_SOCKET_Y = [92, 94, 95, 97, 99, 100, 102, 103, 105, 107, 108, 110] as const;
+
+function lerpNumber(from: number, to: number, amount: number) {
+  return from + (to - from) * amount;
+}
+
+function foldPoseAt(
+  progress: number,
+  directionRow: FoldDirectionSample["row"],
+): FoldPoseAnchor {
+  const phase = Math.min(11, clamp01(progress) * 12);
+  const fromIndex = Math.floor(phase);
+  const toIndex = Math.min(11, fromIndex + 1);
+  const amount = phase - fromIndex;
+  return {
+    collisionX: FOLD_CELL_WIDTH / 2,
+    collisionY: lerpNumber(
+      FOLD_COLLISION_Y[directionRow][fromIndex],
+      FOLD_COLLISION_Y[directionRow][toIndex],
+      amount,
+    ),
+    socketX: lerpNumber(
+      FOLD_SOCKET_X[fromIndex],
+      FOLD_SOCKET_X[toIndex],
+      amount,
+    ),
+    socketY: lerpNumber(
+      FOLD_SOCKET_Y[fromIndex],
+      FOLD_SOCKET_Y[toIndex],
+      amount,
+    ),
+  };
+}
+
+export function resolveHeroWeaponSocket(
+  x: number,
+  y: number,
+  size: number,
+  direction: number,
+  formProgress: number,
+): HeroWeaponSocket {
+  const facing = foldDirectionSample(direction);
+  const pose = foldPoseAt(formProgress, facing.row);
+  const drawWidth = size * (FOLD_CELL_WIDTH / FOLD_CELL_HEIGHT);
+  const socketDeltaX =
+    ((pose.socketX - pose.collisionX) / FOLD_CELL_WIDTH) *
+    drawWidth *
+    (facing.flip ? -1 : 1);
+  const socketDeltaY =
+    ((pose.socketY - pose.collisionY) / FOLD_CELL_HEIGHT) * size;
+  return {
+    x: x + socketDeltaX,
+    y: y + socketDeltaY,
+    rotation: direction,
+  };
+}
+
 export function drawHeroSprite(
   ctx: CanvasRenderingContext2D,
   pack: VisualPack,
@@ -289,22 +456,23 @@ export function drawHeroSprite(
     direction,
     state,
     time,
+    travelled = 0,
     alpha = 1,
   } = options;
   const formProgress = clamp01(options.formProgress);
-  const bob = state === "move" ? Math.sin(time * 9) * size * 0.018 : 0;
+  const gaitPhase = travelled / Math.max(8, size * 0.12);
+  const bob =
+    state === "move" ? Math.sin(gaitPhase * Math.PI) * size * 0.018 : 0;
   const hurtJitter = state === "hurt" ? Math.sin(time * 42) * size * 0.025 : 0;
-  const groundedY = y - size * 0.14 + bob;
-
   const facing = directionFrame(direction);
-  if (formProgress <= 0.08) {
+  if (formProgress <= 0) {
     return drawFrame(
       ctx,
       pack,
       HERO_ATLASES.directions,
       facing.frame,
       x + hurtJitter,
-      groundedY,
+      y - size * 0.14 + bob,
       size,
       size,
       0,
@@ -313,47 +481,60 @@ export function drawHeroSprite(
     );
   }
 
-  const foldFrame = Math.min(11, Math.round(formProgress * 11));
-  const crossfade = clamp01((formProgress - 0.08) / 0.18);
-  if (crossfade < 1) {
-    drawFrame(
-      ctx,
-      pack,
-      HERO_ATLASES.directions,
-      facing.frame,
-      x + hurtJitter,
-      groundedY,
-      size * (1 - crossfade * 0.035),
-      size * (1 - crossfade * 0.06),
-      0,
-      alpha * (1 - crossfade),
-      facing.flip,
-    );
-  }
-  const squash = 1 - Math.sin(formProgress * Math.PI) * 0.1;
-  const foldRotation =
-    direction * clamp01((formProgress - 0.62) / 0.34);
+  const foldPhase = Math.min(11, Math.floor(formProgress * 12));
+  const foldDirection = foldDirectionSample(direction);
+  const pose = foldPoseAt(formProgress, foldDirection.row);
+  const drawWidth = size * (FOLD_CELL_WIDTH / FOLD_CELL_HEIGHT);
+  const anchoredX =
+    x +
+    (0.5 - pose.collisionX / FOLD_CELL_WIDTH) * drawWidth +
+    hurtJitter;
+  const anchoredY =
+    y +
+    (0.5 - pose.collisionY / FOLD_CELL_HEIGHT) * size +
+    bob;
+  const foldFrame = foldDirection.row * 12 + foldPhase;
   return drawFrame(
     ctx,
     pack,
     HERO_ATLASES.fold,
     foldFrame,
-    x + hurtJitter,
-    groundedY,
-    size * (1 + formProgress * 0.12),
-    size * squash,
-    foldRotation,
-    alpha * Math.max(0.08, crossfade),
+    anchoredX,
+    anchoredY,
+    drawWidth,
+    size,
+    0,
+    alpha,
+    foldDirection.flip,
   );
 }
 
-function weaponFrame(level: number, route?: string) {
+function routeKey(route?: string) {
+  return route?.split(":").at(-1);
+}
+
+function masteryKey(mastery?: string) {
+  return mastery?.split(":").at(-1);
+}
+
+/**
+ * v4 7x2 weapon contract:
+ * 0 base, 1 refined,
+ * 2..5 route A (III, IV, focus, chain),
+ * 6..9 route B, 10..13 route C.
+ */
+export function resolveWeaponVisualFrame(
+  selection: WeaponVisualSelection,
+) {
+  const level = Math.max(1, Math.min(5, Math.floor(selection.level)));
   if (level <= 1) return 0;
   if (level === 2) return 1;
-  if (level >= 5) return 5;
-  if (route === "b") return 3;
-  if (route === "c") return 4;
-  return 2;
+  const normalizedRoute = routeKey(selection.route);
+  const routeOffset =
+    normalizedRoute === "b" ? 6 : normalizedRoute === "c" ? 10 : 2;
+  if (level === 3) return routeOffset;
+  if (level === 4) return routeOffset + 1;
+  return routeOffset + (masteryKey(selection.mastery) === "chain" ? 3 : 2);
 }
 
 export function drawWeaponSprite(
@@ -363,12 +544,12 @@ export function drawWeaponSprite(
 ) {
   const spec = WEAPON_ATLASES[options.weaponId];
   if (!spec) return false;
-  const frame = weaponFrame(options.level, options.route);
+  const frame = resolveWeaponVisualFrame(options);
   const masteryPulse =
     options.level >= 5 ? 1 + Math.sin(options.time * 4.2) * 0.045 : 1;
   const chainTilt =
     options.mastery === "chain" ? Math.sin(options.time * 3.1) * 0.07 : 0;
-  const drawn = drawFrame(
+  return drawFrame(
     ctx,
     pack,
     spec,
@@ -380,51 +561,6 @@ export function drawWeaponSprite(
     options.rotation + chainTilt,
     options.alpha,
   );
-  const routeFrame =
-    options.route === "b" ? 3 : options.route === "c" ? 4 : 2;
-  if (drawn && options.level === 4) {
-    drawFrame(
-      ctx,
-      pack,
-      spec,
-      routeFrame,
-      options.x + Math.cos(options.rotation) * options.size * 0.24,
-      options.y + Math.sin(options.rotation) * options.size * 0.24,
-      options.size * 0.38,
-      options.size * 0.38,
-      options.rotation + 0.74,
-      (options.alpha ?? 1) * 0.68,
-    );
-  }
-  if (drawn && options.level >= 5 && options.mastery === "focus") {
-    drawFrame(
-      ctx,
-      pack,
-      spec,
-      routeFrame,
-      options.x + Math.cos(options.rotation) * options.size * 0.31,
-      options.y + Math.sin(options.rotation) * options.size * 0.31,
-      options.size * 0.34,
-      options.size * 0.34,
-      options.rotation + Math.PI * 0.52,
-      (options.alpha ?? 1) * 0.74,
-    );
-  }
-  if (drawn && options.level >= 5 && options.mastery === "chain") {
-    drawFrame(
-      ctx,
-      pack,
-      spec,
-      routeFrame,
-      options.x - Math.sin(options.rotation) * options.size * 0.24,
-      options.y + Math.cos(options.rotation) * options.size * 0.24,
-      options.size * 0.58,
-      options.size * 0.58,
-      options.rotation - 0.32 - chainTilt,
-      (options.alpha ?? 1) * 0.76,
-    );
-  }
-  return drawn;
 }
 
 function weaponIndex(weaponId: WeaponId) {
@@ -525,22 +661,74 @@ export function drawXpPickup(
   const frame = Math.floor(options.time * 8) % 6;
   const tier = Math.max(1, Math.min(3, Math.round(options.tier))) as 1 | 2 | 3;
   const atlasFrame = (tier - 1) * 6 + frame;
-  const baseSize = options.size ?? (tier === 3 ? 30 : tier === 2 ? 22 : 16);
+  const baseSize = options.size ?? (tier === 3 ? 36 : tier === 2 ? 28 : 18);
   const magnet = clamp01(options.magnetProgress ?? 0);
   const pulse = 1 + Math.sin(options.time * 7.5 + tier) * 0.055 + magnet * 0.12;
+  const targetDx = (options.targetX ?? options.x + 1) - options.x;
+  const targetDy = (options.targetY ?? options.y) - options.y;
+  const targetLength = Math.hypot(targetDx, targetDy) || 1;
+  const targetX = targetDx / targetLength;
+  const targetY = targetDy / targetLength;
+  const pickupImage = pack.images.get(EFFECT_ATLASES.pickup.id);
+  const pickupDimensions = pickupImage ? dimensions(pickupImage) : null;
+  const legacySheet =
+    pickupDimensions?.width === 1200 && pickupDimensions.height === 600;
+  // The original v3 sheet contained generous empty cell margins. Compensate
+  // until the tightly packed v4 pickup atlas is installed.
+  const legacyContentScale = tier === 1 ? 2.25 : tier === 2 ? 1.55 : 1.35;
+  const atlasSize = baseSize * (legacySheet ? legacyContentScale : 1);
+
+  ctx.save();
+  ctx.translate(options.x, options.y);
+  ctx.rotate(Math.PI / 4 + Math.sin(options.time * 2.4) * 0.035);
+  const haloRadius = baseSize * (0.5 + magnet * 0.04);
+  ctx.globalAlpha *= clamp01(options.alpha ?? 1);
+  ctx.fillStyle =
+    tier === 2 ? "rgba(37,33,27,.96)" : "rgba(42,39,33,.9)";
+  ctx.strokeStyle = "#fff4d8";
+  ctx.lineWidth = tier === 1 ? 2.4 : 3;
+  ctx.beginPath();
+  ctx.rect(-haloRadius, -haloRadius, haloRadius * 2, haloRadius * 2);
+  ctx.fill();
+  ctx.stroke();
+  if (tier === 2) {
+    ctx.strokeStyle = "#e0a429";
+    ctx.lineWidth = 3.2;
+    ctx.strokeRect(
+      -haloRadius * 0.78,
+      -haloRadius * 0.78,
+      haloRadius * 1.56,
+      haloRadius * 1.56,
+    );
+  } else if (tier === 3) {
+    ctx.strokeStyle = "#ba4537";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(
+      -haloRadius * 0.76,
+      -haloRadius * 0.76,
+      haloRadius * 1.52,
+      haloRadius * 1.52,
+    );
+  }
+  ctx.restore();
 
   if (magnet > 0.05) {
     for (let index = 3; index >= 1; index -= 1) {
+      const trailDistance = index * (4 + magnet * 5);
       drawFrame(
         ctx,
         pack,
         EFFECT_ATLASES.pickup,
         atlasFrame,
-        options.x - index * (3 + magnet * 4),
-        options.y + Math.sin(options.time * 9 + index) * 1.5,
-        baseSize * (0.72 - index * 0.1),
-        baseSize * (0.72 - index * 0.1),
-        -magnet * 0.18,
+        options.x -
+          targetX * trailDistance -
+          targetY * Math.sin(options.time * 9 + index) * 1.5,
+        options.y -
+          targetY * trailDistance +
+          targetX * Math.sin(options.time * 9 + index) * 1.5,
+        atlasSize * (0.72 - index * 0.1),
+        atlasSize * (0.72 - index * 0.1),
+        Math.atan2(targetY, targetX) - magnet * 0.18,
         (options.alpha ?? 1) * magnet * (0.2 - index * 0.035),
       );
     }
@@ -553,8 +741,8 @@ export function drawXpPickup(
     atlasFrame,
     options.x,
     options.y,
-    baseSize * pulse,
-    baseSize * pulse,
+    atlasSize * pulse,
+    atlasSize * pulse,
     Math.sin(options.time * 2.4) * 0.045,
     options.alpha,
   );

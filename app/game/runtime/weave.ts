@@ -1,6 +1,15 @@
 import { CELESTIAL_INTRUSIONS, getCelestialIntrusion } from "../content/celestials";
 import { findFusionDefinition, getFusionDefinition } from "../content/fusions";
-import { beam, chain, lightning, orbit, projectile, summon, zone } from "../content/effects";
+import {
+  beam,
+  chain,
+  delayed,
+  lightning,
+  orbit,
+  projectile,
+  summon,
+  zone,
+} from "../content/effects";
 import type {
   ActiveCelestialIntrusion,
   CelestialIntrusionId,
@@ -9,6 +18,7 @@ import type {
   EffectTag,
   FusionDefinition,
   WeaponId,
+  WeaponState,
   WeaveNode,
   WeaveState,
   WeaveTerminal,
@@ -127,31 +137,37 @@ const WEAPON_PASS_EFFECTS: Readonly<Record<WeaponId, readonly EffectSpec[]>> = {
 };
 
 function weaponNode(
-  weaponId: WeaponId,
+  weaponState: WeaponState,
   instanceId: string,
+  origin: "core" | "overflow",
 ): WeaveNode {
-  const definition = getWeaponDefinition(weaponId);
+  const definition = getWeaponDefinition(weaponState.id);
   return {
     instanceId,
     kind: "weapon",
-    sourceId: weaponId,
+    sourceId: weaponState.id,
     name: definition.name,
     tags: definition.tags,
-    passEffects: WEAPON_PASS_EFFECTS[weaponId],
+    passEffects: WEAPON_PASS_EFFECTS[weaponState.id],
+    origin,
+    weaponState: { ...weaponState },
   };
 }
 
 function fusionNode(
   definition: FusionDefinition,
   instanceId: string,
+  consumedWeapons: readonly WeaponState[],
 ): WeaveNode {
   return {
     instanceId,
     kind: "fusion",
     sourceId: definition.id,
-    name: definition.name,
+    name: definition.canonicalName,
     tags: definition.tags,
     passEffects: definition.effects,
+    origin: "fusion",
+    consumedWeapons,
   };
 }
 
@@ -167,6 +183,7 @@ function celestialNode(
     name: definition.capturedName,
     tags: definition.capturedTags,
     passEffects: definition.capturedEffects,
+    origin: "celestial",
   };
 }
 
@@ -175,8 +192,8 @@ export function createWeaveState(
   options: { maxNodes?: number; maxFusions?: number } = {},
 ): WeaveState {
   const maxNodes = options.maxNodes ?? 8;
-  const nodes = build.weapons.slice(0, maxNodes).map((state, index) =>
-    weaponNode(state.id, `node-${index + 1}`),
+  const nodes = build.weapons.slice(0, maxNodes).map((weaponState, index) =>
+    weaponNode(weaponState, `node-${index + 1}`, "core"),
   );
   return {
     nodes,
@@ -193,16 +210,29 @@ export function createWeaveState(
 
 export function insertWeaponNode(
   state: WeaveState,
-  weaponId: WeaponId,
+  weapon: WeaponId | WeaponState,
   afterIndex = state.nodes.length - 1,
 ): WeaveMutationResult {
+  const weaponState: WeaponState =
+    typeof weapon === "string"
+      ? {
+          id: weapon,
+          level: 3,
+          routeId: getWeaponDefinition(weapon).routes[0].id,
+        }
+      : { ...weapon };
+  const weaponId = weaponState.id;
   if (state.nodes.length >= state.maxNodes) {
     return { ok: false, state, reason: "node-capacity" };
   }
   if (state.nodes.some((node) => node.kind === "weapon" && node.sourceId === weaponId)) {
     return { ok: false, state, reason: "duplicate-weapon" };
   }
-  const node = weaponNode(weaponId, `node-${state.nextInstance}`);
+  const node = weaponNode(
+    weaponState,
+    `node-${state.nextInstance}`,
+    "overflow",
+  );
   const insertionIndex =
     state.nodes.length === 0
       ? 0
@@ -251,6 +281,35 @@ export function swapWeaveNodes(
   const nodes = [...state.nodes];
   [nodes[firstIndex], nodes[secondIndex]] = [nodes[secondIndex], nodes[firstIndex]];
   return { ...state, nodes };
+}
+
+export function removeWeaveNode(
+  state: WeaveState,
+  nodeIndex: number,
+): WeaveState {
+  if (
+    state.nodes.length <= 1 ||
+    nodeIndex < 0 ||
+    nodeIndex >= state.nodes.length
+  ) {
+    return state;
+  }
+  const nodes = state.nodes.filter((_, index) => index !== nodeIndex);
+  const nextPulseIndex =
+    state.pulse.nodeIndex > nodeIndex
+      ? state.pulse.nodeIndex - 1
+      : state.pulse.nodeIndex === nodeIndex
+        ? Math.min(nodeIndex, nodes.length - 1)
+        : state.pulse.nodeIndex;
+  return {
+    ...state,
+    nodes,
+    pulse: {
+      ...state.pulse,
+      nodeIndex: Math.max(0, nextPulseIndex) % nodes.length,
+      nodeProgress: 0,
+    },
+  };
 }
 
 export function listAdjacentFusionCandidates(
@@ -306,7 +365,13 @@ export function fuseAdjacentNodes(
     return { ok: false, state, reason: "no-fusion-recipe" };
   }
 
-  const node = fusionNode(definition, `node-${state.nextInstance}`);
+  const node = fusionNode(
+    definition,
+    `node-${state.nextInstance}`,
+    [first.weaponState, second.weaponState].filter(
+      (weaponState): weaponState is WeaponState => weaponState !== undefined,
+    ),
+  );
   const lower = Math.min(firstIndex, secondIndex);
   const upper = Math.max(firstIndex, secondIndex);
   let nodes: WeaveNode[];
@@ -487,70 +552,329 @@ function includesCyclicSequence(
   return false;
 }
 
-function uniqueTags(nodes: readonly WeaveNode[]): EffectTag[] {
-  return [...new Set(nodes.flatMap((node) => node.tags))];
-}
-
 function terminalName(nodes: readonly WeaveNode[]): string {
   const sources = nodes.map((node) => node.sourceId);
   if (includesCyclicSequence(sources, ["fan", "umbrella", "thunderSeal"])) {
-    return "九霄烟雨";
+    return "雨针散开后落雷";
   }
   if (includesCyclicSequence(sources, ["thunderSeal", "umbrella", "fan"])) {
-    return "藏霆寻风";
+    return "伞骨蓄雷后送风";
   }
   if (nodes.length === 0) {
     return "空盘";
   }
-  return `${nodes[0].name}·${nodes[nodes.length - 1].name}终式`;
+  return `${nodes[0].name}起手，${nodes[nodes.length - 1].name}收尾`;
+}
+
+export type WeaveDelivery =
+  | "projectile"
+  | "beam"
+  | "chain"
+  | "lightning"
+  | "zone"
+  | "summon";
+
+export type WeaveTransformSnapshot = {
+  delivery: WeaveDelivery;
+  damage: number;
+  count: number;
+  pierce: number;
+  homing: number;
+  spread: number;
+  length: number;
+  width: number;
+  jumps: number;
+  range: number;
+  radius: number;
+  duration: number;
+  repeats: number;
+  stored: number;
+  tags: readonly EffectTag[];
+};
+
+export type WeaveTransform = WeaveTransformSnapshot;
+
+function addTags(
+  current: readonly EffectTag[],
+  added: readonly EffectTag[],
+): readonly EffectTag[] {
+  return [...new Set([...current, ...added])];
+}
+
+function routeKey(node: WeaveNode): "a" | "b" | "c" | undefined {
+  const key = node.weaponState?.routeId?.split(":")[1];
+  return key === "a" || key === "b" || key === "c" ? key : undefined;
+}
+
+function applyWeaponTransform(
+  input: WeaveTransformSnapshot,
+  node: WeaveNode,
+): WeaveTransformSnapshot {
+  const output: WeaveTransformSnapshot = {
+    ...input,
+    tags: addTags(input.tags, node.tags),
+  };
+  const source = node.sourceId as WeaponId;
+  const selectedRoute = routeKey(node);
+  const mastered = node.weaponState?.level === 5;
+  if (source === "sword") {
+    output.damage += 22;
+    output.pierce += selectedRoute === "a" ? 4 : 2;
+    output.width += selectedRoute === "c" ? 42 : 0;
+    output.count += selectedRoute === "b" ? 2 : 0;
+  } else if (source === "fan") {
+    if (output.delivery === "lightning" || output.delivery === "zone") {
+      output.delivery = "projectile";
+      output.homing += 0.55;
+    }
+    output.count = output.count * 2 + 2;
+    output.spread += 52;
+    output.damage *= 0.78;
+  } else if (source === "umbrella") {
+    output.stored += output.damage * (selectedRoute === "c" ? 0.58 : 0.42);
+    if (output.delivery === "lightning") {
+      output.delivery = "projectile";
+      output.count += 8;
+      output.homing += 0.48;
+      output.damage *= 0.82;
+    } else {
+      output.delivery = "zone";
+      output.radius += 62;
+      output.duration += 1.4;
+    }
+  } else if (source === "scissors") {
+    output.delivery = "beam";
+    output.damage *= selectedRoute === "c" ? 1.48 : 1.3;
+    output.width += 30;
+    output.length += 150;
+    output.pierce += 2;
+  } else if (source === "abacus") {
+    output.count += 3;
+    output.damage += output.count * 2.4;
+    output.jumps += selectedRoute === "c" ? 2 : 0;
+  } else if (source === "crossbow") {
+    if (output.delivery === "zone") output.delivery = "projectile";
+    output.count = Math.max(2, output.count * 2);
+    output.damage *= 0.76;
+    output.pierce += 2;
+  } else if (source === "pipa") {
+    output.delivery = "chain";
+    output.jumps += Math.max(4, Math.ceil(output.count * 0.7));
+    output.range += 70;
+    output.damage += output.stored * 0.22;
+  } else if (source === "inkline") {
+    output.delivery = "beam";
+    output.length += 360;
+    output.width = Math.max(22, output.width * 0.72);
+    output.pierce += 6;
+  } else if (source === "lantern") {
+    if (output.tags.length <= node.tags.length) output.delivery = "summon";
+    output.repeats += selectedRoute === "c" ? 2 : 1;
+    output.damage *= 0.86;
+    output.count += 1;
+  } else if (source === "thunderSeal") {
+    output.delivery = "lightning";
+    output.damage += output.stored + 34;
+    output.count = Math.max(2, Math.ceil(output.count * 0.72));
+    output.radius += 24;
+    output.range += output.jumps * 12;
+  }
+
+  if (mastered) {
+    if (node.weaponState?.masteryId?.endsWith(":focus")) {
+      output.damage *= 1.18;
+    } else {
+      output.repeats += 1;
+    }
+  }
+  return output;
+}
+
+function applyFusionTransform(
+  input: WeaveTransformSnapshot,
+  node: WeaveNode,
+): WeaveTransformSnapshot {
+  const definition = getFusionDefinition(
+    node.sourceId as FusionDefinition["id"],
+  );
+  const primary = definition.effects[0];
+  const output: WeaveTransformSnapshot = {
+    ...input,
+    tags: addTags(input.tags, definition.tags),
+    damage: input.damage * 1.22 + 34,
+    count: input.count + 2,
+    stored: input.stored + input.damage * 0.24,
+  };
+  if (primary.kind === "beam") {
+    output.delivery = "beam";
+    output.length = Math.max(output.length, primary.length);
+    output.width = Math.max(output.width, primary.width);
+  } else if (primary.kind === "chain") {
+    output.delivery = "chain";
+    output.jumps += primary.jumps;
+    output.range = Math.max(output.range, primary.range);
+  } else if (primary.kind === "lightning") {
+    output.delivery = "lightning";
+    output.count += primary.strikes;
+    output.radius = Math.max(output.radius, primary.radius);
+  } else if (primary.kind === "zone" || primary.kind === "orbit") {
+    output.delivery = "zone";
+    output.radius = Math.max(output.radius, primary.radius);
+    output.duration += 1;
+  } else if (primary.kind === "summon") {
+    output.delivery = "summon";
+    output.count += primary.count;
+    output.duration = Math.max(output.duration, primary.duration);
+  } else if (primary.kind === "projectile") {
+    output.delivery = "projectile";
+    output.count += primary.count;
+    output.pierce += primary.pierce;
+    output.homing += primary.homing ?? 0;
+  }
+  return output;
+}
+
+function applyCelestialTransform(
+  input: WeaveTransformSnapshot,
+  node: WeaveNode,
+): WeaveTransformSnapshot {
+  const output: WeaveTransformSnapshot = {
+    ...input,
+    tags: addTags(input.tags, node.tags),
+    damage: input.damage * 1.16 + 28,
+    radius: input.radius + 34,
+  };
+  if (node.tags.includes("lightning")) {
+    output.delivery = "lightning";
+    output.count += 3;
+    output.range += 90;
+  } else if (node.tags.includes("wind")) {
+    output.delivery = "projectile";
+    output.count = output.count * 2 + 1;
+    output.homing += 0.32;
+  } else {
+    output.delivery = "zone";
+    output.duration += 1.8;
+  }
+  return output;
+}
+
+export function deriveWeaveTransform(
+  nodes: readonly WeaveNode[],
+): WeaveTransformSnapshot {
+  return nodes.reduce<WeaveTransformSnapshot>(
+    (current, node) =>
+      node.kind === "weapon"
+        ? applyWeaponTransform(current, node)
+        : node.kind === "fusion"
+          ? applyFusionTransform(current, node)
+          : applyCelestialTransform(current, node),
+    {
+      delivery: "projectile",
+      damage: 66,
+      count: 1,
+      pierce: 1,
+      homing: 0,
+      spread: 18,
+      length: 420,
+      width: 40,
+      jumps: 1,
+      range: 190,
+      radius: 92,
+      duration: 3,
+      repeats: 0,
+      stored: 0,
+      tags: [],
+    },
+  );
+}
+
+function terminalCoreEffect(
+  hash: number,
+  transform: WeaveTransformSnapshot,
+): EffectSpec {
+  const id = `terminal-${hash}-core`;
+  const common = {
+    trigger: "onTerminal" as const,
+    visualKey: `terminal/generated/${hash}/core`,
+  };
+  if (transform.delivery === "beam") {
+    return beam(id, transform.tags, transform.damage, {
+      ...common,
+      length: transform.length,
+      width: transform.width,
+      pierce: transform.pierce + transform.count,
+      sweepDegrees: Math.min(110, transform.spread),
+    });
+  }
+  if (transform.delivery === "chain") {
+    return chain(id, transform.tags, transform.damage, {
+      ...common,
+      jumps: Math.max(4, transform.jumps + transform.count),
+      range: transform.range,
+      falloff: 0.94,
+      preferMarked: transform.tags.includes("mark"),
+    });
+  }
+  if (transform.delivery === "lightning") {
+    return lightning(id, transform.tags, transform.damage, {
+      ...common,
+      strikes: Math.max(2, transform.count + transform.repeats),
+      radius: transform.radius,
+      delay: 0.3,
+      chainRange: transform.range,
+    });
+  }
+  if (transform.delivery === "zone") {
+    return zone(id, transform.tags, transform.damage * 0.62, {
+      ...common,
+      radius: transform.radius,
+      duration: transform.duration + transform.repeats * 0.5,
+      tickRate: 0.22,
+      followsOwner: transform.tags.includes("guard"),
+      slow: transform.tags.includes("frost") ? 0.35 : 0.18,
+    });
+  }
+  if (transform.delivery === "summon") {
+    return summon(id, transform.tags, "terminal-weave-actor", {
+      ...common,
+      count: Math.max(2, transform.count + transform.repeats),
+      duration: transform.duration + 5,
+      attackDamage: transform.damage * 0.48,
+      attackCooldown: 0.42,
+      moveSpeed: 210,
+    });
+  }
+  return projectile(id, transform.tags, transform.damage, 0, {
+    ...common,
+    pattern: transform.count > 2 ? "radial" : "burst",
+    count: Math.max(2, transform.count + transform.repeats),
+    speed: 900,
+    pierce: transform.pierce,
+    spreadDegrees: transform.spread,
+    homing: transform.homing,
+    markSeconds: transform.tags.includes("mark") ? 4 : undefined,
+  });
 }
 
 export function deriveWeaveTerminal(state: WeaveState): WeaveTerminal {
   const signature = state.nodes
-    .map((node, index) => `${index}:${node.kind}:${node.sourceId}`)
+    .map(
+      (node, index) =>
+        `${index}:${node.kind}:${node.sourceId}:${node.weaponState?.routeId ?? "-"}:${node.weaponState?.masteryId ?? "-"}`,
+    )
     .join(">");
   const hash = stableHash(signature || "empty-weave");
-  const tags = uniqueTags(state.nodes);
-  const baseDamage = 70 + state.nodes.length * 14 + (hash % 19);
-  const effects: EffectSpec[] = [
-    projectile(`terminal-${hash}-core`, tags, baseDamage, 0, {
-      trigger: "onTerminal",
-      pattern: "radial",
-      count: Math.max(6, state.nodes.length * 3),
-      pierce: 4 + (hash % 4),
-      homing: (hash % 3) * 0.2,
-      visualKey: `terminal/generated/${hash}/core`,
-    }),
-  ];
-
-  if (tags.includes("lightning")) {
+  const transform = deriveWeaveTransform(state.nodes);
+  const effects: EffectSpec[] = [terminalCoreEffect(hash, transform)];
+  if (transform.repeats > 0 && transform.delivery !== "summon") {
     effects.push(
-      lightning(`terminal-${hash}-lightning`, tags, baseDamage * 1.35, {
+      delayed(`terminal-${hash}-echo`, transform.tags, transform.damage * 0.48, {
         trigger: "onTerminal",
-        strikes: Math.max(3, state.nodes.length),
-        radius: 72 + (hash % 28),
-        delay: 0.28,
-      }),
-    );
-  }
-  if (tags.includes("music")) {
-    effects.push(
-      chain(`terminal-${hash}-cadence`, tags, baseDamage * 0.72, {
-        trigger: "onTerminal",
-        jumps: 5 + state.nodes.length,
-        range: 240 + (hash % 50),
-        falloff: 0.96,
-      }),
-    );
-  }
-  if (tags.includes("guard") || tags.includes("wind")) {
-    effects.push(
-      zone(`terminal-${hash}-field`, tags, baseDamage * 0.46, {
-        trigger: "onTerminal",
-        radius: 160 + (hash % 48),
-        duration: 4.5,
-        tickRate: 0.22,
-        followsOwner: tags.includes("guard"),
+        delay: 0.45,
+        radius: transform.radius,
+        repeats: Math.min(3, transform.repeats - 1),
+        visualKey: `terminal/generated/${hash}/echo`,
       }),
     );
   }
@@ -561,15 +885,20 @@ export function deriveWeaveTerminal(state: WeaveState): WeaveTerminal {
     signature,
     chargeSeconds: Math.min(
       12,
-      Math.max(6, 6 + state.nodes.length * 0.55 + (hash % 16) / 10),
+      Math.max(
+        6,
+        10.4 - state.nodes.length * 0.38 + Math.min(1.6, transform.stored / 180),
+      ),
     ),
     effects,
     steps: state.nodes.map((node, index) => ({
       nodeInstanceId: node.instanceId,
       label:
         node.kind === "fusion"
-          ? getFusionDefinition(node.sourceId as FusionDefinition["id"]).weaveVerb
-          : `经${node.name}`,
+          ? getFusionDefinition(node.sourceId as FusionDefinition["id"]).action
+          : node.kind === "celestial"
+            ? `收${node.name}入时`
+            : `经${node.name}${routeKey(node) ? `·${routeKey(node)}` : ""}`,
       ordinal: index,
       tagsAdded: node.tags,
     })),

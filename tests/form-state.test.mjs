@@ -59,7 +59,7 @@ test("damage-triggered unfolding is finite from any plane duration", () => {
   const form = createPlayerForm();
   stepFor(form, 120, true);
   forceHumanForm(form);
-  stepFor(form, 0.21, true);
+  stepFor(form, 0.25, true);
   assert.equal(form.formState, "human");
   assert.equal(form.formProgress, 0);
 });

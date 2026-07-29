@@ -1,8 +1,48 @@
 import { CELESTIAL_INTRUSIONS } from "./celestials";
+import { ENDLESS_PERK_DEFINITIONS } from "./endlessPerks";
 import { FUSION_DEFINITIONS } from "./fusions";
 import { SYNERGY_DEFINITIONS } from "./synergies";
 import type { WeaponId } from "./types";
 import { WEAPON_DEFINITIONS } from "./weapons";
+
+const LOCKED_FUSION_RECIPES: readonly (
+  readonly [WeaponId, WeaponId, string]
+)[] = [
+  ["fan", "umbrella", "风过伞骨"],
+  ["umbrella", "thunderSeal", "伞骨接雷"],
+  ["fan", "inkline", "风走墨格"],
+  ["sword", "crossbow", "剑标引箭"],
+  ["sword", "lantern", "灯照剑路"],
+  ["sword", "pipa", "先弦后剑"],
+  ["scissors", "abacus", "量准再剪"],
+  ["scissors", "inkline", "墨框合剪"],
+  ["scissors", "umbrella", "伞挡剪雨"],
+  ["abacus", "pipa", "珠落成拍"],
+  ["abacus", "crossbow", "数珠装弩"],
+  ["crossbow", "lantern", "灯转弩台"],
+  ["crossbow", "inkline", "线头架弩"],
+  ["pipa", "thunderSeal", "弦尾落雷"],
+  ["umbrella", "lantern", "合伞藏灯"],
+  ["sword", "fan", "风送回剑"],
+  ["sword", "umbrella", "开伞收剑"],
+  ["sword", "scissors", "双刃合口"],
+  ["sword", "inkline", "剑拖墨线"],
+  ["fan", "crossbow", "顺风排弩"],
+  ["fan", "pipa", "扇过三弦"],
+  ["umbrella", "inkline", "墨雨封边"],
+  ["umbrella", "pipa", "雨敲伞骨"],
+  ["scissors", "pipa", "弦过剪口"],
+  ["scissors", "lantern", "剪影伤身"],
+  ["abacus", "inkline", "珠走墨线"],
+  ["abacus", "lantern", "数满一灯"],
+  ["abacus", "thunderSeal", "数珠落雷"],
+  ["crossbow", "thunderSeal", "雷钉接路"],
+  ["pipa", "inkline", "墨线记谱"],
+];
+
+function fusionPairKey(first: WeaponId, second: WeaponId): string {
+  return [first, second].sort().join("+");
+}
 
 function duplicateValues(values: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -24,11 +64,35 @@ export function validateCombatContent(): readonly string[] {
   if (SYNERGY_DEFINITIONS.length !== 12) {
     errors.push(`Expected 12 synergies, found ${SYNERGY_DEFINITIONS.length}`);
   }
-  if (FUSION_DEFINITIONS.length !== 15) {
-    errors.push(`Expected 15 fusions, found ${FUSION_DEFINITIONS.length}`);
+  if (FUSION_DEFINITIONS.length !== 30) {
+    errors.push(`Expected 30 fusions, found ${FUSION_DEFINITIONS.length}`);
   }
   if (CELESTIAL_INTRUSIONS.length !== 6) {
     errors.push(`Expected 6 celestial intrusions, found ${CELESTIAL_INTRUSIONS.length}`);
+  }
+  if (ENDLESS_PERK_DEFINITIONS.length !== 32) {
+    errors.push(`Expected 32 endless perks, found ${ENDLESS_PERK_DEFINITIONS.length}`);
+  }
+  const expectedPerkCategories = {
+    weapon: 10,
+    weave: 8,
+    season: 8,
+    journey: 6,
+  } as const;
+  for (const [category, expected] of Object.entries(expectedPerkCategories)) {
+    const found = ENDLESS_PERK_DEFINITIONS.filter(
+      (definition) => definition.category === category,
+    ).length;
+    if (found !== expected) {
+      errors.push(
+        `Expected ${expected} ${category} endless perks, found ${found}`,
+      );
+    }
+  }
+  for (const perk of ENDLESS_PERK_DEFINITIONS) {
+    if (perk.rules.length === 0 || perk.rules.some((rule) => rule.actions.length === 0)) {
+      errors.push(`Endless perk ${perk.id} has no consumable event rule`);
+    }
   }
 
   const weaponIds = new Set<WeaponId>(
@@ -63,6 +127,9 @@ export function validateCombatContent(): readonly string[] {
     if (synergy.weapons[0] === synergy.weapons[1]) {
       errors.push(`Synergy ${synergy.id} must use two distinct weapons`);
     }
+    if (synergy.eventRules.length === 0) {
+      errors.push(`Synergy ${synergy.id} must listen to at least one combat event`);
+    }
     for (const weaponId of synergy.weapons) {
       if (!weaponIds.has(weaponId)) {
         errors.push(`Synergy ${synergy.id} references unknown weapon ${weaponId}`);
@@ -77,10 +144,43 @@ export function validateCombatContent(): readonly string[] {
       errors.push(`Duplicate fusion pair: ${pair}`);
     }
     fusionPairs.add(pair);
+    if (
+      !fusion.effects.some(
+        (effect) =>
+          effect.trigger === "onAttack" || effect.trigger === "periodic",
+      )
+    ) {
+      errors.push(`Fusion ${fusion.id} has no automatic attack root`);
+    }
+    if (
+      !fusion.pairLabel.includes(" × ") ||
+      fusion.action.length === 0 ||
+      fusion.name !== fusion.action ||
+      fusion.mechanic.action !== fusion.action ||
+      fusion.canonicalName !== `${fusion.pairLabel}｜${fusion.action}`
+    ) {
+      errors.push(`Fusion ${fusion.id} is missing its canonical pair/action`);
+    }
     for (const weaponId of fusion.weapons) {
       if (!weaponIds.has(weaponId)) {
         errors.push(`Fusion ${fusion.id} references unknown weapon ${weaponId}`);
       }
+    }
+  }
+  const actualFusionByPair = new Map(
+    FUSION_DEFINITIONS.map((definition) => [
+      fusionPairKey(definition.weapons[0], definition.weapons[1]),
+      definition,
+    ]),
+  );
+  for (const [first, second, action] of LOCKED_FUSION_RECIPES) {
+    const definition = actualFusionByPair.get(fusionPairKey(first, second));
+    if (!definition) {
+      errors.push(`Missing locked fusion pair: ${first}+${second}`);
+    } else if (definition.action !== action) {
+      errors.push(
+        `Fusion ${first}+${second} must use action ${action}, found ${definition.action}`,
+      );
     }
   }
 
@@ -88,6 +188,7 @@ export function validateCombatContent(): readonly string[] {
     ...SYNERGY_DEFINITIONS.map((definition) => definition.id),
     ...FUSION_DEFINITIONS.map((definition) => definition.id),
     ...CELESTIAL_INTRUSIONS.map((definition) => definition.id),
+    ...ENDLESS_PERK_DEFINITIONS.map((definition) => definition.id),
   ])) {
     errors.push(`Duplicate top-level content id: ${duplicate}`);
   }

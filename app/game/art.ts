@@ -33,10 +33,10 @@ export type LoadedArt = {
 
 export const ART_MANIFEST: ArtAssetManifest = {
   seasons: [
-    { name: "惊蛰 · 春桥", image: "/art/season-spring.webp", accent: "#b3655a", particle: "petal" },
-    { name: "小暑 · 荷塘", image: "/art/season-summer.webp", accent: "#547b72", particle: "rain" },
-    { name: "霜降 · 稻埂", image: "/art/season-autumn.webp", accent: "#a87842", particle: "leaf" },
-    { name: "大寒 · 岁市", image: "/art/season-winter.webp", accent: "#9d4339", particle: "snow" },
+    { name: "惊蛰 · 春桥", image: "/art/season-spring-runtime.webp", accent: "#b3655a", particle: "petal" },
+    { name: "小暑 · 荷塘", image: "/art/season-summer-runtime.webp", accent: "#547b72", particle: "rain" },
+    { name: "霜降 · 稻埂", image: "/art/season-autumn-runtime.webp", accent: "#a87842", particle: "leaf" },
+    { name: "大寒 · 岁市", image: "/art/season-winter-runtime.webp", accent: "#9d4339", particle: "snow" },
   ],
   enemies: {
     cup: "/art/enemy-cup.webp",

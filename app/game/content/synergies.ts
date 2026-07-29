@@ -1,6 +1,7 @@
 import { accumulator, beam, chain, copy, delayed, lightning, mark, orbit, projectile, summon, zone } from "./effects";
 import type {
   EffectSpec,
+  SynergyEventRule,
   SynergyDefinition,
   SynergyRouteVariant,
   WeaponId,
@@ -18,10 +19,10 @@ function variant(
   return { id, when, nameSuffix, description, effects };
 }
 
-export const SYNERGY_DEFINITIONS = [
+const SYNERGY_BLUEPRINTS = [
   {
     id: "windRain",
-    name: "风雨合鸣",
+    name: "风过伞骨",
     weapons: ["fan", "umbrella"],
     description: "风浪经过伞面后分裂为一阵雨针。",
     effects: [projectile("synergy-wind-rain", ["wind", "rain"], 18, 1.2, { pattern: "fan", count: 8, spreadDegrees: 74, trigger: "onHit" })],
@@ -39,7 +40,7 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "fineAccounting",
-    name: "精打细算",
+    name: "剪筹清账",
     weapons: ["scissors", "abacus"],
     description: "累计命中后，剪刃锁定高生命目标进行清算。",
     effects: [
@@ -59,7 +60,7 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "nearFarAccord",
-    name: "远近相济",
+    name: "剑引机弦",
     weapons: ["sword", "crossbow"],
     description: "剑印为弩机指示目标，弩矢优先追摄剑印。",
     effects: [mark("synergy-near-far-mark", ["blade", "mechanism", "mark"], { duration: 4.5, damageTakenMultiplier: 1.2 })],
@@ -75,7 +76,7 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "windStrings",
-    name: "风弦同调",
+    name: "弦借长风",
     weapons: ["fan", "pipa"],
     description: "音浪借风延伸，命中后产生回旋泛音。",
     effects: [chain("synergy-wind-strings", ["wind", "music"], 34, { jumps: 5, range: 240, falloff: 0.93 })],
@@ -91,7 +92,7 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "inkMechanism",
-    name: "墨规机锋",
+    name: "墨准机锋",
     weapons: ["inkline", "crossbow"],
     description: "墨线为弩矢校准，穿线后的弩矢提高穿透。",
     effects: [projectile("synergy-ink-mechanism", ["craft", "mechanism"], 31, 0.68, { count: 3, pierce: 6, speed: 1050 })],
@@ -107,7 +108,7 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "lanternBlades",
-    name: "影剑成行",
+    name: "灯摹剑影",
     weapons: ["lantern", "sword"],
     description: "走马灯摹写剑势，影卒随剑印冲锋。",
     effects: [summon("synergy-lantern-blades", ["shadow", "blade"], "shadow-swordsman", { count: 3, duration: 12, attackDamage: 29 })],
@@ -123,7 +124,7 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "canopyThunder",
-    name: "承霆化雨",
+    name: "伞骨承霆",
     weapons: ["umbrella", "thunderSeal"],
     description: "伞面承下雷力，再以带电雨滴洒向四周。",
     effects: [projectile("synergy-canopy-thunder", ["rain", "lightning"], 27, 0.9, { pattern: "radial", count: 12, pierce: 2 })],
@@ -139,7 +140,7 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "thunderCadence",
-    name: "雷音法鼓",
+    name: "弦雷相应",
     weapons: ["pipa", "thunderSeal"],
     description: "雷声按琵琶节拍落下，音浪终点形成雷爆。",
     effects: [lightning("synergy-thunder-cadence", ["music", "lightning"], 72, { strikes: 3, radius: 68, delay: 0.3 })],
@@ -155,7 +156,7 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "lanternCanopy",
-    name: "灯月伞华",
+    name: "灯映伞华",
     weapons: ["lantern", "umbrella"],
     description: "灯影映上伞面，每次开合释放一圈影灯。",
     effects: [orbit("synergy-lantern-canopy", ["shadow", "rain", "guard"], 28, { count: 8, radius: 136, hitCooldown: 0.24 })],
@@ -171,12 +172,12 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "tailoredWorld",
-    name: "量体裁界",
+    name: "墨量剪裁",
     weapons: ["scissors", "inkline"],
     description: "墨线量出敌阵尺寸，剪刃沿界线完成裁切。",
     effects: [beam("synergy-tailored-world", ["craft", "blade"], 62, { length: 680, width: 32, duration: 0.4 })],
     routeVariants: [
-      variant("tailoredWorld-grid", { scissors: "a", inkline: "b" }, "·经纬回剪", "回旋剪每次跨越裁域都会复制一道裁线。", [
+      variant("tailoredWorld-grid", { scissors: "a", inkline: "b" }, "·墨格回剪", "回旋剪每次跨越裁域都会复制一道裁线。", [
         copy("synergy-tailored-world-grid", ["craft", "blade"], { source: "markedHit", damageMultiplier: 0.64, maxCopies: 3 }),
       ]),
       variant("tailoredWorld-execute", { scissors: "c", inkline: "a" }, "·墨绳断命", "被墨线标记的低生命敌人立即遭到断裁。", [
@@ -187,7 +188,7 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "pearlRepeater",
-    name: "珠机连筹",
+    name: "筹催连机",
     weapons: ["abacus", "crossbow"],
     description: "算珠进入连弩机括，攻击次数与齐射节奏彼此累积。",
     effects: [projectile("synergy-pearl-repeater", ["ledger", "mechanism"], 21, 0.32, { pattern: "burst", count: 5, speed: 940 })],
@@ -203,7 +204,7 @@ export const SYNERGY_DEFINITIONS = [
   },
   {
     id: "jadePearlSong",
-    name: "拨珠成曲",
+    name: "珠应弦拍",
     weapons: ["pipa", "abacus"],
     description: "算珠命中成为节拍，满拍后奏出一轮玉珠音曲。",
     effects: [
@@ -221,7 +222,42 @@ export const SYNERGY_DEFINITIONS = [
     ],
     artKey: "synergy/jade-pearl-song",
   },
-] as const satisfies readonly SynergyDefinition[];
+] as const satisfies readonly Omit<SynergyDefinition, "eventRules">[];
+
+const EVENT_BINDINGS: Readonly<
+  Record<
+    (typeof SYNERGY_BLUEPRINTS)[number]["id"],
+    Omit<SynergyEventRule, "id" | "effects">
+  >
+> = {
+  windRain: { event: "weaponAttack", sourceWeapon: "fan", every: 2 },
+  fineAccounting: { event: "weaponHit", every: 1 },
+  nearFarAccord: { event: "weaponHit", sourceWeapon: "sword", every: 1 },
+  windStrings: { event: "weaponHit", sourceWeapon: "pipa", every: 4 },
+  inkMechanism: { event: "weaponAttack", sourceWeapon: "crossbow", every: 3 },
+  lanternBlades: { event: "weaponAttack", sourceWeapon: "sword", every: 4 },
+  canopyThunder: { event: "guardBlock", sourceWeapon: "umbrella", every: 1 },
+  thunderCadence: { event: "weaponAttack", sourceWeapon: "thunderSeal", every: 3 },
+  lanternCanopy: { event: "guardBlock", sourceWeapon: "umbrella", every: 1 },
+  tailoredWorld: { event: "weaponAttack", sourceWeapon: "inkline", every: 4 },
+  pearlRepeater: { event: "weaponHit", sourceWeapon: "abacus", every: 6 },
+  jadePearlSong: { event: "weaponHit", every: 1 },
+};
+
+export const SYNERGY_DEFINITIONS: readonly SynergyDefinition[] =
+  SYNERGY_BLUEPRINTS.map((definition) => {
+    const binding = EVENT_BINDINGS[definition.id];
+    return {
+      ...definition,
+      eventRules: [
+        {
+          ...binding,
+          id: `${definition.id}:${binding.event}`,
+          effects: definition.effects,
+        },
+      ],
+    };
+  });
 
 export type ResolvedSynergy = {
   definition: SynergyDefinition;
@@ -229,6 +265,7 @@ export type ResolvedSynergy = {
   name: string;
   description: string;
   effects: readonly EffectSpec[];
+  eventRules: readonly SynergyEventRule[];
 };
 
 function variantMatches(variantDefinition: SynergyRouteVariant, weaponStates: ReadonlyMap<WeaponId, WeaponState>) {
@@ -238,9 +275,38 @@ function variantMatches(variantDefinition: SynergyRouteVariant, weaponStates: Re
   });
 }
 
-export function resolveActiveSynergies(
+function resolveSynergy(
+  definition: SynergyDefinition,
+  states: ReadonlyMap<WeaponId, WeaponState>,
+): ResolvedSynergy {
+  const matchedVariant = definition.routeVariants.find((candidate) =>
+    variantMatches(candidate, states)
+  );
+  return {
+    definition,
+    variant: matchedVariant,
+    name: matchedVariant
+      ? `${definition.name}${matchedVariant.nameSuffix}`
+      : definition.name,
+    description: matchedVariant?.description ?? definition.description,
+    effects: matchedVariant
+      ? [...definition.effects, ...matchedVariant.effects]
+      : definition.effects,
+    eventRules: definition.eventRules.map((rule) => ({
+      ...rule,
+      effects: matchedVariant
+        ? [...rule.effects, ...matchedVariant.effects]
+        : rule.effects,
+    })),
+  };
+}
+
+/**
+ * Returns every qualified pairing in authored order. Capacity is deliberately
+ * not applied here: callers need the complete set to present a real choice.
+ */
+export function getSynergyChoices(
   weapons: readonly WeaponState[],
-  capacity = 3,
 ): readonly ResolvedSynergy[] {
   const states = new Map(weapons.map((weaponState) => [weaponState.id, weaponState]));
   const eligible = SYNERGY_DEFINITIONS.filter(({ weapons: pair }) =>
@@ -249,15 +315,30 @@ export function resolveActiveSynergies(
       return state !== undefined && state.level >= 3;
     }),
   );
+  return eligible.map((definition) => resolveSynergy(definition, states));
+}
 
-  return eligible.slice(0, Math.max(0, capacity)).map((definition) => {
-    const matchedVariant = definition.routeVariants.find((candidate) => variantMatches(candidate, states));
-    return {
-      definition,
-      variant: matchedVariant,
-      name: matchedVariant ? `${definition.name}${matchedVariant.nameSuffix}` : definition.name,
-      description: matchedVariant?.description ?? definition.description,
-      effects: matchedVariant ? [...definition.effects, ...matchedVariant.effects] : definition.effects,
-    };
-  });
+/**
+ * Resolves an explicit player selection. When the eligible set fits in the
+ * capacity, all pairings activate automatically and selection is ignored.
+ * During overflow, no authored-order truncation is performed.
+ */
+export function chooseActiveSynergies(
+  weapons: readonly WeaponState[],
+  selectedIds: readonly string[],
+  capacity = 3,
+): readonly ResolvedSynergy[] {
+  const eligible = getSynergyChoices(weapons);
+  const safeCapacity = Math.max(0, Math.floor(capacity));
+  if (eligible.length <= safeCapacity) return eligible;
+  const selected = new Set(selectedIds.slice(0, safeCapacity));
+  return eligible.filter((synergy) => selected.has(synergy.definition.id));
+}
+
+export function resolveActiveSynergies(
+  weapons: readonly WeaponState[],
+  capacity = 3,
+  selectedIds: readonly string[] = [],
+): readonly ResolvedSynergy[] {
+  return chooseActiveSynergies(weapons, selectedIds, capacity);
 }
