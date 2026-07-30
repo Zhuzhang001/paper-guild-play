@@ -7,4 +7,4 @@ export * from "./types";
 export * from "./validate";
 export * from "./weapons";
 
-export const CONTENT_VERSION = 4 as const;
+export const CONTENT_VERSION = 5 as const;

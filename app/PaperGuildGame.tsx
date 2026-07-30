@@ -134,11 +134,20 @@ type ForgeRecipeCard = {
 
 type TemperForgeOffer = Extract<ForgeOffer, { kind: "temper" }>;
 
-type SavedProgressV4 = {
-  version: 4;
+type InitialWeaponChoice = WeaponId | "random";
+
+type SavedProgressV5 = {
+  version: 5;
   cleared: boolean;
   unlockedWeapons: readonly WeaponId[];
+  preferredInitialWeapon: InitialWeaponChoice;
   settings?: Partial<AudioSettings>;
+};
+
+type TestPanelState = {
+  timeScale: 1 | 2 | 4 | 8;
+  incomingDamageScale: 0 | 1;
+  assisted: boolean;
 };
 
 type QueuedModal =
@@ -203,13 +212,30 @@ const TRIAL_DEFINITIONS: Array<{
   { id: "elite", name: "强敌", description: "精英和 Boss 更坚韧" },
 ];
 
-const PROGRESS_KEY_V4 = "paper-guild.progress.v4";
-const PROGRESS_KEYS_V3 = [
+const PROGRESS_KEY_V5 = "paper-guild.progress.v5";
+const LEGACY_PROGRESS_KEYS = [
+  "paper-guild.progress.v4",
   "paper-guild.progress.v3",
   "paper-guild-progress-v3",
 ] as const;
 const LEGACY_CLEAR_KEY = "paper-guild-cleared-v3";
 const AUDIO_KEY_V1 = "paper-guild.audio.v1";
+const TEST_CODE = "baigong";
+const FIXED_STEP = 1 / 60;
+const MAX_SIMULATION_STEPS = 32;
+const TERM_CHANGE_CHIMES = new Set([
+  "惊蛰",
+  "清明",
+  "夏至",
+  "大暑",
+  "霜降",
+  "冬至",
+]);
+const DEFAULT_TEST_PANEL_STATE: TestPanelState = {
+  timeScale: 1,
+  incomingDamageScale: 1,
+  assisted: false,
+};
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -228,7 +254,7 @@ function formatTime(seconds: number) {
 function optionKind(option: UpgradeOption) {
   if (option.kind === "route") return "改法 · 三选一";
   if (option.kind === "mastery") return "定型 · 二选一";
-  if (option.kind === "acquire") return "拿到新器";
+  if (option.kind === "acquire") return "新武器";
   if (option.kind === "utility") return "行旅札记";
   return option.kind === "refine" ? "做细" : "再磨";
 }
@@ -274,26 +300,34 @@ function fusionThumbStyle(fusionId: FusionId): React.CSSProperties {
   };
 }
 
-function parseProgress(raw: string | null): Partial<SavedProgressV4> | undefined {
+function parseProgress(raw: string | null): Partial<SavedProgressV5> | undefined {
   if (!raw) return;
   try {
-    const parsed = JSON.parse(raw) as Partial<SavedProgressV4>;
+    const parsed = JSON.parse(raw) as Partial<SavedProgressV5>;
     return parsed && typeof parsed === "object" ? parsed : undefined;
   } catch {
     return;
   }
 }
 
-function readProgress(): SavedProgressV4 {
-  const fallback: SavedProgressV4 = {
-    version: 4,
+function isInitialWeaponChoice(value: unknown): value is InitialWeaponChoice {
+  return (
+    value === "random" ||
+    (typeof value === "string" && WEAPON_IDS.includes(value as WeaponId))
+  );
+}
+
+function readProgress(): SavedProgressV5 {
+  const fallback: SavedProgressV5 = {
+    version: 5,
     cleared: false,
     unlockedWeapons: WEAPON_IDS,
+    preferredInitialWeapon: "random",
   };
   if (typeof window === "undefined") return fallback;
   try {
-    const current = parseProgress(localStorage.getItem(PROGRESS_KEY_V4));
-    const legacy = PROGRESS_KEYS_V3
+    const current = parseProgress(localStorage.getItem(PROGRESS_KEY_V5));
+    const legacy = LEGACY_PROGRESS_KEYS
       .map((key) => parseProgress(localStorage.getItem(key)))
       .find(Boolean);
     const source = current ?? legacy;
@@ -303,12 +337,17 @@ function readProgress(): SavedProgressV4 {
         )
       : fallback.unlockedWeapons;
     return {
-      version: 4,
+      version: 5,
       cleared:
         source?.cleared === true ||
         localStorage.getItem(LEGACY_CLEAR_KEY) === "yes",
       unlockedWeapons:
         unlockedWeapons.length > 0 ? unlockedWeapons : fallback.unlockedWeapons,
+      preferredInitialWeapon: isInitialWeaponChoice(source?.preferredInitialWeapon)
+        ? source.preferredInitialWeapon
+        : legacy && !current
+          ? "sword"
+          : fallback.preferredInitialWeapon,
       settings: source?.settings,
     };
   } catch {
@@ -316,13 +355,13 @@ function readProgress(): SavedProgressV4 {
   }
 }
 
-function saveProgress(update: Partial<Omit<SavedProgressV4, "version">>) {
+function saveProgress(update: Partial<Omit<SavedProgressV5, "version">>) {
   if (typeof window === "undefined") return;
   try {
     const current = readProgress();
     localStorage.setItem(
-      PROGRESS_KEY_V4,
-      JSON.stringify({ ...current, ...update, version: 4 }),
+      PROGRESS_KEY_V5,
+      JSON.stringify({ ...current, ...update, version: 5 }),
     );
   } catch {
     // The current run stays playable if private browsing disables storage.
@@ -332,26 +371,12 @@ function saveProgress(update: Partial<Omit<SavedProgressV4, "version">>) {
 function initialAudioSettings(): AudioSettings {
   const fallback: AudioSettings = {
     muted: false,
-    master: 0.72,
-    music: 0.6,
-    sfx: 0.56,
-    ambient: 0.4,
+    master: 0.68,
+    music: 0.5,
+    sfx: 0.42,
+    ambient: 0.24,
   };
-  if (typeof window === "undefined") return fallback;
-  try {
-    const progressSettings = readProgress().settings;
-    const saved = progressSettings ??
-      JSON.parse(localStorage.getItem(AUDIO_KEY_V1) ?? "{}") as Partial<AudioSettings>;
-    return {
-      muted: typeof saved.muted === "boolean" ? saved.muted : fallback.muted,
-      master: clamp(saved.master ?? fallback.master, 0, 1),
-      music: clamp(saved.music ?? fallback.music, 0, 1),
-      sfx: clamp(saved.sfx ?? fallback.sfx, 0, 1),
-      ambient: clamp(saved.ambient ?? fallback.ambient ?? 0.5, 0, 1),
-    };
-  } catch {
-    return fallback;
-  }
+  return fallback;
 }
 
 function areRingAdjacent(first: number, second: number, length: number) {
@@ -438,7 +463,9 @@ export function PaperGuildGame() {
     knobY: 0,
   });
   const lastFrameRef = useRef(0);
+  const simulationAccumulatorRef = useRef(0);
   const hudClockRef = useRef(0);
+  const cheatBufferRef = useRef("");
   const queuedModalsRef = useRef<QueuedModal[]>([]);
   const forgeFireRef = useRef(0);
   const forgeCycleRef = useRef(0);
@@ -465,6 +492,12 @@ export function PaperGuildGame() {
   const [selectedSynergyIds, setSelectedSynergyIds] = useState<string[]>([]);
   const [synergyCapacity, setSynergyCapacity] = useState(3);
   const [trials, setTrials] = useState<Set<TrialId>>(new Set());
+  const [preferredInitialWeapon, setPreferredInitialWeapon] =
+    useState<InitialWeaponChoice>("random");
+  const [testPanelUnlocked, setTestPanelUnlocked] = useState(false);
+  const [testPanelState, setTestPanelState] = useState<TestPanelState>(
+    DEFAULT_TEST_PANEL_STATE,
+  );
   const [selectedNodes, setSelectedNodes] = useState<number[]>([]);
   const [forgeMessage, setForgeMessage] = useState("先选一项无尽手艺，再用炉火整理器盘。");
   const [forgeFire, setForgeFire] = useState(0);
@@ -485,9 +518,7 @@ export function PaperGuildGame() {
   const [loading, setLoading] = useState({ season: 0, enemy: 0, visual: 0, terms: 0 });
   const [assetsReady, setAssetsReady] = useState(false);
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(initialAudioSettings);
-  const [trialsUnlocked, setTrialsUnlocked] = useState(() => {
-    return readProgress().cleared;
-  });
+  const [trialsUnlocked, setTrialsUnlocked] = useState(false);
   const [tutorialNonce, setTutorialNonce] = useState(0);
 
   const setMode = useCallback((next: Mode) => {
@@ -496,11 +527,29 @@ export function PaperGuildGame() {
   }, []);
 
   useEffect(() => {
+    let alive = true;
+    const progress = readProgress();
     saveProgress({});
     const manager = new AudioManager();
+    try {
+      const legacySettings = progress.settings;
+      if (
+        window.localStorage.getItem(AUDIO_KEY_V1) === null &&
+        legacySettings
+      ) {
+        manager.setSettings(legacySettings);
+      }
+    } catch {
+      // The manager already carries safe defaults when storage is unavailable.
+    }
     audioRef.current = manager;
+    queueMicrotask(() => {
+      if (!alive) return;
+      setPreferredInitialWeapon(progress.preferredInitialWeapon);
+      setTrialsUnlocked(progress.cleared);
+      setAudioSettings(manager.getSettings());
+    });
 
-    let alive = true;
     const seasonPromise = loadArtAssets((progress) => {
       if (alive) setLoading((current) => ({ ...current, season: progress }));
     });
@@ -701,7 +750,7 @@ export function PaperGuildGame() {
     queuedModalsRef.current = [];
     finishHumanForm(run.player);
     releaseMovementInput();
-    if (victory) {
+    if (victory && !run.testModifiers.assisted) {
       saveProgress({ cleared: true });
       setTrialsUnlocked(true);
     }
@@ -792,8 +841,8 @@ export function PaperGuildGame() {
       }
       if (event.type === "term") {
         if (!run.endless && run.elapsed >= STANDARD_SECONDS) continue;
-        play("sfx.term-change");
         const term = getSolarTermState(run.elapsed, run.endless).current;
+        if (TERM_CHANGE_CHIMES.has(term.name)) play("sfx.term-change");
         void audioRef.current?.playSfx(getTermAmbienceCue(term));
         syncMusic();
       }
@@ -831,6 +880,15 @@ export function PaperGuildGame() {
         pauseGame();
       } else if (key === "escape" && modeRef.current === "paused") {
         setMode("playing");
+      }
+      if (modeRef.current === "paused" && /^[a-z]$/.test(key)) {
+        cheatBufferRef.current = `${cheatBufferRef.current}${key}`.slice(
+          -TEST_CODE.length,
+        );
+        if (cheatBufferRef.current === TEST_CODE) {
+          setTestPanelUnlocked(true);
+          cheatBufferRef.current = "";
+        }
       }
       if (modeRef.current === "upgrade" && ["1", "2", "3"].includes(key)) {
         const option = upgradeOptions[Number(key) - 1];
@@ -1029,7 +1087,7 @@ export function PaperGuildGame() {
         canvas.height = GAME_HEIGHT;
       }
       const rawDelta = lastFrameRef.current ? (time - lastFrameRef.current) / 1000 : 0;
-      const delta = Math.min(rawDelta, 0.034);
+      const realDelta = Math.min(rawDelta, 0.034);
       lastFrameRef.current = time;
       const run = runRef.current;
 
@@ -1071,15 +1129,38 @@ export function PaperGuildGame() {
           y += clamp((joystick.knobY - joystick.baseY) / 46, -1, 1);
         }
         const direction = Math.hypot(x, y) > 1 ? normalize(x, y) : { x, y };
-        const events = stepRun(run, delta, direction);
-        consumeCombatAudio(run);
-        handleEvents(run, events);
+        const timeScale = clamp(run.testModifiers.timeScale, 1, 8);
+        simulationAccumulatorRef.current += realDelta * timeScale;
+        let simulatedDelta = 0;
+        let steps = 0;
+        while (
+          simulationAccumulatorRef.current >= FIXED_STEP &&
+          steps < MAX_SIMULATION_STEPS &&
+          modeRef.current === "playing"
+        ) {
+          const events = stepRun(run, FIXED_STEP, direction);
+          simulationAccumulatorRef.current -= FIXED_STEP;
+          simulatedDelta += FIXED_STEP;
+          steps += 1;
+          handleEvents(run, events);
+        }
+        if (modeRef.current !== "playing") {
+          simulationAccumulatorRef.current = 0;
+        } else if (steps === MAX_SIMULATION_STEPS) {
+          simulationAccumulatorRef.current = Math.min(
+            simulationAccumulatorRef.current,
+            FIXED_STEP,
+          );
+        }
+        if (steps > 0) consumeCombatAudio(run);
 
-        hudClockRef.current += delta;
+        hudClockRef.current += simulatedDelta;
         if (hudClockRef.current >= 0.12) {
           hudClockRef.current = 0;
           setSnapshot(snapshotRun(run));
         }
+      } else {
+        simulationAccumulatorRef.current = 0;
       }
 
       const renderRun = !run.endless && run.elapsed >= STANDARD_SECONDS
@@ -1094,9 +1175,17 @@ export function PaperGuildGame() {
 
   const startGame = async () => {
     if (!assetsReady) return;
+    setTestPanelUnlocked(false);
+    cheatBufferRef.current = "";
+    const seed = Date.now();
+    const run = createRun(trials, seed, {
+      initialWeaponId: preferredInitialWeapon,
+      unlockedWeaponIds: WEAPON_IDS,
+    });
+    const initialWeaponId = run.build.weapons[0]?.id ?? "sword";
     await audioRef.current?.initFromGesture();
     if (assetsRef.current.visuals) {
-      await preloadWeaponVisuals(assetsRef.current.visuals, ["sword"]);
+      await preloadWeaponVisuals(assetsRef.current.visuals, [initialWeaponId]);
     }
     void audioRef.current?.preload([
       "music.spring",
@@ -1106,8 +1195,9 @@ export function PaperGuildGame() {
       "sfx.upgrade",
       "sfx.player-hit",
     ]);
-    const run = createRun(trials);
     runRef.current = run;
+    simulationAccumulatorRef.current = 0;
+    setTestPanelState(run.testModifiers);
     await syncRunVisuals(run);
     releaseMovementInput();
     queuedModalsRef.current = [];
@@ -1170,6 +1260,7 @@ export function PaperGuildGame() {
 
   const returnToMenu = () => {
     runRef.current = null;
+    simulationAccumulatorRef.current = 0;
     releaseMovementInput();
     queuedModalsRef.current = [];
     forgeFireRef.current = 0;
@@ -1184,6 +1275,7 @@ export function PaperGuildGame() {
     setSynergyOptions([]);
     setSelectedSynergyIds([]);
     setSynergyCapacity(3);
+    setTestPanelState(DEFAULT_TEST_PANEL_STATE);
     setSnapshot(emptySnapshot);
     setSelectedNodes([]);
     const visuals = assetsRef.current.visuals;
@@ -1202,6 +1294,67 @@ export function PaperGuildGame() {
     });
   };
 
+  const chooseInitialWeapon = (choice: InitialWeaponChoice) => {
+    setPreferredInitialWeapon(choice);
+    saveProgress({ preferredInitialWeapon: choice });
+    if (choice !== "random" && assetsRef.current.visuals) {
+      void preloadWeaponVisuals(assetsRef.current.visuals, [choice]);
+    }
+  };
+
+  const updateTestModifiers = (
+    update: Partial<Pick<TestPanelState, "timeScale" | "incomingDamageScale">>,
+  ) => {
+    const run = runRef.current;
+    if (!run) return;
+    run.testModifiers = {
+      ...run.testModifiers,
+      ...update,
+      assisted: true,
+    };
+    setTestPanelState(run.testModifiers);
+    setSnapshot(snapshotRun(run));
+  };
+
+  const addTestExperience = () => {
+    const run = runRef.current;
+    if (!run) return;
+    run.player.xp += 100;
+    updateTestModifiers({});
+  };
+
+  const fillTestForgeFire = () => {
+    const run = runRef.current;
+    if (!run) return;
+    run.forgeCredits = 3;
+    forgeFireRef.current = 3;
+    setForgeFire(3);
+    updateTestModifiers({});
+  };
+
+  const weakenCurrentBoss = () => {
+    const run = runRef.current;
+    if (!run) return;
+    const boss =
+      run.enemies.find(
+        (enemy) =>
+          enemy.boss &&
+          enemy.hp > 0 &&
+          (!run.currentBoss || enemy.bossTier === run.currentBoss),
+      ) ??
+      run.enemies.find((enemy) => enemy.boss && enemy.hp > 0);
+    if (!boss) return;
+    boss.hp = 1;
+    updateTestModifiers({});
+  };
+
+  const resetTestMultipliers = () => {
+    updateTestModifiers({
+      timeScale: 1,
+      incomingDamageScale: 1,
+    });
+  };
+
   const updateAudio = (update: Partial<AudioSettings>) => {
     audioRef.current?.setSettings(update);
     const settings = audioRef.current?.getSettings() ?? {
@@ -1209,7 +1362,6 @@ export function PaperGuildGame() {
       ...update,
     };
     setAudioSettings(settings);
-    saveProgress({ settings });
     if (update.muted === false) {
       void audioRef.current?.initFromGesture().then(() => syncMusic());
     }
@@ -1378,7 +1530,7 @@ export function PaperGuildGame() {
       after: deriveWeaveTerminal(result.state).name,
       weave: result.state,
     });
-    setForgeMessage("新器位置与改法已排好，确认后才会消耗炉火。");
+    setForgeMessage("新武器的位置与改法已排好，确认后才会消耗炉火。");
   };
 
   const previewTemper = (offer: TemperForgeOffer) => {
@@ -1673,6 +1825,12 @@ export function PaperGuildGame() {
               </div>
 
               <div className="time-card">
+                {testPanelState.assisted && (
+                  <span className="test-run-badge">
+                    测试局 · ×{testPanelState.timeScale}
+                    {testPanelState.incomingDamageScale === 0 ? " · 无伤" : ""}
+                  </span>
+                )}
                 <span className="timer">{snapshot.endless ? `续 ${formatTime(snapshot.elapsed - STANDARD_SECONDS)}` : formatTime(snapshot.elapsed)}</span>
                 <button className="icon-button" onClick={pauseGame} aria-label="暂停">暂停</button>
               </div>
@@ -1757,13 +1915,35 @@ export function PaperGuildGame() {
                 <span>10 把本命器</span>
                 <span>30 种改法</span>
                 <span>12 套搭手</span>
-                <span>30 件合器</span>
+                <span>45 件合器</span>
                 <span>32 项无尽手艺</span>
                 <span>二十四节气</span>
               </div>
               <p className="tao-note">
                 少量道门元素只放在「五雷木令、伞骨接雷、弦尾落雷、雷部天变与法铃音色」，其余仍是市井百工与岁时行旅。
               </p>
+              <label className="initial-weapon-select">
+                <span>开卷武器</span>
+                <select
+                  aria-label="选择初始武器"
+                  value={preferredInitialWeapon}
+                  onChange={(event) =>
+                    chooseInitialWeapon(event.target.value as InitialWeaponChoice)
+                  }
+                >
+                  <option value="random">随机武器</option>
+                  {WEAPON_IDS.map((weaponId) => (
+                    <option key={weaponId} value={weaponId}>
+                      {getWeaponDefinition(weaponId).name}
+                    </option>
+                  ))}
+                </select>
+                <small>
+                  {preferredInitialWeapon === "random"
+                    ? "每次从十把武器中随机一把"
+                    : `从「${getWeaponDefinition(preferredInitialWeapon).name}」起手`}
+                </small>
+              </label>
               <div className="button-row">
                 <button className="primary-button" onClick={startGame} disabled={!assetsReady}>
                   {assetsReady ? "展卷启程" : `美工图集装订中 ${loadProgress}%`}
@@ -1852,12 +2032,20 @@ export function PaperGuildGame() {
                         />
                       )}
                       <span className="card-type">{index + 1} · {optionKind(option)}</span>
-                      <h3>{option.title}</h3>
+                      <h3>
+                        {option.kind === "acquire"
+                          ? getWeaponDefinition(option.weaponId).name
+                          : option.title}
+                      </h3>
                       <p>{option.description}</p>
                       {option.kind !== "utility" && (
-                        <div className="level-dots">
+                        <div
+                          className="level-dots"
+                          role="img"
+                          aria-label={`当前阶段 ${targetLevel}/5`}
+                        >
                           {[1, 2, 3, 4, 5].map((level) => (
-                            <i key={level} className={level <= (
+                            <i aria-hidden="true" key={level} className={level <= (
                               option.kind === "acquire"
                                 ? 1
                                 : option.kind === "refine"
@@ -2392,6 +2580,64 @@ export function PaperGuildGame() {
                   />
                 </label>
               </div>
+              {testPanelUnlocked ? (
+                <section className="test-panel" aria-label="测试工具">
+                  <div className="test-panel-heading">
+                    <strong>百工试作</strong>
+                    <small>仅影响本局；使用后不记录通关</small>
+                  </div>
+                  <div className="test-modifier-row">
+                    <label>
+                      <span>时间</span>
+                      <select
+                        value={testPanelState.timeScale}
+                        onChange={(event) =>
+                          updateTestModifiers({
+                            timeScale: Number(
+                              event.target.value,
+                            ) as TestPanelState["timeScale"],
+                          })
+                        }
+                      >
+                        {[1, 2, 4, 8].map((scale) => (
+                          <option key={scale} value={scale}>
+                            {scale} 倍
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      className={`test-toggle ${
+                        testPanelState.incomingDamageScale === 0 ? "active" : ""
+                      }`}
+                      aria-pressed={testPanelState.incomingDamageScale === 0}
+                      onClick={() =>
+                        updateTestModifiers({
+                          incomingDamageScale:
+                            testPanelState.incomingDamageScale === 0 ? 1 : 0,
+                        })
+                      }
+                    >
+                      纸命无损
+                    </button>
+                  </div>
+                  <div className="test-action-row">
+                    <button onClick={addTestExperience}>经验 +100</button>
+                    <button onClick={fillTestForgeFire}>炉火置 3</button>
+                    <button
+                      onClick={weakenCurrentBoss}
+                      disabled={snapshot.currentBoss === null}
+                    >
+                      当前 Boss 余 1 血
+                    </button>
+                    <button onClick={resetTestMultipliers}>恢复倍率</button>
+                  </div>
+                </section>
+              ) : (
+                <p className="test-code-hint">
+                  测试人员可在暂停页键入 <kbd>BAIGONG</kbd>
+                </p>
+              )}
               <div className="button-row centered">
                 <button className="primary-button" data-gamepad-cancel onClick={() => {
                   setMode("playing");
@@ -2424,7 +2670,11 @@ export function PaperGuildGame() {
                   onClick={() => endRun(true, "清风收卷")}
                 >
                   收卷结算
-                  <span className="choice-note">完成标准局并解锁试炼签</span>
+                  <span className="choice-note">
+                    {testPanelState.assisted
+                      ? "测试局不记录通关与解锁"
+                      : "完成标准局并解锁试炼签"}
+                  </span>
                 </button>
                 <button className="secondary-button" onClick={continueEndless}>
                   续卷 · 器盘无尽

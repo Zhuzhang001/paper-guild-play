@@ -38,6 +38,21 @@ const LOCKED_FUSION_RECIPES: readonly (
   ["abacus", "thunderSeal", "数珠落雷"],
   ["crossbow", "thunderSeal", "雷钉接路"],
   ["pipa", "inkline", "墨线记谱"],
+  ["sword", "abacus", "数珠定剑"],
+  ["sword", "thunderSeal", "剑印落雷"],
+  ["fan", "scissors", "风送双剪"],
+  ["fan", "abacus", "风拨算珠"],
+  ["fan", "lantern", "风转灯影"],
+  ["fan", "thunderSeal", "风停落雷"],
+  ["umbrella", "abacus", "珠敲伞骨"],
+  ["umbrella", "crossbow", "伞开排弩"],
+  ["scissors", "crossbow", "弩钉引剪"],
+  ["scissors", "thunderSeal", "雷过剪口"],
+  ["crossbow", "pipa", "弦引弩箭"],
+  ["pipa", "lantern", "灯影和弦"],
+  ["inkline", "lantern", "墨线牵影"],
+  ["inkline", "thunderSeal", "雷走墨线"],
+  ["lantern", "thunderSeal", "灯亮雷落"],
 ];
 
 function fusionPairKey(first: WeaponId, second: WeaponId): string {
@@ -64,8 +79,12 @@ export function validateCombatContent(): readonly string[] {
   if (SYNERGY_DEFINITIONS.length !== 12) {
     errors.push(`Expected 12 synergies, found ${SYNERGY_DEFINITIONS.length}`);
   }
-  if (FUSION_DEFINITIONS.length !== 30) {
-    errors.push(`Expected 30 fusions, found ${FUSION_DEFINITIONS.length}`);
+  const expectedFusionCount =
+    (WEAPON_DEFINITIONS.length * (WEAPON_DEFINITIONS.length - 1)) / 2;
+  if (FUSION_DEFINITIONS.length !== expectedFusionCount) {
+    errors.push(
+      `Expected ${expectedFusionCount} fusions, found ${FUSION_DEFINITIONS.length}`,
+    );
   }
   if (CELESTIAL_INTRUSIONS.length !== 6) {
     errors.push(`Expected 6 celestial intrusions, found ${CELESTIAL_INTRUSIONS.length}`);
@@ -138,6 +157,16 @@ export function validateCombatContent(): readonly string[] {
   }
 
   const fusionPairs = new Set<string>();
+  const terminalFamilies = new Set([
+    "returningVolley",
+    "sweepingLine",
+    "echoChain",
+    "thunderField",
+    "closingField",
+    "shadowParade",
+    "guardRelease",
+    "markedFinish",
+  ]);
   for (const fusion of FUSION_DEFINITIONS) {
     const pair = [...fusion.weapons].sort().join("+");
     if (fusionPairs.has(pair)) {
@@ -161,9 +190,37 @@ export function validateCombatContent(): readonly string[] {
     ) {
       errors.push(`Fusion ${fusion.id} is missing its canonical pair/action`);
     }
+    if (!terminalFamilies.has(fusion.terminalFamily)) {
+      errors.push(`Fusion ${fusion.id} has an unknown terminal family`);
+    }
+    const patchValues = Object.entries(fusion.weavePatch)
+      .filter(([key]) => key !== "delivery")
+      .map(([, value]) => value);
+    if (
+      !fusion.weavePatch.delivery ||
+      patchValues.some(
+        (value) => typeof value !== "number" || !Number.isFinite(value),
+      )
+    ) {
+      errors.push(`Fusion ${fusion.id} has an invalid weave patch`);
+    }
     for (const weaponId of fusion.weapons) {
       if (!weaponIds.has(weaponId)) {
         errors.push(`Fusion ${fusion.id} references unknown weapon ${weaponId}`);
+      }
+    }
+  }
+  for (let first = 0; first < WEAPON_DEFINITIONS.length; first += 1) {
+    for (
+      let second = first + 1;
+      second < WEAPON_DEFINITIONS.length;
+      second += 1
+    ) {
+      const firstId = WEAPON_DEFINITIONS[first].id;
+      const secondId = WEAPON_DEFINITIONS[second].id;
+      const pair = fusionPairKey(firstId, secondId);
+      if (!fusionPairs.has(pair)) {
+        errors.push(`Missing complete fusion pair: ${pair}`);
       }
     }
   }

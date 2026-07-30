@@ -206,6 +206,21 @@ def main() -> None:
         "pearlThunder",
         "thunderBoltRoad",
         "inkScore",
+        "countedSword",
+        "markedThunderSword",
+        "windScissors",
+        "windAbacus",
+        "windLantern",
+        "windThunder",
+        "beadCanopy",
+        "canopyVolley",
+        "boltScissors",
+        "thunderScissors",
+        "stringCrossbow",
+        "lanternStrings",
+        "inkShadow",
+        "inkThunderRoad",
+        "lanternThunder",
     }
     actual_fusions = {
         path.stem.removeprefix("fusion-")

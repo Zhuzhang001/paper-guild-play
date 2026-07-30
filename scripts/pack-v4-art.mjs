@@ -363,11 +363,11 @@ async function packFusionSheet(inputPath, outputPath) {
   await writeFile(
     outputPath.replace(/\.[^.]+$/, ".atlas.json"),
     `${JSON.stringify({
-      version: 4,
+      version: 5,
       columns,
       rows,
       cell: { width: targetSize, height: targetSize },
-      frames: ["body", "attack", "hit", "finish"],
+      frames: ["body", "windup", "attack", "finish"],
     }, null, 2)}\n`,
     "utf8",
   );

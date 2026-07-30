@@ -169,12 +169,12 @@ const fanRoutes: WeaponDefinition["routes"] = [
     "a",
     "铺风",
     "一扇铺开宽阔风面，推削密集敌群。",
-    [projectile("fan-a-gale", ["wind"], 13, 0.88, { pattern: "fan", count: 5, spreadDegrees: 68, radius: 18, pierce: 2 })],
-    [projectile("fan-a-refine", ["wind"], 18, 0.72, { pattern: "fan", count: 7, spreadDegrees: 84, radius: 21, pierce: 3 })],
+    [projectile("fan-a-gale", ["wind"], 16, 0.88, { pattern: "fan", count: 4, spreadDegrees: 68, radius: 18, pierce: 2 })],
+    [projectile("fan-a-refine", ["wind"], 25, 0.72, { pattern: "fan", count: 5, spreadDegrees: 84, radius: 21, pierce: 3 })],
     {
       name: "前后铺风",
       description: "折扇出手时向前后和两侧同时铺出十二道风刃。",
-      effects: [projectile("fan-a-focus", ["wind"], 24, 0.66, { pattern: "radial", count: 12, pierce: 3 })],
+      effects: [projectile("fan-a-focus", ["wind"], 36, 0.66, { pattern: "radial", count: 8, pierce: 3 })],
     },
     {
       name: "过处留风",
@@ -244,12 +244,12 @@ const umbrellaRoutes: WeaponDefinition["routes"] = [
     "b",
     "开伞散雨",
     "伞骨开合，向四周泼出细密雨针。",
-    [projectile("umbrella-b-needles", ["rain"], 9, 0.76, { pattern: "radial", count: 10, speed: 680 })],
-    [projectile("umbrella-b-refine", ["rain"], 12, 0.6, { pattern: "radial", count: 14, speed: 760, pierce: 1 })],
+    [projectile("umbrella-b-needles", ["rain"], 13, 0.76, { pattern: "radial", count: 7, speed: 680 })],
+    [projectile("umbrella-b-refine", ["rain"], 17, 0.6, { pattern: "radial", count: 10, speed: 760, pierce: 1 })],
     {
       name: "加密雨针",
       description: "每次开伞改撒十八枚雨针，并让每枚雨针穿过一个敌人。",
-      effects: [projectile("umbrella-b-focus", ["rain"], 15, 0.46, { pattern: "radial", count: 18, pierce: 1 })],
+      effects: [projectile("umbrella-b-focus", ["rain"], 23, 0.46, { pattern: "radial", count: 12, pierce: 1 })],
     },
     {
       name: "针落成洼",
@@ -348,12 +348,12 @@ const abacusRoutes: WeaponDefinition["routes"] = [
     {
       name: "十二拨珠",
       description: "算盘累计出手十二次后，向四周泼出十八颗金边算珠。",
-      effects: [accumulator("abacus-a-focus", ["ledger"], "pearlRain", 12, [projectile("abacus-a-ring", ["ledger"], 22, 0, { pattern: "radial", count: 18 })], { trigger: "onAttack" })],
+      effects: [accumulator("abacus-a-focus", ["ledger"], "pearlRain", 12, [projectile("abacus-a-ring", ["ledger"], 33, 0, { pattern: "radial", count: 12 })], { trigger: "onAttack" })],
     },
     {
       name: "连中快拨",
       description: "每轮改为五珠连拨，并缩短同一目标可再次受击的间隔。",
-      effects: [projectile("abacus-a-chain", ["ledger"], 18, 0.16, { pattern: "burst", count: 5, singleTargetHitCooldown: 0.08 })],
+      effects: [projectile("abacus-a-chain", ["ledger"], 34, 0.3, { pattern: "burst", count: 5, singleTargetHitCooldown: 0.1 })],
     },
   ),
   route(
@@ -405,7 +405,7 @@ const crossbowRoutes: WeaponDefinition["routes"] = [
     {
       name: "收拢齐射",
       description: "连弩出手时把九支弩箭收拢成窄扇面，并略微追向带印目标。",
-      effects: [projectile("crossbow-a-focus", ["mechanism", "mark"], 29, 0.48, { pattern: "fan", count: 9, spreadDegrees: 24, homing: 0.25 })],
+      effects: [projectile("crossbow-a-focus", ["mechanism", "mark"], 44, 0.62, { pattern: "fan", count: 6, spreadDegrees: 24, homing: 0.25 })],
     },
     {
       name: "半拍补射",
@@ -462,7 +462,7 @@ const pipaRoutes: WeaponDefinition["routes"] = [
     {
       name: "十向推浪",
       description: "琵琶出手时向十个方向同时推出可穿过四个敌人的音珠。",
-      effects: [projectile("pipa-a-focus", ["music"], 31, 0.82, { pattern: "radial", count: 10, radius: 24, pierce: 4 })],
+      effects: [projectile("pipa-a-focus", ["music"], 52, 0.82, { pattern: "radial", count: 6, radius: 24, pierce: 4 })],
     },
     {
       name: "尾后叠浪",
@@ -594,7 +594,7 @@ const lanternRoutes: WeaponDefinition["routes"] = [
     {
       name: "双圈转影",
       description: "灯影转动时增至十二幅，并沿内外双圈持续碰击敌人。",
-      effects: [orbit("lantern-b-focus", ["shadow", "fire"], 29, { count: 12, radius: 156, angularSpeed: 3.2, hitCooldown: 0.2 })],
+      effects: [orbit("lantern-b-focus", ["shadow", "fire"], 44, { count: 8, radius: 156, angularSpeed: 3.2, hitCooldown: 0.2 })],
     },
     {
       name: "转满冲出",

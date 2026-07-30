@@ -219,93 +219,73 @@ def fit_recording(signal: np.ndarray, length: int, offset_seconds: float) -> np.
     return np.tile(rolled, repeats)[:length]
 
 
-def make_score(style: str, duration: float = 56.0) -> np.ndarray:
+D_GONG = [38, 40, 42, 45, 47, 50, 52, 54, 57, 59, 62, 64, 66, 69, 71, 74, 76, 78, 81, 83, 86, 88, 90]
+
+
+def gong_note(index: int) -> int:
+    return D_GONG[index % len(D_GONG)]
+
+
+def make_score(style: str, duration: float = 60.0) -> np.ndarray:
+    """A shared, sparse 72 BPM 6/8 score; styles swap timbre, not harmony."""
     track = np.zeros((int(duration * SR), 2), dtype=np.float64)
-    bar = duration / 16
-    roots_by_style = {
-        "spring": [50, 55, 57, 52],
-        "summer": [45, 50, 52, 47],
-        "autumn": [48, 53, 55, 50],
-        "winter": [43, 48, 46, 41],
-        "endless": [45, 48, 50, 43],
-        "taotie": [38, 41, 36, 43],
-        "nian": [43, 48, 50, 46],
-    }
-    patterns = {
-        "spring": [0, 2, 4, 2, 5, 4, 2, 1],
-        "summer": [0, 4, 2, 5, 4, 2, 1, 2],
-        "autumn": [4, 2, 1, 0, 2, 4, 5, 4],
-        "winter": [0, 1, 2, 4, 2, 1, 0, -2],
-        "endless": [0, 2, 5, 4, 2, 7, 5, 4],
-        "taotie": [0, 1, 0, -2, 0, 4, 1, -2],
-        "nian": [0, 4, 5, 7, 5, 4, 2, 4],
-    }
-    pentatonic = [0, 2, 4, 7, 9, 12, 14, 16]
-    roots = roots_by_style[style]
-    melody_pattern = patterns[style]
+    bar = 2.5  # 72 quarter notes per minute, three quarter notes per 6/8 bar.
+    bars = int(round(duration / bar))
+    root_cycle = [50, 57, 59, 52, 50, 54, 57, 52]
+    phrase = [74, 76, 78, 81, 78, 76, 74, 71]
 
-    for bar_index in range(16):
+    for bar_index in range(bars):
         start = bar_index * bar
-        root = roots[bar_index % len(roots)]
-        chord = [root, root + 7, root + 12]
-        if style in {"winter", "endless", "nian"}:
-            add_cyclic(track, reed_pad(chord, bar * 1.15), start, -0.08, 0.72)
-        elif style in {"spring", "summer"} and bar_index % 2 == 0:
-            add_cyclic(track, reed_pad(chord, bar * 1.05), start, -0.22, 0.32)
+        root = root_cycle[(bar_index // 2) % len(root_cycle)]
+        phrase_note = phrase[(bar_index + (1 if style == "summer" else 0)) % len(phrase)]
 
-        add_cyclic(
-            track,
-            pluck(root - 12, 2.6, 0.38, 1.3, bar_index),
-            start,
-            -0.34,
-            0.72,
-        )
-        for step in range(8):
-            note_index = melody_pattern[(step + bar_index) % 8]
-            scale_index = max(0, min(7, note_index))
-            note = root + 12 + pentatonic[scale_index]
-            note_start = start + step * bar / 8
-            if style == "spring" and step in {0, 3, 6}:
-                add_cyclic(track, flute(note, bar * 0.72, bar_index * 8 + step), note_start, 0.25, 0.5)
-            elif style == "summer" and step in {1, 4, 7}:
-                add_cyclic(track, flute(note + 5, bar * 0.55, bar_index * 8 + step), note_start, 0.3, 0.45)
-            else:
-                brightness = 0.62 if style in {"autumn", "nian"} else 0.48
-                gain = 0.5 if style in {"taotie", "endless"} else 0.42
-                add_cyclic(
-                    track,
-                    pluck(note, bar * 0.58, brightness, 0.9, bar_index * 8 + step),
-                    note_start,
-                    0.34 if step % 2 else -0.05,
-                    gain,
-                )
+        if style == "spring":
+            if bar_index % 2 == 0:
+                add_cyclic(track, pluck(root, 2.1, 0.34, 1.45, bar_index), start, -0.3, 0.36)
+            if bar_index % 4 in {1, 2}:
+                add_cyclic(track, flute(phrase_note, 1.65, bar_index), start + 0.72, 0.24, 0.27)
+            if bar_index % 8 == 6:
+                add_cyclic(track, pluck(81, 1.4, 0.42, 1.2, bar_index), start + 1.7, 0.12, 0.2)
 
-        if style in {"autumn", "summer", "nian", "endless", "taotie"}:
-            pulse_count = 4 if style in {"nian", "taotie"} else 2
-            for pulse in range(pulse_count):
-                pulse_start = start + (pulse + 0.5) * bar / pulse_count
-                if style in {"nian", "taotie"}:
-                    add_cyclic(
-                        track,
-                        drum(0.78 if pulse == 0 else 0.48, seed=bar_index * 4 + pulse),
-                        pulse_start,
-                        -0.12 if pulse % 2 else 0.1,
-                        0.62,
-                    )
-                else:
-                    add_cyclic(
-                        track,
-                        wood(0.58, seed=bar_index * 4 + pulse),
-                        pulse_start,
-                        0.18,
-                        0.5,
-                    )
-        if style == "winter" and bar_index % 4 == 0:
-            add_cyclic(track, bell(root + 24, 3.1, bar_index), start + bar * 0.5, 0.34, 0.42)
-        if style == "taotie" and bar_index % 2 == 0:
-            add_cyclic(track, bell(root + 12, 2.6, bar_index), start, -0.25, 0.33)
+        elif style == "summer":
+            add_cyclic(track, pluck(root, 1.7, 0.4, 1.0, bar_index), start, -0.22, 0.3)
+            add_cyclic(track, wood(0.24, 0.18, bar_index), start + 0.82, 0.12, 0.25)
+            if bar_index % 2 == 0:
+                add_cyclic(track, flute(phrase_note, 1.25, bar_index), start + 1.35, 0.28, 0.22)
 
-    return master(periodic_reverb(track, 0.11 if style not in {"taotie", "nian"} else 0.075), -5)
+        elif style == "autumn":
+            if bar_index % 4 in {0, 1}:
+                add_cyclic(track, pluck(phrase_note, 1.65, 0.57, 0.9, bar_index), start + 0.18, 0.2, 0.34)
+                add_cyclic(track, pluck(root, 1.9, 0.42, 1.15, bar_index + 90), start + 1.28, -0.26, 0.24)
+            if bar_index % 2 == 0:
+                add_cyclic(track, wood(0.18, 0.2, bar_index), start + 2.0, -0.08, 0.2)
+
+        elif style == "winter":
+            if bar_index % 2 == 0:
+                add_cyclic(track, reed_pad([root, root + 7, root + 12], 3.85), start, -0.08, 0.26)
+                add_cyclic(track, drum(0.24, 0.74, bar_index), start + 0.08, -0.16, 0.24)
+            if bar_index % 8 == 4:
+                add_cyclic(track, bell(78, 2.1, bar_index), start + 1.2, 0.28, 0.14)
+
+        elif style == "endless":
+            add_cyclic(track, drum(0.19, 0.58, bar_index), start + 0.12, -0.18, 0.2)
+            if bar_index % 2 == 0:
+                add_cyclic(track, reed_pad([root - 12, root, root + 7], 3.5), start, -0.12, 0.18)
+            if bar_index % 4 == 1:
+                add_cyclic(track, pluck(phrase_note, 1.55, 0.46, 0.9, bar_index), start + 1.28, 0.24, 0.25)
+
+        else:
+            # Boss tracks are compatible low/rhythm layers, not a second tune.
+            strength = 0.36 if style == "taotie" else 0.42
+            add_cyclic(track, drum(strength, 0.74, bar_index), start + 0.08, -0.12, 0.32)
+            add_cyclic(track, wood(0.2, 0.2, bar_index + 30), start + 1.25, 0.14, 0.2)
+            if bar_index % 2 == 0:
+                add_cyclic(track, reed_pad([root - 12, root, root + 7], 3.7), start, -0.08, 0.2)
+            if bar_index % 4 == (1 if style == "nian" else 3):
+                add_cyclic(track, pluck(phrase_note, 1.5, 0.5, 0.9, bar_index), start + 1.65, 0.22, 0.22)
+
+    reverb = 0.07 if style not in {"taotie", "nian"} else 0.045
+    return master(periodic_reverb(track, reverb), -6)
 
 
 def noise_swell(duration: float, low: float, high: float, seed: int) -> np.ndarray:
@@ -387,10 +367,15 @@ def material_weapon(weapon: str, kind: str, variant: int) -> np.ndarray:
         duration = 0.28 if weapon != "thunder" else 0.48
     length = int(duration * SR)
     signal = np.zeros(length)
+    variant_note = {
+        1: 74,
+        2: 76,
+        3: 78,
+    }[variant]
 
     if weapon == "sword":
         signal += noise_swell(duration, 900, 5_200, seed) * (0.18 if kind == "fire" else 0.08)
-        signal += pluck(74 + variant, duration, 0.68, 0.45, seed)[:length] * 0.38
+        signal += pluck(variant_note, duration, 0.68, 0.45, seed)[:length] * 0.34
     elif weapon == "fan":
         signal += noise_swell(duration, 240, 2_800, seed) * (0.28 if kind == "fire" else 0.17)
         signal += wood(0.18, duration, seed)[:length]
@@ -401,8 +386,9 @@ def material_weapon(weapon: str, kind: str, variant: int) -> np.ndarray:
             start = int(offset * SR)
             signal[start : start + min(len(hit), length - start)] += hit[: max(0, min(len(hit), length - start))]
     elif weapon == "scissors":
-        for offset, note in [(0.01, 84), (0.095, 88)]:
-            hit = bell(note + variant, 0.26, seed) * (0.34 if kind == "fire" else 0.25)
+        upper_note = [86, 88, 90][variant - 1]
+        for offset, note in [(0.01, variant_note), (0.095, upper_note)]:
+            hit = bell(note, 0.26, seed) * (0.3 if kind == "fire" else 0.22)
             start = int(offset * SR)
             signal[start : start + min(len(hit), length - start)] += hit[: max(0, min(len(hit), length - start))]
     elif weapon == "abacus":
@@ -411,17 +397,17 @@ def material_weapon(weapon: str, kind: str, variant: int) -> np.ndarray:
             start = int((0.025 + index * 0.047) * SR)
             signal[start : start + min(len(hit), length - start)] += hit[: max(0, min(len(hit), length - start))]
     elif weapon == "crossbow":
-        signal += pluck(50 + variant, duration, 0.74, 0.42, seed)[:length] * 0.36
+        signal += pluck([50, 52, 54][variant - 1], duration, 0.74, 0.42, seed)[:length] * 0.32
         signal += wood(0.43, duration, seed)[:length]
     elif weapon == "pipa":
-        signal += pluck(76 + variant * 2, duration, 0.7, 0.55, seed)[:length] * 0.5
+        signal += pluck(variant_note, duration, 0.7, 0.55, seed)[:length] * 0.42
     elif weapon == "inkline":
-        signal += pluck(61 + variant, duration, 0.45, 0.52, seed)[:length] * 0.34
+        signal += pluck([62, 64, 66][variant - 1], duration, 0.45, 0.52, seed)[:length] * 0.3
         signal += bandpass(local.normal(0, 1, length), 180, 1_900) * np.exp(-np.arange(length) / SR * 8) * 0.05
     elif weapon == "lantern":
         signal += wood(0.24, duration, seed)[:length]
         signal += noise_swell(duration, 180, 1_500, seed) * 0.15
-        signal += bell(72 + variant, duration, seed)[:length] * 0.12
+        signal += bell(variant_note, duration, seed)[:length] * 0.1
     elif weapon == "thunder":
         t = np.arange(length) / SR
         crack = bandpass(local.normal(0, 1, length), 140, 4_200)
@@ -436,25 +422,41 @@ def material_fusion(
     second_weapon: str,
     index: int,
 ) -> np.ndarray:
-    """Give every crafted pair a brief, quiet two-material attack signature."""
+    """Author one restrained composite gesture instead of stacking two cues."""
     duration = 0.78 if "thunder" in (first_weapon, second_weapon) else 0.62
     length = int(duration * SR)
     result = np.zeros(length)
-    first = material_weapon(first_weapon, "fire", index % 3 + 1) * 0.58
-    second = material_weapon(second_weapon, "hit", (index + 1) % 3 + 1) * 0.52
-    result[: min(length, len(first))] += first[:length]
-    offset = int((0.09 + (index % 4) * 0.012) * SR)
-    result[offset : offset + min(len(second), length - offset)] += second[
-        : max(0, min(len(second), length - offset))
-    ]
-    # A restrained identifying interval makes same-material pairs distinct
-    # while preserving their real paper/wood/string attack.
-    interval = 57 + (sum(map(ord, fusion_id)) % 13)
-    accent = pluck(interval, 0.42, 0.42, 0.5, 11_000 + index) * 0.13
-    accent_start = int((0.18 + (index % 3) * 0.025) * SR)
-    result[
-        accent_start : accent_start + min(len(accent), length - accent_start)
-    ] += accent[: max(0, min(len(accent), length - accent_start))]
+    seed = 11_000 + index
+    pair = {first_weapon, second_weapon}
+    note = [62, 64, 66, 69, 71][index % 5]
+    family = index % 8
+
+    if "thunder" in pair:
+        crack = noise_swell(duration, 170, 3_600, seed)
+        result += crack[:length] * 0.095
+        result += drum(0.26, duration, seed)[:length] * 0.24
+    elif pair & {"fan", "umbrella"}:
+        result += noise_swell(duration, 260, 2_300, seed)[:length] * 0.12
+        result += wood(0.17, duration, seed)[:length]
+    elif pair & {"pipa", "crossbow"}:
+        result += pluck(note, duration, 0.54, 0.72, seed)[:length] * 0.28
+    else:
+        result += wood(0.22, duration, seed)[:length]
+
+    if family in {0, 3, 6}:
+        accent = pluck(note + 12, 0.38, 0.4, 0.52, seed) * 0.13
+        accent_start = int(0.16 * SR)
+        result[
+            accent_start : accent_start + min(len(accent), length - accent_start)
+        ] += accent[: max(0, min(len(accent), length - accent_start))]
+    elif family in {1, 4}:
+        accent = wood(0.18, 0.22, seed + 1)
+        accent_start = int(0.2 * SR)
+        result[
+            accent_start : accent_start + min(len(accent), length - accent_start)
+        ] += accent[: max(0, min(len(accent), length - accent_start))]
+    else:
+        result += noise_swell(duration, 480, 2_800, seed + 2)[:length] * 0.045
     return lowpass(result, 6_800)
 
 
@@ -480,15 +482,15 @@ def make_sfx(name: str) -> np.ndarray:
     if name == "player-hit":
         return drum(0.42, 0.46, seed) + wood(0.28, 0.46, seed)
     if name == "term-change":
-        return flute(79, 1.1, seed) * 0.28 + bell(72, 1.1, seed) * 0.12
+        return flute(78, 1.1, seed) * 0.22 + bell(74, 1.1, seed) * 0.09
     if name in {"upgrade", "synergy", "fusion", "ultimate"}:
         duration = {"upgrade": 1.1, "synergy": 1.35, "fusion": 1.7, "ultimate": 2.1}[name]
         result = np.zeros(int(duration * SR))
         notes = {
-            "upgrade": [62, 67, 71],
-            "synergy": [57, 64, 69, 74],
-            "fusion": [50, 57, 62, 69],
-            "ultimate": [43, 55, 62, 67, 74],
+            "upgrade": [62, 66, 69],
+            "synergy": [57, 62, 66, 69],
+            "fusion": [50, 57, 62, 66],
+            "ultimate": [50, 57, 62, 69, 74],
         }[name]
         for index, note in enumerate(notes):
             tone = pluck(note, duration - index * 0.12, 0.5, 1.2, seed + index)
@@ -501,7 +503,7 @@ def make_sfx(name: str) -> np.ndarray:
         duration = 2.6
         result = np.zeros(int(duration * SR))
         result += drum(0.7, duration, seed)[: len(result)]
-        result += bell(43 if name == "boss-taotie" else 55, duration, seed)[: len(result)] * 0.34
+        result += bell(38 if name == "boss-taotie" else 45, duration, seed)[: len(result)] * 0.26
         if name == "boss-nian":
             for index, offset in enumerate([0.55, 1.05, 1.55]):
                 hit = wood(0.55, 0.35, seed + index)
@@ -571,7 +573,9 @@ def main() -> None:
     styles = {
         "spring": -18,
         "summer": -18,
-        "autumn": -18,
+        # Sparse two-bars-on/two-bars-off phrasing reads quieter to EBU
+        # gating, so the encoder target is offset to land near -18 LUFS-I.
+        "autumn": -16.5,
         "winter": -18,
         "endless": -17,
         "boss-taotie": -17,
@@ -602,7 +606,7 @@ def main() -> None:
             PUBLIC / f"music-{name}.m4a",
             loudness,
             "96k",
-            56.0,
+            60.0,
         )
 
     ambience_names = [
@@ -696,6 +700,21 @@ def main() -> None:
         ("pearlThunder", "abacus", "thunder"),
         ("thunderBoltRoad", "crossbow", "thunder"),
         ("inkScore", "pipa", "inkline"),
+        ("countedSword", "sword", "abacus"),
+        ("markedThunderSword", "sword", "thunder"),
+        ("windScissors", "fan", "scissors"),
+        ("windAbacus", "fan", "abacus"),
+        ("windLantern", "fan", "lantern"),
+        ("windThunder", "fan", "thunder"),
+        ("beadCanopy", "umbrella", "abacus"),
+        ("canopyVolley", "umbrella", "crossbow"),
+        ("boltScissors", "scissors", "crossbow"),
+        ("thunderScissors", "scissors", "thunder"),
+        ("stringCrossbow", "crossbow", "pipa"),
+        ("lanternStrings", "pipa", "lantern"),
+        ("inkShadow", "inkline", "lantern"),
+        ("inkThunderRoad", "inkline", "thunder"),
+        ("lanternThunder", "lantern", "thunder"),
     ]
     for index, (fusion_id, first_weapon, second_weapon) in enumerate(
         fusion_materials

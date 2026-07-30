@@ -3,6 +3,12 @@ import type { FusionId } from "../content";
 import type { SeasonId, SolarTermCue, TermAmbienceCue } from "./solarTerms";
 
 export type AudioBus = "music" | "ambient" | "sfx";
+export type AudioLane =
+  | "combat-base"
+  | "combat-accent"
+  | "world"
+  | "ui"
+  | "priority";
 
 export type SfxCategory =
   | "ambience"
@@ -33,9 +39,10 @@ export type AudioCueDefinition = {
   exclusiveGroup?: string;
   duckMusicDb?: number;
   duckSeconds?: number;
+  lane?: AudioLane;
 };
 
-const music = (url: string, volume = 0.96): AudioCueDefinition => ({
+const music = (url: string, volume = 0.84): AudioCueDefinition => ({
   url,
   bus: "music",
   loop: true,
@@ -52,6 +59,7 @@ const ambience = (name: TermAmbienceCue, volume = 0.82): AudioCueDefinition => (
   priority: 8,
   category: "ambience",
   frameLimit: 1,
+  lane: "world",
 });
 
 const weapon = (
@@ -66,11 +74,13 @@ const weapon = (
   bus: "sfx",
   volume,
   cooldownMs,
+  categoryCooldownMs: kind === "fire" ? 110 : 150,
   maxVoices: kind === "fire" ? 1 : 2,
-  playbackRateVariation: kind === "fire" ? 0.018 : 0.026,
+  playbackRateVariation: kind === "fire" ? 0.004 : 0.006,
   priority: kind === "fire" ? 30 : 25,
   category: kind === "fire" ? "weapon-fire" : "weapon-hit",
-  frameLimit: 2,
+  frameLimit: 1,
+  lane: "combat-base",
 });
 
 const fusion = (id: FusionId, materialBias: number): AudioCueDefinition => ({
@@ -78,12 +88,13 @@ const fusion = (id: FusionId, materialBias: number): AudioCueDefinition => ({
   bus: "sfx",
   volume: 0.42,
   cooldownMs: 420,
-  categoryCooldownMs: 140,
+  categoryCooldownMs: 260,
   maxVoices: 1,
-  playbackRateVariation: 0.01 + Math.abs(materialBias) * 0.04,
+  playbackRateVariation: Math.abs(materialBias) * 0.01,
   priority: 34,
   category: "fusion",
   frameLimit: 1,
+  lane: "combat-accent",
 });
 
 const sfx = (
@@ -100,6 +111,12 @@ const sfx = (
   priority,
   maxVoices: 1,
   frameLimit: 1,
+  lane:
+    category === "boss" || category === "player" || category === "milestone"
+      ? "priority"
+      : category === "term"
+        ? "world"
+        : "ui",
   ...options,
 });
 
@@ -174,6 +191,21 @@ export const AUDIO_CUES = {
   "fusion.pearlThunder": fusion("pearlThunder", 0.05),
   "fusion.thunderBoltRoad": fusion("thunderBoltRoad", -0.08),
   "fusion.inkScore": fusion("inkScore", 0.08),
+  "fusion.countedSword": fusion("countedSword", -0.05),
+  "fusion.markedThunderSword": fusion("markedThunderSword", 0.05),
+  "fusion.windScissors": fusion("windScissors", -0.08),
+  "fusion.windAbacus": fusion("windAbacus", 0.08),
+  "fusion.windLantern": fusion("windLantern", -0.05),
+  "fusion.windThunder": fusion("windThunder", 0.05),
+  "fusion.beadCanopy": fusion("beadCanopy", -0.08),
+  "fusion.canopyVolley": fusion("canopyVolley", 0.08),
+  "fusion.boltScissors": fusion("boltScissors", -0.05),
+  "fusion.thunderScissors": fusion("thunderScissors", 0.05),
+  "fusion.stringCrossbow": fusion("stringCrossbow", -0.08),
+  "fusion.lanternStrings": fusion("lanternStrings", 0.08),
+  "fusion.inkShadow": fusion("inkShadow", -0.05),
+  "fusion.inkThunderRoad": fusion("inkThunderRoad", 0.05),
+  "fusion.lanternThunder": fusion("lanternThunder", -0.08),
 
   "sfx.fold": sfx("/audio/sfx-fold.wav", 0.62, "form", 42, {
     cooldownMs: 250,
@@ -283,6 +315,14 @@ export type AudioFramePlanEntry = {
 
 const DEFAULT_SETTINGS: ResolvedAudioSettings = {
   muted: false,
+  master: 0.68,
+  music: 0.5,
+  sfx: 0.42,
+  ambient: 0.24,
+};
+
+const PREVIOUS_DEFAULT_SETTINGS: ResolvedAudioSettings = {
+  muted: false,
   master: 0.72,
   music: 0.6,
   sfx: 0.56,
@@ -290,12 +330,12 @@ const DEFAULT_SETTINGS: ResolvedAudioSettings = {
 };
 
 export const AUDIO_MIX_LIMITS = {
-  mobileSfxVoices: 12,
-  desktopSfxVoices: 16,
+  mobileSfxVoices: 8,
+  desktopSfxVoices: 10,
 } as const;
 
 const STORAGE_KEY = "paper-guild.audio.v1";
-const MIX_REVISION = 2;
+const MIX_REVISION = 3;
 const MUSIC_BY_SEASON: Readonly<Record<SeasonId, MusicCueId>> = {
   spring: "music.spring",
   summer: "music.summer",
@@ -358,13 +398,25 @@ function readSettings(): ResolvedAudioSettings {
   try {
     const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as
       Partial<ResolvedAudioSettings> & { mixRevision?: number };
-    const migrated = saved.mixRevision !== MIX_REVISION;
+    const migrateValue = (
+      key: "master" | "music" | "sfx" | "ambient",
+    ) => {
+      const value = saved[key];
+      if (typeof value !== "number") return DEFAULT_SETTINGS[key];
+      if (
+        saved.mixRevision !== MIX_REVISION &&
+        Math.abs(value - PREVIOUS_DEFAULT_SETTINGS[key]) < 0.001
+      ) {
+        return DEFAULT_SETTINGS[key];
+      }
+      return value;
+    };
     return {
       muted: typeof saved.muted === "boolean" ? saved.muted : DEFAULT_SETTINGS.muted,
-      master: clampUnit(migrated ? DEFAULT_SETTINGS.master : saved.master ?? DEFAULT_SETTINGS.master),
-      music: clampUnit(migrated ? DEFAULT_SETTINGS.music : saved.music ?? DEFAULT_SETTINGS.music),
-      sfx: clampUnit(migrated ? DEFAULT_SETTINGS.sfx : saved.sfx ?? DEFAULT_SETTINGS.sfx),
-      ambient: clampUnit(migrated ? DEFAULT_SETTINGS.ambient : saved.ambient ?? DEFAULT_SETTINGS.ambient),
+      master: clampUnit(migrateValue("master")),
+      music: clampUnit(migrateValue("music")),
+      sfx: clampUnit(migrateValue("sfx")),
+      ambient: clampUnit(migrateValue("ambient")),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -394,8 +446,16 @@ export function planSfxFrame(
   });
 
   const bossInFrame = [...grouped.keys()].some((cue) => definitionFor(cue).category === "boss");
+  const fusionInFrame = [...grouped.keys()].some(
+    (cue) => definitionFor(cue).category === "fusion",
+  );
   const candidates = [...grouped.entries()]
     .filter(([cue]) => !(suppressAtmosphere || bossInFrame) || !isAtmosphere(cue))
+    .filter(([cue]) => {
+      if (!fusionInFrame) return true;
+      const category = definitionFor(cue).category;
+      return category !== "weapon-fire" && category !== "weapon-hit";
+    })
     .map(([cue, meta]) => ({
       cue,
       count: meta.count,
@@ -459,6 +519,8 @@ export class AudioManager {
   private musicGain: GainNode | null = null;
   private ambientGain: GainNode | null = null;
   private sfxGain: GainNode | null = null;
+  private combatBaseGain: GainNode | null = null;
+  private combatAccentGain: GainNode | null = null;
   private musicDuckGain: GainNode | null = null;
   private ambientDuckGain: GainNode | null = null;
   private buffers = new Map<string, AudioBuffer>();
@@ -673,6 +735,8 @@ export class AudioManager {
     this.musicGain = this.context.createGain();
     this.ambientGain = this.context.createGain();
     this.sfxGain = this.context.createGain();
+    this.combatBaseGain = this.context.createGain();
+    this.combatAccentGain = this.context.createGain();
     this.musicDuckGain = this.context.createGain();
     this.ambientDuckGain = this.context.createGain();
     const sfxCompressor = this.context.createDynamicsCompressor();
@@ -695,6 +759,8 @@ export class AudioManager {
     this.musicDuckGain.connect(this.masterGain);
     this.ambientGain.connect(this.ambientDuckGain);
     this.ambientDuckGain.connect(this.masterGain);
+    this.combatBaseGain.connect(this.sfxGain);
+    this.combatAccentGain.connect(this.sfxGain);
     this.sfxGain.connect(sfxCompressor);
     sfxCompressor.connect(this.masterGain);
     this.masterGain.connect(limiter);
@@ -779,7 +845,9 @@ export class AudioManager {
     let countPitch = 1;
     if (category === "pickup") {
       countGain = Math.min(1.3, 1 + Math.log2(Math.max(1, count)) * 0.1);
-      countPitch = 1 + Math.min(5, count - 1) * 0.035;
+      const pentatonicRatios = [1, 9 / 8, 5 / 4, 3 / 2, 5 / 3] as const;
+      countPitch =
+        pentatonicRatios[Math.min(pentatonicRatios.length - 1, count - 1)];
     } else if (category === "death" || category === "weapon-hit") {
       countGain = Math.min(1.24, 1 + Math.log2(Math.max(1, count)) * 0.065);
     }
@@ -872,7 +940,14 @@ export class AudioManager {
     );
     gain.gain.value = definition.volume * clampUnit(options.volume ?? 1);
 
-    const destination = definition.bus === "ambient" ? this.ambientGain : this.sfxGain;
+    const destination =
+      definition.bus === "ambient"
+        ? this.ambientGain
+        : definition.lane === "combat-base"
+          ? this.combatBaseGain
+          : definition.lane === "combat-accent"
+            ? this.combatAccentGain
+            : this.sfxGain;
     if (!destination) return false;
     source.connect(gain);
     if (typeof this.context.createStereoPanner === "function" && options.pan !== undefined) {
@@ -891,6 +966,9 @@ export class AudioManager {
       priority: definition.priority ?? 0,
       bus: definition.bus,
     });
+    if (definition.lane === "combat-accent") {
+      this.duckCombatBase(0.56, 0.18);
+    }
     if (definition.duckMusicDb && definition.duckSeconds) {
       this.duckFor(definition.duckMusicDb, definition.duckSeconds);
     }
@@ -966,6 +1044,17 @@ export class AudioManager {
     }
   }
 
+  private duckCombatBase(floor: number, seconds: number) {
+    if (!this.context || !this.combatBaseGain) return;
+    const now = this.context.currentTime;
+    const gain = this.combatBaseGain.gain;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(Math.max(0.0001, gain.value), now);
+    gain.linearRampToValueAtTime(floor, now + 0.018);
+    gain.setValueAtTime(floor, now + Math.max(0.04, seconds - 0.06));
+    gain.exponentialRampToValueAtTime(1, now + seconds);
+  }
+
   private load(
     cue: AudioCueId,
     requestedUrl?: string,
@@ -1010,6 +1099,8 @@ export class AudioManager {
     this.musicGain = null;
     this.ambientGain = null;
     this.sfxGain = null;
+    this.combatBaseGain = null;
+    this.combatAccentGain = null;
     this.musicDuckGain = null;
     this.ambientDuckGain = null;
     this.musicVoice = null;

@@ -4,7 +4,13 @@ import path from "node:path";
 import process from "node:process";
 
 const require = createRequire(import.meta.url);
-const sharp = require("sharp");
+const sharp = (() => {
+  try {
+    return require("sharp");
+  } catch {
+    return require("../node_modules/.pnpm/node_modules/sharp");
+  }
+})();
 const root = process.cwd();
 const fusionFiles = [
   ...(await readdir(path.join(root, "public", "art-v3")))
@@ -15,6 +21,11 @@ const fusionFiles = [
       (file) => file.startsWith("fusion-") && file.endsWith("-runtime-v4.webp"),
     )
     .map((file) => `public/art-v4/${file}`),
+  ...(await readdir(path.join(root, "public", "art-v5")))
+    .filter(
+      (file) => file.startsWith("fusion-") && file.endsWith("-runtime-v5.webp"),
+    )
+    .map((file) => `public/art-v5/${file}`),
 ];
 
 const files = {

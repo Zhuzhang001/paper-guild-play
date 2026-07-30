@@ -259,6 +259,96 @@ export const FUSION_ATLASES: Readonly<Record<FusionId, AtlasSpec>> = {
     2,
     2,
   ),
+  countedSword: atlas(
+    "fusion.countedSword",
+    "/art-v5/fusion-countedSword-runtime-v5.webp",
+    2,
+    2,
+  ),
+  markedThunderSword: atlas(
+    "fusion.markedThunderSword",
+    "/art-v5/fusion-markedThunderSword-runtime-v5.webp",
+    2,
+    2,
+  ),
+  windScissors: atlas(
+    "fusion.windScissors",
+    "/art-v5/fusion-windScissors-runtime-v5.webp",
+    2,
+    2,
+  ),
+  windAbacus: atlas(
+    "fusion.windAbacus",
+    "/art-v5/fusion-windAbacus-runtime-v5.webp",
+    2,
+    2,
+  ),
+  windLantern: atlas(
+    "fusion.windLantern",
+    "/art-v5/fusion-windLantern-runtime-v5.webp",
+    2,
+    2,
+  ),
+  windThunder: atlas(
+    "fusion.windThunder",
+    "/art-v5/fusion-windThunder-runtime-v5.webp",
+    2,
+    2,
+  ),
+  beadCanopy: atlas(
+    "fusion.beadCanopy",
+    "/art-v5/fusion-beadCanopy-runtime-v5.webp",
+    2,
+    2,
+  ),
+  canopyVolley: atlas(
+    "fusion.canopyVolley",
+    "/art-v5/fusion-canopyVolley-runtime-v5.webp",
+    2,
+    2,
+  ),
+  boltScissors: atlas(
+    "fusion.boltScissors",
+    "/art-v5/fusion-boltScissors-runtime-v5.webp",
+    2,
+    2,
+  ),
+  thunderScissors: atlas(
+    "fusion.thunderScissors",
+    "/art-v5/fusion-thunderScissors-runtime-v5.webp",
+    2,
+    2,
+  ),
+  stringCrossbow: atlas(
+    "fusion.stringCrossbow",
+    "/art-v5/fusion-stringCrossbow-runtime-v5.webp",
+    2,
+    2,
+  ),
+  lanternStrings: atlas(
+    "fusion.lanternStrings",
+    "/art-v5/fusion-lanternStrings-runtime-v5.webp",
+    2,
+    2,
+  ),
+  inkShadow: atlas(
+    "fusion.inkShadow",
+    "/art-v5/fusion-inkShadow-runtime-v5.webp",
+    2,
+    2,
+  ),
+  inkThunderRoad: atlas(
+    "fusion.inkThunderRoad",
+    "/art-v5/fusion-inkThunderRoad-runtime-v5.webp",
+    2,
+    2,
+  ),
+  lanternThunder: atlas(
+    "fusion.lanternThunder",
+    "/art-v5/fusion-lanternThunder-runtime-v5.webp",
+    2,
+    2,
+  ),
 };
 
 export const EFFECT_ATLASES = {

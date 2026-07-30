@@ -45,7 +45,22 @@ export type FusionId =
   | "countedLantern"
   | "pearlThunder"
   | "thunderBoltRoad"
-  | "inkScore";
+  | "inkScore"
+  | "countedSword"
+  | "markedThunderSword"
+  | "windScissors"
+  | "windAbacus"
+  | "windLantern"
+  | "windThunder"
+  | "beadCanopy"
+  | "canopyVolley"
+  | "boltScissors"
+  | "thunderScissors"
+  | "stringCrossbow"
+  | "lanternStrings"
+  | "inkShadow"
+  | "inkThunderRoad"
+  | "lanternThunder";
 
 export type EffectTag =
   | "blade"
@@ -233,7 +248,7 @@ export type ResolvedWeaponKit = {
   effects: readonly EffectSpec[];
 };
 
-/** Public v4 name; `ResolvedWeaponKit` remains as a source-compatible alias. */
+/** Public v5 name; `ResolvedWeaponKit` remains as a source-compatible alias. */
 export type ResolvedWeapon = ResolvedWeaponKit;
 
 export type MasteryDefinition = {
@@ -386,6 +401,48 @@ export type FusionMechanicDefinition = {
   action: string;
 };
 
+export type WeaveDelivery =
+  | "projectile"
+  | "beam"
+  | "chain"
+  | "lightning"
+  | "zone"
+  | "summon";
+
+export type TerminalFamily =
+  | "returningVolley"
+  | "sweepingLine"
+  | "echoChain"
+  | "thunderField"
+  | "closingField"
+  | "shadowParade"
+  | "guardRelease"
+  | "markedFinish";
+
+/**
+ * An authored, order-sensitive contribution to the endless weapon wheel.
+ * Multipliers are applied before flat additions, so moving a fusion changes
+ * the resulting attack rather than only its signature.
+ */
+export type FusionWeavePatch = {
+  delivery: WeaveDelivery;
+  damageMultiplier: number;
+  flatDamage: number;
+  countDelta: number;
+  pierceDelta: number;
+  homingDelta: number;
+  spreadDelta: number;
+  lengthDelta: number;
+  widthDelta: number;
+  jumpsDelta: number;
+  rangeDelta: number;
+  radiusDelta: number;
+  durationDelta: number;
+  repeatsDelta: number;
+  storedMultiplier: number;
+  storedDamageRatio: number;
+};
+
 export type FusionDefinition = {
   id: FusionId;
   name: string;
@@ -398,6 +455,8 @@ export type FusionDefinition = {
   pairLabel: string;
   action: string;
   mechanic: FusionMechanicDefinition;
+  weavePatch: FusionWeavePatch;
+  terminalFamily: TerminalFamily;
   artKey: string;
   terminalArtKey: string;
 };
@@ -473,6 +532,7 @@ export type WeaveTerminal = {
   id: string;
   name: string;
   signature: string;
+  family: TerminalFamily;
   chargeSeconds: number;
   effects: readonly EffectSpec[];
   steps: readonly TerminalStep[];

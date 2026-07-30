@@ -140,7 +140,7 @@ function acquireOption(weaponId: WeaponId): UpgradeOption {
     id: `acquire-${weaponId}`,
     kind: "acquire",
     weaponId,
-    title: `新器·${definition.name}`,
+    title: definition.name,
     description: definition.description,
     artKey: definition.artKeys.tier1,
   };

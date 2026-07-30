@@ -35,6 +35,7 @@ import {
   insertWeaponNode,
   nextRandom,
   resolveWeaponEffects,
+  resolveWeaponKit,
   stepEndlessPerkState,
   stepCelestialIntrusion,
   swapWeaveNodes,
@@ -101,6 +102,23 @@ export type Player = PlayerFormModel & {
 
 export type EnemyMotion = "moving" | "attacking" | "hurt" | "dead";
 
+export type EnemyActionPhase =
+  | "telegraph"
+  | "travel"
+  | "land"
+  | "recovery";
+
+export type EnemyActionState = {
+  kind: "nianLeap";
+  phase: EnemyActionPhase;
+  elapsed: number;
+  startX: number;
+  startY: number;
+  targetX: number;
+  targetY: number;
+  warningFxId?: number;
+};
+
 export type Enemy = {
   id: number;
   type: EnemyArchetype;
@@ -130,6 +148,7 @@ export type Enemy = {
   attackCommitted: boolean;
   skillIndex: number;
   intrusionAvatar: boolean;
+  action?: EnemyActionState;
   lastHitOwner?: ProjectileOwner;
 };
 
@@ -207,6 +226,13 @@ export type Summon = {
   index: number;
   total: number;
   moveSpeed: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  targetId?: number;
+  formationSlot: number;
+  retargetClock: number;
   canProc?: boolean;
 };
 
@@ -227,6 +253,7 @@ export type PendingStrike = {
 export type VisualFxKind =
   | "hit"
   | "beam"
+  | "wave"
   | "chain"
   | "burst"
   | "ring"
@@ -329,6 +356,18 @@ export type RunState = {
   terminalLabelLife: number;
   endlessPerks: EndlessPerkState;
   perkCombat: EndlessPerkCombatState;
+  testModifiers: TestModifiers;
+};
+
+export type TestModifiers = {
+  timeScale: 1 | 2 | 4 | 8;
+  incomingDamageScale: 0 | 1;
+  assisted: boolean;
+};
+
+export type CreateRunOptions = {
+  initialWeaponId?: WeaponId | "random";
+  unlockedWeaponIds?: readonly WeaponId[];
 };
 
 export type RunSnapshot = {
@@ -385,6 +424,19 @@ const weaponColor: Record<WeaponId, string> = {
   inkline: "#374b48",
   lantern: "#c06739",
   thunderSeal: "#5571a0",
+};
+
+const minimumWeaponCadence: Readonly<Record<WeaponId, number>> = {
+  sword: 0.68,
+  fan: 0.76,
+  umbrella: 0.78,
+  scissors: 0.68,
+  abacus: 0.3,
+  crossbow: 0.62,
+  pipa: 0.82,
+  inkline: 0.86,
+  lantern: 0.86,
+  thunderSeal: 1.05,
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -455,7 +507,31 @@ function createEndlessPerkCombatState(): EndlessPerkCombatState {
   };
 }
 
-export function createRun(trials: Set<TrialId>, seed = Date.now()): RunState {
+export function createRun(
+  trials: Set<TrialId>,
+  seed = Date.now(),
+  options: CreateRunOptions = {},
+): RunState {
+  let rng = createRngState(seed);
+  const availableWeapons = (options.unlockedWeaponIds ?? WEAPON_IDS).filter(
+    (weaponId): weaponId is WeaponId => WEAPON_IDS.includes(weaponId),
+  );
+  const requestedWeapon = options.initialWeaponId ?? "sword";
+  let initialWeaponId: WeaponId =
+    requestedWeapon === "random" ? "sword" : requestedWeapon;
+  if (requestedWeapon === "random" && availableWeapons.length > 0) {
+    const roll = nextRandom(rng);
+    rng = roll.state;
+    initialWeaponId =
+      availableWeapons[
+        Math.min(
+          availableWeapons.length - 1,
+          Math.floor(roll.value * availableWeapons.length),
+        )
+      ];
+  } else if (!availableWeapons.includes(initialWeaponId)) {
+    initialWeaponId = availableWeapons[0] ?? "sword";
+  }
   return {
     elapsed: 0,
     endless: false,
@@ -476,7 +552,7 @@ export function createRun(trials: Set<TrialId>, seed = Date.now()): RunState {
       powerMultiplier: 1,
       magnetMultiplier: 1,
     },
-    build: createCombatBuild(),
+    build: createCombatBuild(initialWeaponId),
     enemies: [],
     deaths: [],
     projectiles: [],
@@ -490,7 +566,7 @@ export function createRun(trials: Set<TrialId>, seed = Date.now()): RunState {
     orbitHits: new Map(),
     accumulators: new Map(),
     synergyCounters: new Map(),
-    rng: createRngState(seed),
+    rng,
     serial: 1,
     spawnClock: 0.25,
     midBossSpawned: false,
@@ -512,6 +588,11 @@ export function createRun(trials: Set<TrialId>, seed = Date.now()): RunState {
     terminalLabelLife: 0,
     endlessPerks: createEndlessPerkState(),
     perkCombat: createEndlessPerkCombatState(),
+    testModifiers: {
+      timeScale: 1,
+      incomingDamageScale: 1,
+      assisted: false,
+    },
   };
 }
 
@@ -756,7 +837,7 @@ function addFx(
   artKey: string,
   extra: Partial<VisualFx> = {},
 ) {
-  run.fx.push({
+  const fx: VisualFx = {
     id: nextId(run),
     kind,
     artKey,
@@ -767,7 +848,9 @@ function addFx(
     maxLife: life,
     color,
     ...extra,
-  });
+  };
+  run.fx.push(fx);
+  return fx.id;
 }
 
 function pickNearest(
@@ -860,8 +943,12 @@ function damageEnemy(
   enemy.hp -= damage * markMultiplier;
   enemy.lastHitOwner = owner;
   enemy.hitFlash = 0.1;
-  enemy.motion = "hurt";
-  enemy.motionTime = 0;
+  // Boss actions own their motion timeline. A hit may flash the sprite, but it
+  // must never rewind an attack or cancel the Nian's visible leap.
+  if (!enemy.boss && enemy.motion !== "attacking") {
+    enemy.motion = "hurt";
+    enemy.motionTime = 0;
+  }
   addFx(run, "hit", enemy.x, enemy.y, enemy.radius * 1.35, 0.22, ownerColor(owner), `hit/${owner}`, {
     owner,
   });
@@ -1020,6 +1107,8 @@ function fireBeam(
   );
   const sweepRadians = ((effect.sweepDegrees ?? 0) * Math.PI) / 180;
   const rayCount = sweepRadians > 0.8 ? 5 : sweepRadians > 0 ? 3 : 1;
+  const isPipaWave =
+    directWeaponOwner(owner) === "pipa" && effect.tags.includes("music");
   const hitIds = new Set<number>();
   const candidates = [...run.enemies].sort((a, b) =>
     distanceSquared(run.player.x, run.player.y, a.x, a.y) -
@@ -1056,19 +1145,38 @@ function fireBeam(
         if (pierced > effect.pierce) break;
       }
     }
+    if (!isPipaWave) {
+      addFx(
+        run,
+        "beam",
+        run.player.x,
+        run.player.y,
+        effect.width,
+        Math.max(0.2, effect.duration),
+        ownerColor(owner),
+        effect.visualKey ?? `beam/${owner}`,
+        {
+          owner,
+          x2: run.player.x + direction.x * effect.length,
+          y2: run.player.y + direction.y * effect.length,
+        },
+      );
+    }
+  }
+  if (isPipaWave) {
     addFx(
       run,
-      "beam",
+      "wave",
       run.player.x,
       run.player.y,
-      effect.width,
-      Math.max(0.2, effect.duration),
+      Math.min(72, effect.width),
+      Math.max(0.3, effect.duration),
       ownerColor(owner),
-      effect.visualKey ?? `beam/${owner}`,
+      `wave/${effect.visualKey ?? owner}`,
       {
         owner,
-        x2: run.player.x + direction.x * effect.length,
-        y2: run.player.y + direction.y * effect.length,
+        x2: run.player.x + Math.cos(baseAngle) * effect.length,
+        y2: run.player.y + Math.sin(baseAngle) * effect.length,
       },
     );
   }
@@ -1161,18 +1269,34 @@ function spawnSummons(
   damageScale = 1,
   canProc = true,
 ) {
-  const same = run.summons.filter((summon) => summon.artKey === effect.summonKey);
+  const same = run.summons.filter(
+    (summon) =>
+      summon.owner === owner && summon.artKey === effect.summonKey,
+  );
+  for (let index = 0; index < same.length; index += 1) {
+    const summon = same[index];
+    summon.life = Math.max(summon.life, effect.duration);
+    summon.attackDamage =
+      effect.attackDamage * damageScale * run.player.powerMultiplier;
+    summon.attackCooldown = effect.attackCooldown;
+    summon.moveSpeed = effect.moveSpeed;
+    summon.canProc = canProc;
+    summon.index = index;
+    summon.formationSlot = index;
+    summon.total = effect.count;
+  }
   if (same.length >= effect.count) {
-    for (const summon of same) summon.life = Math.max(summon.life, effect.duration);
     return;
   }
   for (let index = same.length; index < effect.count; index += 1) {
+    const angle = (Math.PI * 2 * index) / effect.count;
+    const radius = 118 + index * 8;
     run.summons.push({
       id: nextId(run),
       owner,
       artKey: effect.summonKey,
-      angle: (Math.PI * 2 * index) / effect.count,
-      radius: 118 + index * 8,
+      angle,
+      radius,
       life: effect.duration,
       attackDamage: effect.attackDamage * damageScale * run.player.powerMultiplier,
       attackCooldown: effect.attackCooldown,
@@ -1180,6 +1304,12 @@ function spawnSummons(
       index,
       total: effect.count,
       moveSpeed: effect.moveSpeed,
+      x: run.player.x + Math.cos(angle) * radius,
+      y: run.player.y + Math.sin(angle) * radius * 0.64,
+      vx: 0,
+      vy: 0,
+      formationSlot: index,
+      retargetClock: index * 0.08,
       canProc,
     });
   }
@@ -1226,7 +1356,7 @@ function pushEnemiesFrom(
   strength = 1,
 ) {
   for (const enemy of run.enemies) {
-    if (enemy.hp <= 0) continue;
+    if (enemy.hp <= 0 || enemy.boss) continue;
     const distance = Math.sqrt(distanceSquared(x, y, enemy.x, enemy.y));
     if (distance > radius + enemy.radius) continue;
     const direction = normalized(enemy.x - x, enemy.y - y);
@@ -1922,10 +2052,11 @@ function dispatchEffectTrigger(
   effect: EffectSpec,
   trigger: EffectTrigger,
   target?: Enemy,
+  announceAttack = true,
 ) {
-  if (effect.trigger !== trigger) return;
+  if (effect.trigger !== trigger) return false;
   const key = `trigger:${trigger}:${owner}:${effect.id}`;
-  if ((run.cooldowns.get(key) ?? 0) > 0) return;
+  if ((run.cooldowns.get(key) ?? 0) > 0) return false;
   const activeTrigger = trigger === "onAttack" || trigger === "periodic";
   const reactiveCooldown =
     trigger === "onHit" || trigger === "onMarkedHit"
@@ -1934,12 +2065,13 @@ function dispatchEffectTrigger(
   const cooldown = activeTrigger ? effectCooldown(effect) : reactiveCooldown;
   if (effect.chance !== undefined && random(run) > effect.chance) {
     if (cooldown > 0) run.cooldowns.set(key, cooldown);
-    return;
+    return false;
   }
   const sourceWeapon = directWeaponOwner(owner);
   let damageScale = 1;
   if (
     activeTrigger &&
+    announceAttack &&
     sourceWeapon !== undefined &&
     sourceWeapon === run.build.weapons[0]?.id &&
     run.perkCombat.signatureCharges > 0
@@ -1954,13 +2086,14 @@ function dispatchEffectTrigger(
   fireEffect(run, effect, owner, target, damageScale, allowHitProcs);
   if (
     activeTrigger &&
+    announceAttack &&
     sourceWeapon === "lantern" &&
     run.perkCombat.lanternFireCharges > 0
   ) {
     run.perkCombat.lanternFireCharges -= 1;
     fireEffect(run, effect, owner, target, damageScale * 0.68, false);
   }
-  if (sourceWeapon && activeTrigger) {
+  if (sourceWeapon && activeTrigger && announceAttack) {
     dispatchSynergyEvent(run, "weaponAttack", sourceWeapon, target);
     if (sourceWeapon === "crossbow") {
       dispatchEndlessPerkEvent(run, {
@@ -1976,6 +2109,7 @@ function dispatchEffectTrigger(
     }
   }
   if (cooldown > 0) run.cooldowns.set(key, cooldown);
+  return true;
 }
 
 function dispatchOwnerTrigger(
@@ -2020,7 +2154,62 @@ function updateActiveEffects(run: RunState, delta: number) {
     else run.cooldowns.set(key, value - delta);
   }
 
+  const directOwners = new Set<ProjectileOwner>();
+  for (const weaponState of run.build.weapons) {
+    const owner: ProjectileOwner = weaponState.id;
+    directOwners.add(owner);
+    const kit = resolveWeaponKit(weaponState);
+    const activeEffects = [
+      ...kit.core,
+      ...kit.route,
+      ...kit.mastery,
+    ].filter(
+      (effect) =>
+        (effect.trigger === "onAttack" ||
+          effect.trigger === "periodic") &&
+        effect.kind !== "orbit",
+    );
+    const primary =
+      kit.core.find(
+        (effect) =>
+          (effect.trigger === "onAttack" ||
+            effect.trigger === "periodic") &&
+          effect.kind !== "orbit",
+      ) ?? activeEffects[0];
+    if (!primary) continue;
+    const attackKey = `weapon-attack:${owner}`;
+    if ((run.cooldowns.get(attackKey) ?? 0) > 0) continue;
+    const fired = dispatchEffectTrigger(
+      run,
+      owner,
+      primary,
+      primary.trigger,
+      undefined,
+      true,
+    );
+    run.cooldowns.set(
+      attackKey,
+      Math.max(
+        minimumWeaponCadence[weaponState.id],
+        effectCooldown(primary),
+      ),
+    );
+    if (!fired) continue;
+    for (const linked of activeEffects) {
+      if (linked === primary) continue;
+      dispatchEffectTrigger(
+        run,
+        owner,
+        linked,
+        linked.trigger,
+        undefined,
+        false,
+      );
+    }
+  }
+
   for (const [owner, effects] of effectOwners(run)) {
+    if (directOwners.has(owner)) continue;
     for (const effect of effects) {
       if (effect.trigger !== "onAttack" && effect.trigger !== "periodic") continue;
       // Periodic orbit effects are persistent and are resolved by updateOrbits.
@@ -2212,6 +2401,145 @@ function applySeparation(run: RunState, enemy: Enemy) {
   return { x: pushX, y: pushY };
 }
 
+function beginNianLeap(run: RunState, enemy: Enemy) {
+  const warningFxId = addFx(
+    run,
+    "warning",
+    run.player.x,
+    run.player.y,
+    150,
+    0.68,
+    "#a94838",
+    "boss/nian/leap-warning",
+  );
+  enemy.action = {
+    kind: "nianLeap",
+    phase: "telegraph",
+    elapsed: 0,
+    startX: enemy.x,
+    startY: enemy.y,
+    targetX: run.player.x,
+    targetY: run.player.y,
+    warningFxId,
+  };
+  enemy.motion = "attacking";
+  enemy.motionTime = 0;
+  enemy.attackCommitted = true;
+  enemy.vx = 0;
+  enemy.vy = 0;
+  enemy.skillIndex += 1;
+}
+
+function stepNianLeap(
+  run: RunState,
+  enemy: Enemy,
+  delta: number,
+  events: RunEvent[],
+) {
+  const action = enemy.action;
+  if (!action || action.kind !== "nianLeap") return false;
+  action.elapsed += delta;
+  enemy.vx = 0;
+  enemy.vy = 0;
+
+  if (action.phase === "telegraph") {
+    const warning = run.fx.find((fx) => fx.id === action.warningFxId);
+    if (warning) {
+      warning.x = run.player.x;
+      warning.y = run.player.y;
+    }
+    enemy.heading = Math.atan2(
+      run.player.y - enemy.y,
+      run.player.x - enemy.x,
+    );
+    if (action.elapsed >= 0.5) {
+      const direction = normalized(
+        run.player.x - enemy.x,
+        run.player.y - enemy.y,
+      );
+      action.startX = enemy.x;
+      action.startY = enemy.y;
+      action.targetX = clamp(
+        run.player.x - direction.x * 120,
+        enemy.radius,
+        GAME_WIDTH - enemy.radius,
+      );
+      action.targetY = clamp(
+        run.player.y - direction.y * 120,
+        enemy.radius,
+        GAME_HEIGHT - enemy.radius,
+      );
+      if (warning) {
+        warning.x = action.targetX;
+        warning.y = action.targetY;
+      }
+      action.phase = "travel";
+      action.elapsed = 0;
+    }
+    return true;
+  }
+
+  if (action.phase === "travel") {
+    const ratio = clamp(action.elapsed / 0.32, 0, 1);
+    const eased = ratio * ratio * (3 - 2 * ratio);
+    const previousX = enemy.x;
+    const previousY = enemy.y;
+    enemy.x = action.startX + (action.targetX - action.startX) * eased;
+    enemy.y = action.startY + (action.targetY - action.startY) * eased;
+    enemy.heading = Math.atan2(
+      action.targetY - action.startY,
+      action.targetX - action.startX,
+    );
+    enemy.travelled += Math.hypot(
+      enemy.x - previousX,
+      enemy.y - previousY,
+    );
+    if (ratio >= 1) {
+      action.phase = "land";
+      action.elapsed = 0;
+      addFx(
+        run,
+        "burst",
+        enemy.x,
+        enemy.y,
+        150,
+        0.5,
+        "#a94838",
+        "boss/nian/leap",
+      );
+      if (
+        distanceSquared(
+          enemy.x,
+          enemy.y,
+          run.player.x,
+          run.player.y,
+        ) <
+          150 ** 2 &&
+        hurtPlayer(run)
+      ) {
+        events.push({ type: "playerHit" });
+      }
+    }
+    return true;
+  }
+
+  if (action.phase === "land") {
+    if (action.elapsed >= 0.12) {
+      action.phase = "recovery";
+      action.elapsed = 0;
+    }
+    return true;
+  }
+
+  if (action.elapsed >= 0.35) {
+    enemy.action = undefined;
+    enemy.motion = "moving";
+    enemy.motionTime = 0;
+    enemy.attackCooldown = 3.5;
+  }
+  return true;
+}
+
 function executeBossSkill(run: RunState, enemy: Enemy) {
   const ability = enemy.skillIndex % 3;
   const direction = normalized(run.player.x - enemy.x, run.player.y - enemy.y);
@@ -2231,9 +2559,9 @@ function executeBossSkill(run: RunState, enemy: Enemy) {
     }
   } else if (enemy.type === "nian") {
     if (ability === 0) {
-      enemy.x = clamp(run.player.x - direction.x * 58, 40, GAME_WIDTH - 40);
-      enemy.y = clamp(run.player.y - direction.y * 58, 45, GAME_HEIGHT - 45);
-      addFx(run, "burst", enemy.x, enemy.y, 150, 0.5, "#a94838", "boss/nian/leap");
+      // The leap begins at attack wind-up so it can be shown continuously.
+      // This fallback is retained for malformed imported states.
+      if (!enemy.action) beginNianLeap(run, enemy);
     } else if (ability === 1) {
       run.strikes.push({
         id: nextId(run),
@@ -2256,6 +2584,7 @@ function executeBossSkill(run: RunState, enemy: Enemy) {
 
 function hurtPlayer(run: RunState) {
   if (run.player.invulnerability > 0) return false;
+  if (run.testModifiers.incomingDamageScale === 0) return false;
   if (
     run.perkCombat.temporaryGuardCharges > 0 &&
     run.elapsed <= run.perkCombat.temporaryGuardUntil
@@ -2369,6 +2698,10 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
     enemy.attackCooldown -= delta;
     enemy.motionTime += delta;
 
+    if (stepNianLeap(run, enemy, delta, events)) {
+      continue;
+    }
+
     if (enemy.motion === "hurt" && enemy.motionTime > 0.12) {
       enemy.motion = "moving";
       enemy.motionTime = 0;
@@ -2379,6 +2712,14 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
     const isBossSkill = enemy.boss && enemy.attackCooldown <= 0 && distanceToPlayer < 430;
     const isContactAttack = !enemy.boss && enemy.attackCooldown <= 0 && distanceToPlayer < attackRange + 18;
     if (enemy.motion !== "attacking" && (isBossSkill || isContactAttack)) {
+      if (
+        enemy.type === "nian" &&
+        isBossSkill &&
+        enemy.skillIndex % 3 === 0
+      ) {
+        beginNianLeap(run, enemy);
+        continue;
+      }
       enemy.motion = "attacking";
       enemy.motionTime = 0;
       enemy.attackCommitted = false;
@@ -2583,6 +2924,54 @@ function updateZones(run: RunState, delta: number) {
 }
 
 function updateSummons(run: RunState, delta: number) {
+  const assignedTargets = new Map<number, number>();
+  for (const summon of run.summons) {
+    if (summon.targetId === undefined) continue;
+    assignedTargets.set(
+      summon.targetId,
+      (assignedTargets.get(summon.targetId) ?? 0) + 1,
+    );
+  }
+
+  const chooseTarget = (summon: Summon) => {
+    const current =
+      summon.targetId === undefined
+        ? undefined
+        : run.enemies.find(
+            (enemy) => enemy.id === summon.targetId && enemy.hp > 0,
+          );
+    if (current && summon.retargetClock > 0) return current;
+    const candidates = run.enemies.filter((enemy) => enemy.hp > 0);
+    const selected = candidates.sort((left, right) => {
+      const leftLoad = assignedTargets.get(left.id) ?? 0;
+      const rightLoad = assignedTargets.get(right.id) ?? 0;
+      const leftScore =
+        distanceSquared(summon.x, summon.y, left.x, left.y) +
+        leftLoad * 160 ** 2;
+      const rightScore =
+        distanceSquared(summon.x, summon.y, right.x, right.y) +
+        rightLoad * 160 ** 2;
+      return leftScore - rightScore || left.id - right.id;
+    })[0];
+    if (summon.targetId !== selected?.id) {
+      if (summon.targetId !== undefined) {
+        assignedTargets.set(
+          summon.targetId,
+          Math.max(0, (assignedTargets.get(summon.targetId) ?? 1) - 1),
+        );
+      }
+      summon.targetId = selected?.id;
+      if (selected) {
+        assignedTargets.set(
+          selected.id,
+          (assignedTargets.get(selected.id) ?? 0) + 1,
+        );
+      }
+    }
+    summon.retargetClock = 0.42 + summon.formationSlot * 0.025;
+    return selected;
+  };
+
   for (const summon of run.summons) {
     const beforeLife = summon.life;
     summon.life -= delta;
@@ -2599,49 +2988,90 @@ function updateSummons(run: RunState, delta: number) {
       continue;
     }
     summon.cooldown -= delta;
-    const target = pickNearest(run);
+    summon.retargetClock -= delta;
+    const target = chooseTarget(summon);
+    let desiredX: number;
+    let desiredY: number;
     if (target) {
-      const targetAngle = Math.atan2(
-        target.y - run.player.y,
-        target.x - run.player.x,
+      const group = run.summons.filter(
+        (candidate) =>
+          candidate.owner === summon.owner &&
+          candidate.artKey === summon.artKey,
       );
-      const angleDelta = normalizeAngle(targetAngle - summon.angle);
-      const turnLimit =
-        (summon.moveSpeed / Math.max(60, summon.radius)) * delta;
-      summon.angle += clamp(angleDelta, -turnLimit, turnLimit);
-      const targetRadius = clamp(
-        Math.sqrt(
-          distanceSquared(
-            run.player.x,
-            run.player.y,
-            target.x,
-            target.y,
-          ),
-        ) - 68,
-        64,
-        210,
+      const slotCount = Math.max(1, group.length);
+      const slot =
+        group.findIndex((candidate) => candidate.id === summon.id) -
+        (slotCount - 1) / 2;
+      const facingPlayer = Math.atan2(
+        run.player.y - target.y,
+        run.player.x - target.x,
       );
-      summon.radius += clamp(
-        targetRadius - summon.radius,
-        -summon.moveSpeed * delta,
-        summon.moveSpeed * delta,
-      );
+      const formationAngle = facingPlayer + slot * 0.62;
+      const formationRadius = Math.max(58, target.radius + 44);
+      desiredX = target.x + Math.cos(formationAngle) * formationRadius;
+      desiredY = target.y + Math.sin(formationAngle) * formationRadius;
     } else {
-      summon.angle +=
-        delta * (0.28 + summon.moveSpeed / 260 + summon.index * 0.025);
+      const idleAngle =
+        run.elapsed * (0.32 + summon.moveSpeed / 300) +
+        (Math.PI * 2 * summon.formationSlot) / Math.max(1, summon.total);
+      desiredX = run.player.x + Math.cos(idleAngle) * (108 + summon.index * 7);
+      desiredY =
+        run.player.y + Math.sin(idleAngle) * (74 + summon.index * 4);
     }
+
+    let separationX = 0;
+    let separationY = 0;
+    for (const other of run.summons) {
+      if (other === summon || other.life <= 0) continue;
+      const dx = summon.x - other.x;
+      const dy = summon.y - other.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance > 0 && distance < 28) {
+        const strength = (28 - distance) / 28;
+        separationX += (dx / distance) * strength * 34;
+        separationY += (dy / distance) * strength * 34;
+      }
+    }
+    const toDesiredX = desiredX - summon.x;
+    const toDesiredY = desiredY - summon.y;
+    const desiredDistance = Math.hypot(toDesiredX, toDesiredY);
+    const travel =
+      desiredDistance > 0
+        ? Math.min(desiredDistance, summon.moveSpeed * delta)
+        : 0;
+    const targetVx =
+      (desiredDistance > 0 ? (toDesiredX / desiredDistance) * travel / Math.max(delta, 0.001) : 0) +
+      separationX;
+    const targetVy =
+      (desiredDistance > 0 ? (toDesiredY / desiredDistance) * travel / Math.max(delta, 0.001) : 0) +
+      separationY;
+    const response = 1 - Math.exp(-delta * 10);
+    summon.vx += (targetVx - summon.vx) * response;
+    summon.vy += (targetVy - summon.vy) * response;
+    summon.x += summon.vx * delta;
+    summon.y += summon.vy * delta;
+    summon.angle = Math.atan2(
+      summon.y - run.player.y,
+      summon.x - run.player.x,
+    );
+    summon.radius = Math.hypot(
+      summon.x - run.player.x,
+      summon.y - run.player.y,
+    );
+
     if (summon.cooldown <= 0) {
       if (target) {
-        const x = run.player.x + Math.cos(summon.angle) * summon.radius;
-        const y = run.player.y + Math.sin(summon.angle) * summon.radius * 0.58;
-        const direction = normalized(target.x - x, target.y - y);
+        const direction = normalized(
+          target.x - summon.x,
+          target.y - summon.y,
+        );
         run.projectiles.push({
           id: nextId(run),
           owner: summon.owner,
           artKey: `summon-shot/${summon.artKey}`,
           tags: ["shadow"],
-          x,
-          y,
+          x: summon.x,
+          y: summon.y,
           vx: direction.x * 610,
           vy: direction.y * 610,
           radius: 8,

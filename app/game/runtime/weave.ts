@@ -17,8 +17,10 @@ import type {
   EffectSpec,
   EffectTag,
   FusionDefinition,
+  TerminalFamily,
   WeaponId,
   WeaponState,
+  WeaveDelivery,
   WeaveNode,
   WeaveState,
   WeaveTerminal,
@@ -566,14 +568,6 @@ function terminalName(nodes: readonly WeaveNode[]): string {
   return `${nodes[0].name}起手，${nodes[nodes.length - 1].name}收尾`;
 }
 
-export type WeaveDelivery =
-  | "projectile"
-  | "beam"
-  | "chain"
-  | "lightning"
-  | "zone"
-  | "summon";
-
 export type WeaveTransformSnapshot = {
   delivery: WeaveDelivery;
   damage: number;
@@ -590,6 +584,7 @@ export type WeaveTransformSnapshot = {
   repeats: number;
   stored: number;
   tags: readonly EffectTag[];
+  terminalFamily?: TerminalFamily;
 };
 
 export type WeaveTransform = WeaveTransformSnapshot;
@@ -697,41 +692,27 @@ function applyFusionTransform(
   const definition = getFusionDefinition(
     node.sourceId as FusionDefinition["id"],
   );
-  const primary = definition.effects[0];
-  const output: WeaveTransformSnapshot = {
-    ...input,
+  const patch = definition.weavePatch;
+  return {
+    delivery: patch.delivery,
     tags: addTags(input.tags, definition.tags),
-    damage: input.damage * 1.22 + 34,
-    count: input.count + 2,
-    stored: input.stored + input.damage * 0.24,
+    damage: input.damage * patch.damageMultiplier + patch.flatDamage,
+    count: Math.max(1, input.count + patch.countDelta),
+    pierce: Math.max(0, input.pierce + patch.pierceDelta),
+    homing: Math.max(0, input.homing + patch.homingDelta),
+    spread: Math.max(0, input.spread + patch.spreadDelta),
+    length: Math.max(120, input.length + patch.lengthDelta),
+    width: Math.max(8, input.width + patch.widthDelta),
+    jumps: Math.max(1, input.jumps + patch.jumpsDelta),
+    range: Math.max(80, input.range + patch.rangeDelta),
+    radius: Math.max(24, input.radius + patch.radiusDelta),
+    duration: Math.max(0.5, input.duration + patch.durationDelta),
+    repeats: Math.max(0, input.repeats + patch.repeatsDelta),
+    stored:
+      input.stored * patch.storedMultiplier +
+      input.damage * patch.storedDamageRatio,
+    terminalFamily: definition.terminalFamily,
   };
-  if (primary.kind === "beam") {
-    output.delivery = "beam";
-    output.length = Math.max(output.length, primary.length);
-    output.width = Math.max(output.width, primary.width);
-  } else if (primary.kind === "chain") {
-    output.delivery = "chain";
-    output.jumps += primary.jumps;
-    output.range = Math.max(output.range, primary.range);
-  } else if (primary.kind === "lightning") {
-    output.delivery = "lightning";
-    output.count += primary.strikes;
-    output.radius = Math.max(output.radius, primary.radius);
-  } else if (primary.kind === "zone" || primary.kind === "orbit") {
-    output.delivery = "zone";
-    output.radius = Math.max(output.radius, primary.radius);
-    output.duration += 1;
-  } else if (primary.kind === "summon") {
-    output.delivery = "summon";
-    output.count += primary.count;
-    output.duration = Math.max(output.duration, primary.duration);
-  } else if (primary.kind === "projectile") {
-    output.delivery = "projectile";
-    output.count += primary.count;
-    output.pierce += primary.pierce;
-    output.homing += primary.homing ?? 0;
-  }
-  return output;
 }
 
 function applyCelestialTransform(
@@ -789,70 +770,102 @@ export function deriveWeaveTransform(
   );
 }
 
+function terminalFamilyFor(
+  transform: WeaveTransformSnapshot,
+): TerminalFamily {
+  if (transform.terminalFamily) return transform.terminalFamily;
+  if (transform.delivery === "beam") return "sweepingLine";
+  if (transform.delivery === "chain") return "echoChain";
+  if (transform.delivery === "lightning") return "thunderField";
+  if (transform.delivery === "zone") return "closingField";
+  if (transform.delivery === "summon") return "shadowParade";
+  return "returningVolley";
+}
+
 function terminalCoreEffect(
   hash: number,
   transform: WeaveTransformSnapshot,
+  family: TerminalFamily,
 ): EffectSpec {
   const id = `terminal-${hash}-core`;
   const common = {
     trigger: "onTerminal" as const,
-    visualKey: `terminal/generated/${hash}/core`,
+    visualKey: `terminal/${family}/${hash}/core`,
   };
-  if (transform.delivery === "beam") {
+  if (family === "sweepingLine") {
     return beam(id, transform.tags, transform.damage, {
       ...common,
       length: transform.length,
-      width: transform.width,
+      width: transform.width + Math.min(48, transform.count * 3),
       pierce: transform.pierce + transform.count,
-      sweepDegrees: Math.min(110, transform.spread),
+      sweepDegrees: Math.min(135, transform.spread + 22),
     });
   }
-  if (transform.delivery === "chain") {
+  if (family === "echoChain") {
     return chain(id, transform.tags, transform.damage, {
       ...common,
       jumps: Math.max(4, transform.jumps + transform.count),
       range: transform.range,
-      falloff: 0.94,
+      falloff: 0.96,
       preferMarked: transform.tags.includes("mark"),
     });
   }
-  if (transform.delivery === "lightning") {
+  if (family === "thunderField") {
     return lightning(id, transform.tags, transform.damage, {
       ...common,
       strikes: Math.max(2, transform.count + transform.repeats),
-      radius: transform.radius,
-      delay: 0.3,
+      radius: transform.radius + Math.min(54, transform.stored * 0.08),
+      delay: 0.26,
       chainRange: transform.range,
     });
   }
-  if (transform.delivery === "zone") {
+  if (family === "closingField") {
     return zone(id, transform.tags, transform.damage * 0.62, {
       ...common,
-      radius: transform.radius,
+      radius: transform.radius + transform.width * 0.4,
       duration: transform.duration + transform.repeats * 0.5,
-      tickRate: 0.22,
+      tickRate: 0.18,
       followsOwner: transform.tags.includes("guard"),
-      slow: transform.tags.includes("frost") ? 0.35 : 0.18,
+      slow: transform.tags.includes("frost") ? 0.38 : 0.24,
     });
   }
-  if (transform.delivery === "summon") {
+  if (family === "shadowParade") {
     return summon(id, transform.tags, "terminal-weave-actor", {
       ...common,
       count: Math.max(2, transform.count + transform.repeats),
       duration: transform.duration + 5,
       attackDamage: transform.damage * 0.48,
-      attackCooldown: 0.42,
-      moveSpeed: 210,
+      attackCooldown: 0.38,
+      moveSpeed: 225,
+    });
+  }
+  if (family === "guardRelease") {
+    return orbit(id, transform.tags, transform.damage * 0.7, {
+      ...common,
+      count: Math.max(4, transform.count),
+      radius: transform.radius,
+      angularSpeed: 2.8,
+      hitCooldown: 0.24,
+      blockStrength: 1,
+    });
+  }
+  if (family === "markedFinish") {
+    return chain(id, addTags(transform.tags, ["mark", "execute"]), transform.damage * 1.18, {
+      ...common,
+      jumps: Math.max(3, transform.jumps + Math.ceil(transform.count * 0.5)),
+      range: transform.range + 42,
+      falloff: 1,
+      preferMarked: true,
     });
   }
   return projectile(id, transform.tags, transform.damage, 0, {
     ...common,
-    pattern: transform.count > 2 ? "radial" : "burst",
-    count: Math.max(2, transform.count + transform.repeats),
-    speed: 900,
-    pierce: transform.pierce,
-    spreadDegrees: transform.spread,
-    homing: transform.homing,
+    pattern: "burst",
+    count: Math.max(2, transform.count + transform.repeats + 1),
+    speed: 980,
+    pierce: transform.pierce + 2,
+    spreadDegrees: Math.min(110, transform.spread),
+    homing: Math.max(0.18, transform.homing),
     markSeconds: transform.tags.includes("mark") ? 4 : undefined,
   });
 }
@@ -866,15 +879,20 @@ export function deriveWeaveTerminal(state: WeaveState): WeaveTerminal {
     .join(">");
   const hash = stableHash(signature || "empty-weave");
   const transform = deriveWeaveTransform(state.nodes);
-  const effects: EffectSpec[] = [terminalCoreEffect(hash, transform)];
-  if (transform.repeats > 0 && transform.delivery !== "summon") {
+  const family = terminalFamilyFor(transform);
+  const effects: EffectSpec[] = [terminalCoreEffect(hash, transform, family)];
+  if (
+    transform.repeats > 0 &&
+    family !== "shadowParade" &&
+    family !== "guardRelease"
+  ) {
     effects.push(
       delayed(`terminal-${hash}-echo`, transform.tags, transform.damage * 0.48, {
         trigger: "onTerminal",
         delay: 0.45,
         radius: transform.radius,
         repeats: Math.min(3, transform.repeats - 1),
-        visualKey: `terminal/generated/${hash}/echo`,
+        visualKey: `terminal/${family}/${hash}/echo`,
       }),
     );
   }
@@ -883,6 +901,7 @@ export function deriveWeaveTerminal(state: WeaveState): WeaveTerminal {
     id: `terminal-${hash.toString(16).padStart(8, "0")}`,
     name: terminalName(state.nodes),
     signature,
+    family,
     chargeSeconds: Math.min(
       12,
       Math.max(
@@ -902,7 +921,7 @@ export function deriveWeaveTerminal(state: WeaveState): WeaveTerminal {
       ordinal: index,
       tagsAdded: node.tags,
     })),
-    artKey: `terminal/generated/${hash.toString(16).padStart(8, "0")}`,
+    artKey: `terminal/${family}/${hash.toString(16).padStart(8, "0")}`,
   };
 }
 

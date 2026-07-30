@@ -376,18 +376,16 @@ function drawSummons(
   time: number,
 ) {
   for (const summon of run.summons) {
-    const x = run.player.x + Math.cos(summon.angle) * summon.radius;
-    const y = run.player.y + Math.sin(summon.angle) * summon.radius * 0.58;
     const weaponId = ownerWeapon(summon.owner);
     drawWeaponAt(
       ctx,
       pack,
       run,
       weaponId,
-      x,
-      y,
-      46,
-      summon.angle + Math.PI / 2,
+      summon.x,
+      summon.y,
+      60,
+      Math.atan2(summon.vy, summon.vx) + Math.PI / 2,
       time,
       clamp(summon.life / 0.5, 0, 1),
     );
@@ -406,7 +404,7 @@ function drawOrbits(
       const angle = time * orbit.angularSpeed + orbit.phase + (Math.PI * 2 * index) / orbit.count;
       const x = run.player.x + Math.cos(angle) * orbit.radius;
       const y = run.player.y + Math.sin(angle) * orbit.radius;
-      drawWeaponAt(ctx, pack, run, weaponId, x, y, 48, angle + Math.PI / 2, time);
+      drawWeaponAt(ctx, pack, run, weaponId, x, y, 60, angle + Math.PI / 2, time);
     }
   }
 }
@@ -520,8 +518,16 @@ function drawFx(
   run: RunState,
   pack: VisualPack | null,
   time: number,
+  layer: "friendly" | "overlay",
 ) {
   for (const fx of run.fx) {
+    const friendly = fx.owner !== undefined;
+    if (
+      (layer === "friendly" && !friendly) ||
+      (layer === "overlay" && friendly)
+    ) {
+      continue;
+    }
     const progress = 1 - fx.life / fx.maxLife;
     const weaponId: WeaponId = fx.owner
       ? ownerWeapon(fx.owner)
@@ -538,7 +544,40 @@ function drawFx(
               : "sword";
     const visual = weaponVisualProgress(run, weaponId);
 
-    if ((fx.kind === "beam" || fx.kind === "chain") && fx.x2 !== undefined && fx.y2 !== undefined) {
+    if (
+      fx.kind === "wave" &&
+      fx.x2 !== undefined &&
+      fx.y2 !== undefined
+    ) {
+      const dx = fx.x2 - fx.x;
+      const dy = fx.y2 - fx.y;
+      const distance = Math.hypot(dx, dy);
+      const spread = clamp(fx.radius / 105, 0.34, 0.7);
+      ctx.save();
+      ctx.translate(fx.x, fx.y);
+      ctx.rotate(Math.atan2(dy, dx));
+      ctx.lineCap = "round";
+      ctx.strokeStyle = fx.color;
+      for (let index = 0; index < 3; index += 1) {
+        const localProgress = clamp(
+          progress * 1.32 - index * 0.16,
+          0,
+          1,
+        );
+        if (localProgress <= 0) continue;
+        const front = distance * (0.14 + localProgress * 0.82);
+        ctx.globalAlpha =
+          (1 - localProgress) *
+          (0.46 - index * 0.07) *
+          clamp(fx.life / fx.maxLife + 0.18, 0, 1);
+        ctx.lineWidth = Math.min(10, 4.5 + index * 1.2);
+        ctx.setLineDash(index === 1 ? [26, 9] : []);
+        ctx.beginPath();
+        ctx.arc(0, 0, front, -spread, spread);
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else if ((fx.kind === "beam" || fx.kind === "chain") && fx.x2 !== undefined && fx.y2 !== undefined) {
       const dx = fx.x2 - fx.x;
       const dy = fx.y2 - fx.y;
       const distance = Math.hypot(dx, dy);
@@ -607,6 +646,14 @@ function drawPlayer(
     run.player.formState === "foldingToHuman"
       ? run.player.formFacing
       : run.player.facing;
+  const season = getSolarTermState(run.elapsed, run.endless).season;
+  const paperSeparator =
+    season === "summer" || season === "winter"
+      ? "drop-shadow(2.1px 0 0 rgba(248,241,220,.78)) drop-shadow(-2.1px 0 0 rgba(248,241,220,.78)) drop-shadow(0 2.1px 0 rgba(248,241,220,.78)) drop-shadow(0 -2.1px 0 rgba(248,241,220,.78)) "
+      : "";
+  ctx.save();
+  ctx.filter =
+    `${paperSeparator}drop-shadow(1.6px 0 0 #211e1a) drop-shadow(-1.6px 0 0 #211e1a) drop-shadow(0 1.6px 0 #211e1a) drop-shadow(0 -1.6px 0 #211e1a)`;
   const drawn = pack
     ? drawHeroSprite(ctx, pack, {
         x: run.player.x,
@@ -620,6 +667,7 @@ function drawPlayer(
         alpha,
       })
     : false;
+  ctx.restore();
   if (!drawn) {
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -649,7 +697,7 @@ function drawPlayer(
       held.id,
       socket.x,
       socket.y,
-      52,
+      66,
       socket.rotation,
       time,
     );
@@ -735,13 +783,14 @@ export function drawRun(
   drawPickupGlow(ctx, run);
   drawStrikes(ctx, run, assets.visuals, time);
   drawProjectiles(ctx, run, assets.visuals, time);
+  drawFx(ctx, run, assets.visuals, time, "friendly");
   drawEnemies(ctx, run, assets.enemies);
   drawPickups(ctx, run, assets.visuals, time);
   drawSummons(ctx, run, assets.visuals, time);
   drawOrbits(ctx, run, assets.visuals, time);
   drawActiveWeaveNode(ctx, run, assets.visuals, time);
   drawPlayer(ctx, run, assets.visuals, time);
-  drawFx(ctx, run, assets.visuals, time);
+  drawFx(ctx, run, assets.visuals, time, "overlay");
   drawBossBars(ctx, run);
   drawJoystick(ctx, joystick);
 }

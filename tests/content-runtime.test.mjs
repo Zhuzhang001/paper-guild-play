@@ -35,7 +35,7 @@ test("combat catalog contains every promised authored branch", () => {
   assert.deepEqual(content.validateCombatContent(), []);
   assert.equal(content.WEAPON_DEFINITIONS.length, 10);
   assert.equal(content.SYNERGY_DEFINITIONS.length, 12);
-  assert.equal(content.FUSION_DEFINITIONS.length, 30);
+  assert.equal(content.FUSION_DEFINITIONS.length, 45);
   assert.equal(content.ENDLESS_PERK_DEFINITIONS.length, 32);
   assert.equal(content.CELESTIAL_INTRUSIONS.length, 6);
   for (const weapon of content.WEAPON_DEFINITIONS) {
@@ -59,6 +59,26 @@ test("combat catalog contains every promised authored branch", () => {
     ),
   );
   assert.deepEqual(
+    new Set(content.FUSION_DEFINITIONS.map((definition) => definition.terminalFamily)),
+    new Set([
+      "returningVolley",
+      "sweepingLine",
+      "echoChain",
+      "thunderField",
+      "closingField",
+      "shadowParade",
+      "guardRelease",
+      "markedFinish",
+    ]),
+  );
+  assert.ok(
+    content.FUSION_DEFINITIONS.every((definition) =>
+      Object.entries(definition.weavePatch).every(
+        ([key, value]) => key === "delivery" || Number.isFinite(value),
+      ),
+    ),
+  );
+  assert.deepEqual(
     Object.fromEntries(
       ["weapon", "weave", "season", "journey"].map((category) => [
         category,
@@ -78,7 +98,7 @@ test("combat catalog contains every promised authored branch", () => {
   );
 });
 
-test("the thirty locked fusion pairs use only canonical plain-action names", () => {
+test("all forty-five fusion pairs use canonical plain-action names", () => {
   const labels = {
     sword: "剑",
     fan: "扇",
@@ -122,8 +142,23 @@ test("the thirty locked fusion pairs use only canonical plain-action names", () 
     ["abacus", "thunderSeal", "数珠落雷"],
     ["crossbow", "thunderSeal", "雷钉接路"],
     ["pipa", "inkline", "墨线记谱"],
+    ["sword", "abacus", "数珠定剑"],
+    ["sword", "thunderSeal", "剑印落雷"],
+    ["fan", "scissors", "风送双剪"],
+    ["fan", "abacus", "风拨算珠"],
+    ["fan", "lantern", "风转灯影"],
+    ["fan", "thunderSeal", "风停落雷"],
+    ["umbrella", "abacus", "珠敲伞骨"],
+    ["umbrella", "crossbow", "伞开排弩"],
+    ["scissors", "crossbow", "弩钉引剪"],
+    ["scissors", "thunderSeal", "雷过剪口"],
+    ["crossbow", "pipa", "弦引弩箭"],
+    ["pipa", "lantern", "灯影和弦"],
+    ["inkline", "lantern", "墨线牵影"],
+    ["inkline", "thunderSeal", "雷走墨线"],
+    ["lantern", "thunderSeal", "灯亮雷落"],
   ];
-  assert.equal(expected.length, 30);
+  assert.equal(expected.length, 45);
   for (const [first, second, action] of expected) {
     const definition = content.findFusionDefinition(first, second);
     assert.ok(definition, `${first} × ${second} must have a locked recipe`);
@@ -280,6 +315,41 @@ test("weave terminals are directional and adjacent fusions release a slot", () =
     assert.equal(fused.node.sourceId, "starPiercer");
     assert.equal(fused.node.name, "剑 × 连弩｜剑标引箭");
   }
+});
+
+test("fusion order changes the authored transform and terminal family", () => {
+  let weave = runtime.createWeaveState({
+    modifiers: {},
+    synergyCapacity: 3,
+    weapons: [
+      { id: "fan", level: 3, routeId: "fan:a" },
+      { id: "umbrella", level: 3, routeId: "umbrella:a" },
+      { id: "sword", level: 3, routeId: "sword:a" },
+      { id: "crossbow", level: 3, routeId: "crossbow:a" },
+    ],
+  });
+  const firstFusion = runtime.fuseAdjacentNodes(weave, 0, 1);
+  assert.equal(firstFusion.ok, true);
+  if (!firstFusion.ok) return;
+  weave = firstFusion.state;
+  const secondFusion = runtime.fuseAdjacentNodes(weave, 1, 2);
+  assert.equal(secondFusion.ok, true);
+  if (!secondFusion.ok) return;
+
+  const forward = secondFusion.state;
+  const reverse = runtime.swapWeaveNodes(forward, 0, 1);
+  const forwardTransform = runtime.deriveWeaveTransform(forward.nodes);
+  const reverseTransform = runtime.deriveWeaveTransform(reverse.nodes);
+  const forwardTerminal = runtime.deriveWeaveTerminal(forward);
+  const reverseTerminal = runtime.deriveWeaveTerminal(reverse);
+
+  assert.notDeepEqual(forwardTransform, reverseTransform);
+  assert.equal(forwardTerminal.family, "markedFinish");
+  assert.equal(reverseTerminal.family, "guardRelease");
+  assert.notEqual(
+    forwardTerminal.effects[0].kind,
+    reverseTerminal.effects[0].kind,
+  );
 });
 
 test("overflow nodes preserve authored route and mastery state", () => {
@@ -461,10 +531,23 @@ test("all forty-five weapon pairs conduct qi and preserve order", () => {
       const reverse = runtime.swapWeaveNodes(forward, 0, 1);
       const forwardTerminal = runtime.deriveWeaveTerminal(forward);
       const reverseTerminal = runtime.deriveWeaveTerminal(reverse);
+      const recipe = content.findFusionDefinition(firstId, secondId);
+      const fused = runtime.fuseAdjacentNodes(forward, 0, 1);
       assert.equal(forward.nodes.length, 2);
+      assert.ok(recipe, `${firstId} × ${secondId} must have a fusion recipe`);
+      assert.equal(fused.ok, true);
+      if (fused.ok) {
+        assert.equal(fused.node.sourceId, recipe.id);
+        assert.equal(fused.state.nodes.length, 1);
+      }
       assert.ok(runtime.advanceWeavePulse(forward, 12).terminal);
       assert.notEqual(forwardTerminal.signature, reverseTerminal.signature);
       assert.notEqual(forwardTerminal.id, reverseTerminal.id);
+      assert.notDeepEqual(
+        runtime.deriveWeaveTransform(forward.nodes),
+        runtime.deriveWeaveTransform(reverse.nodes),
+        `${firstId} × ${secondId} must alter the resolved attack when reordered`,
+      );
       pairs += 1;
     }
   }

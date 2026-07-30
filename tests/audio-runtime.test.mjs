@@ -78,10 +78,10 @@ test("every crafted weapon has its own restrained attack signature", () => {
   const fusionCues = Object.entries(audio.AUDIO_CUES).filter(([id]) =>
     id.startsWith("fusion."),
   );
-  assert.equal(fusionCues.length, 30);
+  assert.equal(fusionCues.length, 45);
   assert.equal(
     new Set(fusionCues.map(([, definition]) => definition.url)).size,
-    30,
+    45,
   );
   for (const [id, definition] of fusionCues) {
     assert.match(definition.url, /^\/audio\/fusion-.+\.wav$/);
@@ -92,8 +92,8 @@ test("every crafted weapon has its own restrained attack signature", () => {
 
 test("mix limits and music priority match mobile and boss rules", () => {
   assert.deepEqual(audio.AUDIO_MIX_LIMITS, {
-    mobileSfxVoices: 12,
-    desktopSfxVoices: 16,
+    mobileSfxVoices: 8,
+    desktopSfxVoices: 10,
   });
   assert.equal(
     audio.getWorldMusicCue({
@@ -103,4 +103,13 @@ test("mix limits and music priority match mobile and boss rules", () => {
     }),
     "music.boss.taotie",
   );
+});
+
+test("a crafted attack suppresses its component fire and hit sounds", () => {
+  const plan = audio.planSfxFrame([
+    "weapon.fan.fire",
+    "weapon.umbrella.hit",
+    "fusion.mistCanopy",
+  ]);
+  assert.deepEqual(plan.map((entry) => entry.cue), ["fusion.mistCanopy"]);
 });

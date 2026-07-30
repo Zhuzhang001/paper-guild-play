@@ -4,7 +4,13 @@ import path from "node:path";
 import process from "node:process";
 
 const require = createRequire(import.meta.url);
-const sharp = require("sharp");
+const sharp = (() => {
+  try {
+    return require("sharp");
+  } catch {
+    return require("../node_modules/.pnpm/node_modules/sharp");
+  }
+})();
 const root = process.cwd();
 const artDir = path.join(root, "public", "art-v4");
 
