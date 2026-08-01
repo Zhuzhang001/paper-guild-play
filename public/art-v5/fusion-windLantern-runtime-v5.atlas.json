@@ -1,0 +1,15 @@
+{
+  "version": 5,
+  "columns": 2,
+  "rows": 2,
+  "cell": {
+    "width": 512,
+    "height": 512
+  },
+  "frames": [
+    "body",
+    "windup",
+    "attack",
+    "finish"
+  ]
+}

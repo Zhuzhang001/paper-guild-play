@@ -1,0 +1,25 @@
+{
+  "version": 4,
+  "columns": 7,
+  "rows": 2,
+  "cell": {
+    "width": 256,
+    "height": 256
+  },
+  "frames": [
+    "base",
+    "refined",
+    "route-a",
+    "route-a-refined",
+    "route-a-focus",
+    "route-a-trigger",
+    "route-b",
+    "route-b-refined",
+    "route-b-focus",
+    "route-b-trigger",
+    "route-c",
+    "route-c-refined",
+    "route-c-focus",
+    "route-c-trigger"
+  ]
+}
