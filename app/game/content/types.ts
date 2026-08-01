@@ -303,7 +303,8 @@ export type RunModifierId =
   | "paperWard"
   | "keenEdge"
   | "gatheringWind"
-  | "weaponSoul";
+  | "weaponSoul"
+  | "helpingHand";
 
 export type CombatBuild = {
   weapons: readonly WeaponState[];
@@ -539,7 +540,8 @@ export type WeaveTerminal = {
   artKey: string;
 };
 
-export type EndlessPerkId =
+/** The thirty-two first-layer pages in the endless craft book. */
+export type EndlessPerkPageId =
   | "swordMarkReturn"
   | "windDeflectShot"
   | "umbrellaGap"
@@ -572,6 +574,35 @@ export type EndlessPerkId =
   | "planeCharge"
   | "sharpTurnPush"
   | "idleRecovery";
+
+export type EndlessPerkBranchKey = "a" | "b";
+export type EndlessPerkBranchId =
+  `${EndlessPerkPageId}:${EndlessPerkBranchKey}`;
+
+export type EndlessPerkPairId =
+  | "pairSwordWind"
+  | "pairUmbrellaThunder"
+  | "pairScissorsLedger"
+  | "pairCrossbowLantern"
+  | "pairMusicInk"
+  | "pairReverseDual"
+  | "pairEmptyFirst"
+  | "pairBackCarry"
+  | "pairSlowFrost"
+  | "pairFastSummer"
+  | "pairSpringRain"
+  | "pairLotusWinter"
+  | "pairHarvestAutumn"
+  | "pairPickupPlane"
+  | "pairGuardTurn"
+  | "pairHumanIdle";
+
+export type EndlessPerkId =
+  | EndlessPerkPageId
+  | EndlessPerkBranchId
+  | EndlessPerkPairId;
+
+export type EndlessPerkChoiceKind = "page" | "branch" | "pair";
 
 export type EndlessPerkCategory =
   | "weapon"
@@ -610,10 +641,12 @@ export type EndlessPerkActionKind =
   | "returnAndRetarget"
   | "retargetAndAccelerate"
   | "pushAndGuard"
+  | "releaseUmbrellaRain"
   | "crossCutMarked"
   | "releasePearlRows"
   | "placeTemporaryTurret"
   | "returnChainToFirst"
+  | "leaveEchoField"
   | "extendInkAndBurstCross"
   | "storeLanternFire"
   | "leaveLightningRelay"
@@ -634,6 +667,7 @@ export type EndlessPerkActionKind =
   | "grantLanternGuard"
   | "slowFirstZoneEntry"
   | "emitPickupWind"
+  | "pullDistantPickups"
   | "preventLethalDamage"
   | "grantHumanGuard"
   | "empowerNextSignatureAttack"
@@ -679,4 +713,10 @@ export type EndlessPerkDefinition = {
   weight: number;
   tags: readonly EffectTag[];
   rules: readonly EndlessPerkRule[];
+  /** `page` is the first layer; branches are mutually exclusive per page. */
+  choiceKind: EndlessPerkChoiceKind;
+  parentPageId?: EndlessPerkPageId;
+  branchKey?: EndlessPerkBranchKey;
+  /** Both pages must already be owned before a pair can be offered. */
+  requiredPageIds?: readonly [EndlessPerkPageId, EndlessPerkPageId];
 };

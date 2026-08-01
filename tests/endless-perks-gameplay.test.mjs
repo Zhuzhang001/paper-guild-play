@@ -207,6 +207,60 @@ test("秋风扫场 moves drops and is twice as strong in autumn", () => {
   );
 });
 
+test("named craft-book branches emit their own rain, echo, and pickup actions", () => {
+  const umbrellaRun = quietRun("umbrella-rain-branch");
+  const umbrellaTarget = targetEnemy(umbrellaRun, 301);
+  umbrellaRun.enemies.push(umbrellaTarget);
+  grant(umbrellaRun, "umbrellaGap");
+  grant(umbrellaRun, "umbrellaGap:b");
+  survivor.dispatchEndlessPerkEvent(
+    umbrellaRun,
+    { type: "guardSucceeded", weaponId: "umbrella" },
+    { target: umbrellaTarget, firstTarget: umbrellaTarget },
+  );
+  assert.equal(
+    umbrellaRun.projectiles.filter((projectile) => projectile.owner === "umbrella").length,
+    5,
+  );
+
+  const pipaRun = quietRun("pipa-echo-branch");
+  const pipaTarget = targetEnemy(pipaRun, 302);
+  pipaRun.enemies.push(pipaTarget);
+  grant(pipaRun, "lastNoteReturn");
+  grant(pipaRun, "lastNoteReturn:b");
+  survivor.dispatchEndlessPerkEvent(
+    pipaRun,
+    { type: "musicChainCompleted", weaponId: "pipa" },
+    { target: pipaTarget, firstTarget: pipaTarget },
+  );
+  assert.ok(
+    pipaRun.zones.some(
+      (zone) => zone.owner === "pipa" && zone.artKey === "perk/pipa/echo-field",
+    ),
+  );
+
+  const pickupRun = quietRun("pickup-return-branch");
+  pickupRun.pickups.push({
+    id: pickupRun.serial++,
+    x: pickupRun.player.x + 390,
+    y: pickupRun.player.y,
+    value: 1,
+    age: 0,
+    tier: 1,
+    kind: "experience",
+  });
+  grant(pickupRun, "highPickupWind");
+  grant(pickupRun, "highPickupWind:b");
+  const before = Math.abs(pickupRun.pickups[0].x - pickupRun.player.x);
+  survivor.dispatchEndlessPerkEvent(pickupRun, {
+    type: "highTierPickupCollected",
+    value: 12,
+  });
+  const after = Math.abs(pickupRun.pickups[0].x - pickupRun.player.x);
+  assert.ok(after < before);
+  assert.ok((pickupRun.pickups[0].magnetRadius ?? 0) > 0);
+});
+
 function weaveRun(perks = [], seed = "weave-perks") {
   const run = quietRun(seed);
   run.build = {

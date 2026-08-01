@@ -29,6 +29,9 @@ export type ArtAssetManifest = {
 export type LoadedArt = {
   seasons: Array<HTMLImageElement | null>;
   enemies: Partial<Record<EnemyArchetype, HTMLImageElement>>;
+  /** Requests are retained so a boundary cannot decode the same plate twice. */
+  seasonLoads: Map<number, Promise<HTMLImageElement | null>>;
+  retainedSeasonIndices: Set<number>;
 };
 
 export const ART_MANIFEST: ArtAssetManifest = {
@@ -52,35 +55,85 @@ export const ART_MANIFEST: ArtAssetManifest = {
   },
 };
 
+function releaseImage(image: HTMLImageElement | null | undefined) {
+  if (!image) return;
+  image.removeAttribute("src");
+  image.src = "";
+}
+
+function loadSeasonPlate(art: LoadedArt, index: number) {
+  const normalized = (index + ART_MANIFEST.seasons.length) % ART_MANIFEST.seasons.length;
+  if (art.seasons[normalized]) {
+    return Promise.resolve(art.seasons[normalized]);
+  }
+  const pending = art.seasonLoads.get(normalized);
+  if (pending) return pending;
+  const request = new Promise<HTMLImageElement | null>((resolve) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => {
+      if (art.retainedSeasonIndices.has(normalized)) {
+        art.seasons[normalized] = image;
+      } else {
+        releaseImage(image);
+      }
+      art.seasonLoads.delete(normalized);
+      resolve(image);
+    };
+    image.onerror = () => {
+      art.seasonLoads.delete(normalized);
+      resolve(null);
+    };
+    image.src = ART_MANIFEST.seasons[normalized].image;
+  });
+  art.seasonLoads.set(normalized, request);
+  return request;
+}
+
+/** Keeps only the current plate and its two immediate neighbours decoded. */
+export async function retainSeasonSceneAssets(
+  art: LoadedArt,
+  elapsed: number,
+) {
+  const current = seasonIndex(elapsed);
+  const count = ART_MANIFEST.seasons.length;
+  const keep = new Set([
+    (current + count - 1) % count,
+    current,
+    (current + 1) % count,
+  ]);
+  art.retainedSeasonIndices = keep;
+  art.seasons.forEach((image, index) => {
+    if (keep.has(index)) return;
+    releaseImage(image);
+    art.seasons[index] = null;
+  });
+  await Promise.all([...keep].map((index) => loadSeasonPlate(art, index)));
+}
+
+export function releaseSeasonSceneAssets(art: LoadedArt) {
+  art.retainedSeasonIndices.clear();
+  art.seasons.forEach((image, index) => {
+    releaseImage(image);
+    art.seasons[index] = null;
+  });
+  art.seasonLoads.clear();
+}
+
 export async function loadArtAssets(onProgress: (progress: number) => void): Promise<LoadedArt> {
-  const seasonEntries = ART_MANIFEST.seasons.map((season) => season.image);
-  const total = seasonEntries.length;
-  let loaded = 0;
-
-  const load = (src: string) =>
-    new Promise<HTMLImageElement | null>((resolve) => {
-      const image = new Image();
-      image.onload = () => {
-        loaded += 1;
-        onProgress(loaded / total);
-        resolve(image);
-      };
-      image.onerror = () => {
-        loaded += 1;
-        onProgress(loaded / total);
-        resolve(null);
-      };
-      image.src = src;
-    });
-
-  const seasons = await Promise.all(seasonEntries.map(load));
-
-  return {
-    seasons,
+  const art: LoadedArt = {
+    seasons: ART_MANIFEST.seasons.map(() => null),
     // Directional multi-frame sheets are loaded by enemySprites.ts. Keeping
     // this map empty avoids downloading the retired single-pose cutouts.
     enemies: {},
+    seasonLoads: new Map(),
+    retainedSeasonIndices: new Set([0]),
   };
+  await loadSeasonPlate(art, 0);
+  onProgress(1);
+  // Neighbour plates hydrate after the first readable frame.
+  void retainSeasonSceneAssets(art, 0);
+  return art;
 }
 
 export function seasonIndex(elapsed: number) {

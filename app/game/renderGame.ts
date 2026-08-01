@@ -13,8 +13,10 @@ import {
   drawHeroSprite,
   drawImpactSprite,
   drawProjectileSprite,
+  drawStaticVisualFallback,
   drawWeaponSprite,
   drawXpPickup,
+  resolveEffectVisualFamily,
   resolveHeroWeaponSocket,
   type VisualPack,
 } from "./visual";
@@ -25,9 +27,17 @@ import {
   STANDARD_SECONDS,
   type ProjectileOwner,
   type RunState,
+  type VisualFx,
 } from "./survivor";
 import { getSolarTermState } from "./world";
-import { getWeaponDefinition, type FusionId, type WeaponId } from "./content";
+import {
+  FUSION_DEFINITIONS,
+  FUSIONS_BY_ID,
+  SYNERGY_DEFINITIONS,
+  getWeaponDefinition,
+  type FusionId,
+  type WeaponId,
+} from "./content";
 
 export type RenderAssets = {
   seasons: LoadedArt | null;
@@ -42,19 +52,6 @@ export type JoystickVisual = {
   baseY: number;
   knobX: number;
   knobY: number;
-};
-
-const fallbackGlyph: Record<WeaponId, string> = {
-  sword: "剑",
-  fan: "风",
-  umbrella: "伞",
-  scissors: "裁",
-  abacus: "算",
-  crossbow: "弩",
-  pipa: "音",
-  inkline: "矩",
-  lantern: "影",
-  thunderSeal: "雷",
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -150,28 +147,230 @@ function ownerWeapon(owner: ProjectileOwner, tags: readonly string[] = []): Weap
   return "sword";
 }
 
-function fallbackWeapon(
+const WEAPON_IDS = new Set<WeaponId>([
+  "sword",
+  "fan",
+  "umbrella",
+  "scissors",
+  "abacus",
+  "crossbow",
+  "pipa",
+  "inkline",
+  "lantern",
+  "thunderSeal",
+]);
+
+const VISUAL_WEAPON_HINTS: readonly [
+  WeaponId,
+  readonly string[],
+][] = [
+  ["thunderSeal", ["thunder", "lightning", "celestial", "雷"]],
+  ["pipa", ["pipa", "music", "string", "harmonic", "note", "score", "弦", "音"]],
+  ["umbrella", ["umbrella", "canopy", "rain", "guard", "伞", "雨"]],
+  ["lantern", ["lantern", "shadow", "fire", "灯", "影"]],
+  ["inkline", ["inkline", "ink", "rule", "craft", "墨"]],
+  ["scissors", ["scissor", "tailor", "cut", "剪"]],
+  ["abacus", ["abacus", "ledger", "pearl", "bead", "算", "珠"]],
+  ["crossbow", ["crossbow", "bolt", "turret", "mechanism", "弩"]],
+  ["fan", ["fan", "wind", "gale", "扇", "风"]],
+  ["sword", ["sword", "blade", "剑"]],
+];
+
+const FUSION_ART_LOOKUP = new Map<string, FusionId>();
+for (const definition of FUSION_DEFINITIONS) {
+  FUSION_ART_LOOKUP.set(definition.artKey.toLowerCase(), definition.id);
+  FUSION_ART_LOOKUP.set(definition.terminalArtKey.toLowerCase(), definition.id);
+}
+
+const SYNERGY_BY_ID = new Map(
+  SYNERGY_DEFINITIONS.map((definition) => [definition.id, definition]),
+);
+
+type EffectVisualSource = {
+  weaponId: WeaponId;
+  fusionId?: FusionId;
+  visualKey: string;
+  tags: readonly string[];
+};
+
+function isWeaponId(value: string): value is WeaponId {
+  return WEAPON_IDS.has(value as WeaponId);
+}
+
+function isFusionId(value: string): value is FusionId {
+  return Object.prototype.hasOwnProperty.call(FUSIONS_BY_ID, value);
+}
+
+function weaponFromVisualHints(
+  visualKey: string,
+  tags: readonly string[],
+  candidates?: readonly WeaponId[],
+) {
+  const allowed = candidates?.length ? new Set(candidates) : WEAPON_IDS;
+  const keyOnly = visualKey.toLowerCase();
+  for (const [weaponId, hints] of VISUAL_WEAPON_HINTS) {
+    if (
+      allowed.has(weaponId) &&
+      hints.some((hint) => keyOnly.includes(hint.toLowerCase()))
+    ) {
+      return weaponId;
+    }
+  }
+  const tagText = tags.join(" ").toLowerCase();
+  for (const [weaponId, hints] of VISUAL_WEAPON_HINTS) {
+    if (
+      allowed.has(weaponId) &&
+      hints.some((hint) => tagText.includes(hint.toLowerCase()))
+    ) {
+      return weaponId;
+    }
+  }
+  return candidates?.[0] ?? "sword";
+}
+
+function fusionIdFromVisual(
+  run: RunState,
+  owner: ProjectileOwner | undefined,
+  visualKey: string,
+) {
+  if (owner?.startsWith("fusion:")) {
+    const id = owner.slice("fusion:".length);
+    if (isFusionId(id)) return id;
+  }
+  if (owner?.startsWith("weave:") && run.weave) {
+    const instanceId = owner.slice("weave:".length);
+    const node = run.weave.nodes.find(
+      (candidate) => candidate.instanceId === instanceId,
+    );
+    if (node?.kind === "fusion" && isFusionId(node.sourceId)) {
+      return node.sourceId;
+    }
+  }
+  const normalizedKey = visualKey.toLowerCase();
+  const directMatch = normalizedKey.match(/fusion[/:]([a-z0-9_-]+)/i)?.[1];
+  if (directMatch) {
+    if (isFusionId(directMatch)) return directMatch;
+    const byNormalizedId = FUSION_DEFINITIONS.find(
+      (definition) =>
+        definition.id.toLowerCase() === directMatch.toLowerCase(),
+    );
+    if (byNormalizedId) return byNormalizedId.id;
+  }
+  for (const [artKey, fusionId] of FUSION_ART_LOOKUP) {
+    if (normalizedKey.includes(artKey)) return fusionId;
+  }
+  if (owner === "terminal" && run.weave?.nodes.length) {
+    const node =
+      run.weave.nodes[
+        run.weave.pulse.nodeIndex % run.weave.nodes.length
+      ];
+    if (node?.kind === "fusion" && isFusionId(node.sourceId)) {
+      return node.sourceId;
+    }
+  }
+  return undefined;
+}
+
+function resolveEffectVisualSource(
+  run: RunState,
+  owner: ProjectileOwner | undefined,
+  visualKey: string,
+  providedTags: readonly string[] = [],
+): EffectVisualSource {
+  if (owner && isWeaponId(owner)) {
+    return {
+      weaponId: owner,
+      visualKey,
+      tags: providedTags,
+    };
+  }
+
+  const fusionId = fusionIdFromVisual(run, owner, visualKey);
+  if (fusionId) {
+    const definition = FUSIONS_BY_ID[fusionId];
+    const tags = providedTags.length ? providedTags : definition.tags;
+    return {
+      weaponId: weaponFromVisualHints(
+        `${visualKey} ${fusionId}`,
+        tags,
+        definition.weapons,
+      ),
+      fusionId,
+      visualKey,
+      tags,
+    };
+  }
+
+  if (owner?.startsWith("weave:") && run.weave) {
+    const instanceId = owner.slice("weave:".length);
+    const node = run.weave.nodes.find(
+      (candidate) => candidate.instanceId === instanceId,
+    );
+    if (node?.kind === "weapon" && isWeaponId(node.sourceId)) {
+      return {
+        weaponId: node.sourceId,
+        visualKey,
+        tags: providedTags,
+      };
+    }
+  }
+
+  if (owner?.startsWith("synergy:")) {
+    const definition = SYNERGY_BY_ID.get(owner.slice("synergy:".length));
+    if (definition) {
+      const tags = providedTags.length
+        ? providedTags
+        : [...new Set(definition.effects.flatMap((effect) => effect.tags))];
+      return {
+        weaponId: weaponFromVisualHints(
+          visualKey,
+          tags,
+          definition.weapons,
+        ),
+        visualKey,
+        tags,
+      };
+    }
+  }
+
+  const hintedWeapon = weaponFromVisualHints(visualKey, providedTags);
+  return {
+    weaponId:
+      owner && owner !== "terminal"
+        ? ownerWeapon(owner, providedTags)
+        : hintedWeapon,
+    visualKey,
+    tags: providedTags,
+  };
+}
+
+function drawAuthoredStaticSubject(
   ctx: CanvasRenderingContext2D,
-  weaponId: WeaponId,
+  pack: VisualPack | null,
+  run: RunState,
+  source: Pick<EffectVisualSource, "weaponId" | "fusionId">,
   x: number,
   y: number,
   size: number,
   rotation: number,
   alpha = 1,
 ) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(rotation);
-  ctx.globalAlpha *= alpha;
-  ctx.font = `700 ${Math.max(14, size * 0.62)}px "Paper Guild Text", serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.lineWidth = Math.max(2, size * 0.07);
-  ctx.strokeStyle = "#f8f0da";
-  ctx.fillStyle = getWeaponDefinition(weaponId).color;
-  ctx.strokeText(fallbackGlyph[weaponId], 0, 0);
-  ctx.fillText(fallbackGlyph[weaponId], 0, 0);
-  ctx.restore();
+  if (!pack) return false;
+  const state = run.build.weapons.find(
+    (weapon) => weapon.id === source.weaponId,
+  );
+  return drawStaticVisualFallback(ctx, pack, {
+    weaponId: source.weaponId,
+    fusionId: source.fusionId,
+    level: state?.level ?? 1,
+    route: state?.routeId?.split(":")[1],
+    mastery: state?.masteryId?.split(":")[2],
+    x,
+    y,
+    size,
+    rotation,
+    alpha,
+  });
 }
 
 function drawWeaponAt(
@@ -203,7 +402,19 @@ function drawWeaponAt(
         alpha,
       })
     : false;
-  if (!drawn) fallbackWeapon(ctx, weaponId, x, y, size, rotation, alpha);
+  if (!drawn) {
+    drawAuthoredStaticSubject(
+      ctx,
+      pack,
+      run,
+      { weaponId },
+      x,
+      y,
+      size,
+      rotation,
+      alpha,
+    );
+  }
 }
 
 function weaponVisualProgress(run: RunState, weaponId: WeaponId) {
@@ -280,31 +491,66 @@ function drawZones(
   time: number,
 ) {
   for (const zone of run.zones) {
-    const weaponId = ownerWeapon(zone.owner);
-    const visual = weaponVisualProgress(run, weaponId);
+    const source = resolveEffectVisualSource(
+      run,
+      zone.owner,
+      zone.artKey,
+    );
+    const visual = weaponVisualProgress(run, source.weaponId);
     const progress = 1 - zone.life / zone.maxLife;
-    const drawn = pack
-      ? drawImpactSprite(ctx, pack, {
-          weaponId,
-          ...visual,
-          x: zone.x,
-          y: zone.y,
-          size: zone.radius * 2.2,
-          progress: (time * 0.55 + progress) % 1,
-          rotation: time * 0.16,
-          alpha: clamp(zone.life / 0.45, 0, 0.74),
-        })
-      : false;
-    if (!drawn) {
-      ctx.save();
-      ctx.globalAlpha = 0.12 + Math.sin(time * 3 + zone.id) * 0.025;
-      ctx.strokeStyle = getWeaponDefinition(weaponId).color;
-      ctx.lineWidth = 8;
-      ctx.beginPath();
-      ctx.arc(zone.x, zone.y, zone.radius, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
+    const alpha = clamp(zone.life / 0.45, 0, 0.58);
+    let drawn = false;
+    if (pack && source.fusionId) {
+      drawn = drawFusionSprite(ctx, pack, {
+        fusionId: source.fusionId,
+        phase: "attack",
+        x: zone.x,
+        y: zone.y,
+        size: clamp(zone.radius * 0.58, 62, 96),
+        rotation: time * 0.12,
+        alpha: alpha * 0.48,
+      });
     }
+    if (!drawn && pack) {
+      drawn = drawImpactSprite(ctx, pack, {
+        weaponId: source.weaponId,
+        ...visual,
+        x: zone.x,
+        y: zone.y,
+        size: clamp(zone.radius * 0.9, 66, 148),
+        progress: (time * 0.55 + progress) % 1,
+        rotation: time * 0.16,
+        alpha,
+        visualKey: source.visualKey,
+        tags: source.tags,
+        fusionId: source.fusionId,
+        ornament: false,
+      });
+    }
+    if (!drawn) {
+      drawAuthoredStaticSubject(
+        ctx,
+        pack,
+        run,
+        source,
+        zone.x,
+        zone.y,
+        clamp(zone.radius * 0.44, 34, 76),
+        time * 0.12,
+        alpha * 0.66,
+      );
+    }
+    // The dashed line communicates the actual collision boundary; it is not
+    // used as a replacement for the authored subject at the zone's centre.
+    ctx.save();
+    ctx.globalAlpha = 0.2 + Math.sin(time * 2.4 + zone.id) * 0.025;
+    ctx.strokeStyle = getWeaponDefinition(source.weaponId).color;
+    ctx.lineWidth = clamp(zone.radius * 0.045, 3, 8);
+    ctx.setLineDash([18, 12]);
+    ctx.beginPath();
+    ctx.arc(zone.x, zone.y, zone.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -312,36 +558,150 @@ function drawStrikes(
   ctx: CanvasRenderingContext2D,
   run: RunState,
   pack: VisualPack | null,
+  enemySheets: EnemySpriteSheets | null,
   time: number,
 ) {
   for (const strike of run.strikes) {
     const progress = 1 - strike.delay / strike.maxDelay;
-    const weaponId: WeaponId = strike.hostile ? "thunderSeal" : ownerWeapon(strike.owner);
-    const visual = weaponVisualProgress(run, weaponId);
-    const drawn = pack
-      ? drawImpactSprite(ctx, pack, {
-          weaponId,
-          ...visual,
-          x: strike.x,
-          y: strike.y,
-          size: strike.radius * 2,
-          progress: clamp(progress * 0.82, 0, 0.82),
-          rotation: time * 0.25,
-          alpha: 0.58 + progress * 0.32,
-        })
+    const source = strike.hostile
+      ? {
+          weaponId: "thunderSeal" as const,
+          visualKey: strike.artKey,
+          tags: ["lightning"] as const,
+        }
+      : resolveEffectVisualSource(run, strike.owner, strike.artKey);
+    const visual = weaponVisualProgress(run, source.weaponId);
+    let drawn = strike.hostile
+      ? drawEndlessBossEffect(
+          ctx,
+          enemySheets,
+          strike.artKey,
+          strike.x,
+          strike.y,
+          strike.radius,
+          progress,
+          0.82,
+        )
       : false;
-    if (!drawn) {
-      ctx.save();
-      ctx.globalAlpha = 0.34 + progress * 0.45;
-      ctx.strokeStyle = strike.hostile ? "#6d2830" : "#536e9c";
-      ctx.lineWidth = 3 + progress * 5;
-      ctx.setLineDash([18, 11]);
-      ctx.beginPath();
-      ctx.arc(strike.x, strike.y, strike.radius * (0.88 + progress * 0.12), 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
+    if (pack && "fusionId" in source && source.fusionId) {
+      drawn = drawFusionSprite(ctx, pack, {
+        fusionId: source.fusionId,
+        phase: progress < 0.62 ? "charged" : "ultimate",
+        x: strike.x,
+        y: strike.y,
+        size: clamp(strike.radius * 0.86, 52, 118),
+        rotation: time * 0.2,
+        alpha: 0.5 + progress * 0.34,
+      });
     }
+    if (!drawn && pack) {
+      drawn = drawImpactSprite(ctx, pack, {
+        weaponId: source.weaponId,
+        ...visual,
+        x: strike.x,
+        y: strike.y,
+        size: clamp(strike.radius * 0.92, 48, 126),
+        progress: clamp(progress * 0.82, 0, 0.82),
+        rotation: time * 0.25,
+        alpha: 0.58 + progress * 0.32,
+        visualKey: source.visualKey,
+        tags: source.tags,
+        fusionId: "fusionId" in source ? source.fusionId : undefined,
+      });
+    }
+    if (!drawn) {
+      drawAuthoredStaticSubject(
+        ctx,
+        pack,
+        run,
+        source,
+        strike.x,
+        strike.y,
+        clamp(strike.radius * 0.48, 34, 82),
+        time * 0.2,
+        0.46 + progress * 0.36,
+      );
+    }
+    // A thin telegraph remains visible regardless of asset state, while the
+    // strike's visual subject always comes from authored art.
+    ctx.save();
+    ctx.globalAlpha = 0.24 + progress * 0.3;
+    ctx.strokeStyle = strike.hostile ? "#6d2830" : "#536e9c";
+    ctx.lineWidth = clamp(2 + progress * 1.8, 2, 4);
+    ctx.setLineDash([18, 11]);
+    ctx.beginPath();
+    ctx.arc(
+      strike.x,
+      strike.y,
+      strike.radius * (0.88 + progress * 0.12),
+      0,
+      Math.PI * 2,
+    );
+    ctx.stroke();
+    ctx.restore();
   }
+}
+
+const BOSS_EFFECT_FRAMES: readonly [string, number][] = [
+  ["troupe-master-crossing", 0],
+  ["troupe-master-curtain", 1],
+  ["troupe-master-cast", 2],
+  ["chief-clerk-ledger", 4],
+  ["chief-clerk-seal", 5],
+  ["chief-clerk-runners", 6],
+  ["night-watch-patrol", 8],
+  ["night-watch-bell", 9],
+  ["night-watch-third-call", 9],
+  ["kiln-foreman-coals", 10],
+  ["kiln-foreman-heat", 11],
+  ["kiln-foreman-hammer", 10],
+  ["siege-tower-bolts", 13],
+  ["siege-tower-crew", 12],
+  ["siege-tower-ram", 12],
+  ["banner-captain-spear", 15],
+  ["banner-captain-rally", 14],
+  ["banner-captain-arrows", 13],
+  ["lingering-ground", 11],
+];
+
+function drawEndlessBossEffect(
+  ctx: CanvasRenderingContext2D,
+  sheets: EnemySpriteSheets | null,
+  artKey: string,
+  x: number,
+  y: number,
+  radius: number,
+  progress: number,
+  alpha: number,
+) {
+  const frame = BOSS_EFFECT_FRAMES.find(([hint]) => artKey.includes(hint))?.[1];
+  const image = sheets?.bossEffects;
+  if (frame === undefined || !image?.complete || image.naturalWidth <= 0) {
+    return false;
+  }
+  const sourceWidth = image.naturalWidth / 4;
+  const sourceHeight = image.naturalHeight / 4;
+  const width = clamp(radius * 1.7, 52, 196);
+  const height = width / 1.5;
+  const fadeIn = clamp(progress / 0.16, 0, 1);
+  const fadeOut = clamp((1 - progress) / 0.24, 0, 1);
+  ctx.save();
+  ctx.globalAlpha = alpha * Math.min(fadeIn, fadeOut);
+  ctx.translate(x, y);
+  ctx.scale(0.92 + Math.sin(progress * Math.PI) * 0.08, 0.92 + progress * 0.08);
+  ctx.drawImage(
+    image,
+    (frame % 4) * sourceWidth + 1,
+    Math.floor(frame / 4) * sourceHeight + 1,
+    sourceWidth - 2,
+    sourceHeight - 2,
+    -width / 2,
+    -height / 2,
+    width,
+    height,
+  );
+  ctx.restore();
+  return true;
 }
 
 function drawProjectiles(
@@ -350,22 +710,60 @@ function drawProjectiles(
   pack: VisualPack | null,
   time: number,
 ) {
+  const fusionAttackDrawn = new Set<FusionId>();
   for (const projectile of run.projectiles) {
-    const weaponId = ownerWeapon(projectile.owner, projectile.tags);
-    const visual = weaponVisualProgress(run, weaponId);
+    const source = resolveEffectVisualSource(
+      run,
+      projectile.owner,
+      projectile.artKey,
+      projectile.tags,
+    );
+    const visual = weaponVisualProgress(run, source.weaponId);
     const rotation = Math.atan2(projectile.vy, projectile.vx);
+    if (
+      pack &&
+      source.fusionId &&
+      !fusionAttackDrawn.has(source.fusionId)
+    ) {
+      fusionAttackDrawn.add(source.fusionId);
+      drawFusionSprite(ctx, pack, {
+        fusionId: source.fusionId,
+        phase: "attack",
+        x: projectile.x - Math.cos(rotation) * 14,
+        y: projectile.y - Math.sin(rotation) * 14,
+        size: clamp(42 + projectile.radius * 0.35, 42, 54),
+        rotation,
+        alpha: 0.42,
+      });
+    }
+    const visualSize = clamp(17 + projectile.radius * 0.9, 20, 38);
     const drawn = pack
       ? drawProjectileSprite(ctx, pack, {
-          weaponId,
+          weaponId: source.weaponId,
           ...visual,
           x: projectile.x,
           y: projectile.y,
-          size: Math.max(20, projectile.radius * 3.4),
+          size: visualSize,
           rotation,
           time: time + projectile.id * 0.013,
+          visualKey: source.visualKey,
+          tags: source.tags,
+          fusionId: source.fusionId,
         })
       : false;
-    if (!drawn) fallbackWeapon(ctx, weaponId, projectile.x, projectile.y, Math.max(17, projectile.radius * 2.4), rotation, 0.9);
+    if (!drawn) {
+      drawAuthoredStaticSubject(
+        ctx,
+        pack,
+        run,
+        source,
+        projectile.x,
+        projectile.y,
+        clamp(15 + projectile.radius * 0.65, 17, 30),
+        rotation,
+        0.9,
+      );
+    }
   }
 }
 
@@ -376,19 +774,51 @@ function drawSummons(
   time: number,
 ) {
   for (const summon of run.summons) {
-    const weaponId = ownerWeapon(summon.owner);
-    drawWeaponAt(
-      ctx,
-      pack,
-      run,
-      weaponId,
-      summon.x,
-      summon.y,
-      60,
-      Math.atan2(summon.vy, summon.vx) + Math.PI / 2,
-      time,
-      clamp(summon.life / 0.5, 0, 1),
-    );
+    const source = resolveEffectVisualSource(run, summon.owner, summon.artKey);
+    const rotation = Math.atan2(summon.vy, summon.vx) + Math.PI / 2;
+    const alpha = clamp(summon.life / 0.5, 0, 1);
+    const fusionDrawn =
+      pack && source.fusionId
+        ? drawFusionSprite(ctx, pack, {
+            fusionId: source.fusionId,
+            phase: "attack",
+            x: summon.x,
+            y: summon.y,
+            size: 60,
+            rotation,
+            alpha,
+          })
+        : false;
+    const shadowSummon =
+      /shadow|player|puppet|lantern|string/i.test(summon.artKey);
+    const shadowDrawn =
+      !fusionDrawn && shadowSummon && pack
+        ? drawProjectileSprite(ctx, pack, {
+            weaponId: source.weaponId,
+            x: summon.x,
+            y: summon.y,
+            size: 48,
+            rotation,
+            time: time + summon.id * 0.03,
+            alpha,
+            visualKey: source.visualKey,
+            tags: source.tags,
+          })
+        : false;
+    if (!fusionDrawn && !shadowDrawn) {
+      drawWeaponAt(
+        ctx,
+        pack,
+        run,
+        source.weaponId,
+        summon.x,
+        summon.y,
+        60,
+        rotation,
+        time,
+        alpha,
+      );
+    }
   }
 }
 
@@ -399,12 +829,50 @@ function drawOrbits(
   time: number,
 ) {
   for (const orbit of getOrbitVisuals(run)) {
-    const weaponId = ownerWeapon(orbit.owner);
+    const source = resolveEffectVisualSource(run, orbit.owner, orbit.artKey);
     for (let index = 0; index < orbit.count; index += 1) {
       const angle = time * orbit.angularSpeed + orbit.phase + (Math.PI * 2 * index) / orbit.count;
       const x = run.player.x + Math.cos(angle) * orbit.radius;
       const y = run.player.y + Math.sin(angle) * orbit.radius;
-      drawWeaponAt(ctx, pack, run, weaponId, x, y, 60, angle + Math.PI / 2, time);
+      const fusionDrawn =
+        index === 0 && pack && source.fusionId
+          ? drawFusionSprite(ctx, pack, {
+              fusionId: source.fusionId,
+              phase: "attack",
+              x,
+              y,
+              size: 52,
+              rotation: angle + Math.PI / 2,
+              alpha: 0.82,
+            })
+          : false;
+      const atomDrawn =
+        !fusionDrawn && source.fusionId && pack
+          ? drawProjectileSprite(ctx, pack, {
+              weaponId: source.weaponId,
+              x,
+              y,
+              size: 30,
+              rotation: angle + Math.PI / 2,
+              time: time + index * 0.05,
+              visualKey: source.visualKey,
+              tags: source.tags,
+              fusionId: source.fusionId,
+            })
+          : false;
+      if (!fusionDrawn && !atomDrawn) {
+        drawWeaponAt(
+          ctx,
+          pack,
+          run,
+          source.weaponId,
+          x,
+          y,
+          60,
+          angle + Math.PI / 2,
+          time,
+        );
+      }
     }
   }
 }
@@ -421,8 +889,9 @@ function drawActiveWeaveNode(
   const angle = time * 0.62 - Math.PI / 2;
   const x = run.player.x + Math.cos(angle) * 142;
   const y = run.player.y + Math.sin(angle) * 92;
-  drawFusionSprite(ctx, pack, {
-    fusionId: node.sourceId as FusionId,
+  const fusionId = node.sourceId as FusionId;
+  const drawn = drawFusionSprite(ctx, pack, {
+    fusionId,
     phase: run.terminalLabelLife > 1.1 ? "ultimate" : "charged",
     x,
     y,
@@ -430,6 +899,22 @@ function drawActiveWeaveNode(
     rotation: angle + Math.PI / 2,
     alpha: 0.94,
   });
+  if (!drawn) {
+    drawAuthoredStaticSubject(
+      ctx,
+      pack,
+      run,
+      {
+        weaponId: FUSIONS_BY_ID[fusionId].weapons[0],
+        fusionId,
+      },
+      x,
+      y,
+      run.terminalLabelLife > 1.1 ? 88 : 68,
+      angle + Math.PI / 2,
+      0.94,
+    );
+  }
 }
 
 function drawEnemies(
@@ -441,6 +926,7 @@ function drawEnemies(
     drawEnemyAnimation(ctx, sheets, {
       id: actor.enemy.id,
       type: actor.enemy.type,
+      visualId: actor.enemy.endlessBossId ?? actor.enemy.type,
       x: actor.enemy.x,
       y: actor.enemy.y,
       vx: actor.enemy.vx,
@@ -465,6 +951,7 @@ function drawEnemies(
     drawEnemyAnimation(ctx, sheets, {
       id: enemy.id,
       type: enemy.type,
+      visualId: enemy.endlessBossId ?? enemy.type,
       x: enemy.x,
       y: enemy.y,
       vx: enemy.vx,
@@ -496,27 +983,265 @@ function drawEnemies(
 }
 
 function drawBossBars(ctx: CanvasRenderingContext2D, run: RunState) {
-  const boss = run.enemies.find((enemy) => enemy.boss && enemy.hp > 0);
-  if (!boss) return;
-  const width = boss.bossTier === "final" ? 460 : 360;
-  const x = (GAME_WIDTH - width) / 2;
-  const y = 66;
+  const bosses = run.enemies
+    .filter((enemy) => enemy.boss && enemy.hp > 0)
+    .slice(0, 3);
+  if (bosses.length === 0) return;
+  const traitNames: Record<string, string> = {
+    quickRecovery: "快收",
+    reinforcements: "带队",
+    lingeringGround: "留场",
+    delayedRepeat: "复招",
+  };
   ctx.save();
-  ctx.fillStyle = "rgba(29,27,23,.72)";
-  ctx.fillRect(x - 2, y - 2, width + 4, 12);
-  ctx.fillStyle = boss.bossTier === "final" ? "#ad3d32" : "#4c716a";
-  ctx.fillRect(x, y, width * clamp(boss.hp / boss.maxHp, 0, 1), 8);
-  ctx.fillStyle = "#f9efd9";
-  ctx.font = '700 14px "Paper Guild Text", serif';
-  ctx.textAlign = "center";
-  ctx.fillText(boss.type === "nian" ? "岁夜年兽" : "吞卷饕餮", GAME_WIDTH / 2, y - 9);
+  for (let index = 0; index < bosses.length; index += 1) {
+    const boss = bosses[index];
+    const width = boss.bossTier === "final" ? 460 : bosses.length > 1 ? 330 : 360;
+    const x = (GAME_WIDTH - width) / 2;
+    const y = 66 + index * 34;
+    const traits = (boss.bossTraits ?? [])
+      .map((trait) => traitNames[trait] ?? trait)
+      .join(" · ");
+    ctx.fillStyle = "rgba(29,27,23,.72)";
+    ctx.fillRect(x - 2, y - 2, width + 4, 12);
+    ctx.fillStyle = boss.bossTier === "final" ? "#ad3d32" : "#4c716a";
+    ctx.fillRect(x, y, width * clamp(boss.hp / boss.maxHp, 0, 1), 8);
+    ctx.fillStyle = "#f9efd9";
+    ctx.font = '700 14px "Paper Guild Text", serif';
+    ctx.textAlign = "center";
+    ctx.fillText(
+      `${boss.bossName ?? (boss.type === "nian" ? "岁夜年兽" : "吞卷饕餮")}${traits ? ` · ${traits}` : ""}`,
+      GAME_WIDTH / 2,
+      y - 9,
+    );
+  }
   ctx.restore();
+}
+
+function drawEffectCap(
+  ctx: CanvasRenderingContext2D,
+  pack: VisualPack | null,
+  source: EffectVisualSource,
+  x: number,
+  y: number,
+  size: number,
+  rotation: number,
+  alpha: number,
+) {
+  if (!pack) return false;
+  return drawStaticVisualFallback(ctx, pack, {
+    weaponId: source.weaponId,
+    fusionId: source.fusionId,
+    level: 1,
+    x,
+    y,
+    size: clamp(size, 14, 34),
+    rotation,
+    alpha,
+  });
+}
+
+function drawWaveVisual(
+  ctx: CanvasRenderingContext2D,
+  fx: VisualFx,
+  progress: number,
+) {
+  if (fx.x2 === undefined || fx.y2 === undefined) return;
+  const dx = fx.x2 - fx.x;
+  const dy = fx.y2 - fx.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 1) return;
+  const halfSpan = clamp(18 + fx.radius * 0.22, 22, 36);
+  ctx.save();
+  ctx.translate(fx.x, fx.y);
+  ctx.rotate(Math.atan2(dy, dx));
+  ctx.lineCap = "round";
+  ctx.strokeStyle = fx.color;
+  for (let index = 0; index < 3; index += 1) {
+    const localProgress = clamp(progress * 1.28 - index * 0.15, 0, 1);
+    if (localProgress <= 0) continue;
+    const front = clamp(
+      distance * (0.16 + localProgress * 0.78) - index * 13,
+      18,
+      distance,
+    );
+    const localHalfSpan = Math.min(36, halfSpan - index * 3);
+    const bow = 8 + localProgress * 10 + index * 2;
+    ctx.globalAlpha =
+      (1 - localProgress) *
+      (0.48 - index * 0.075) *
+      clamp(fx.life / fx.maxLife + 0.2, 0, 1);
+    ctx.lineWidth = Math.min(10, 4.2 + index * 1.15);
+    ctx.setLineDash(index === 1 ? [18, 8] : []);
+    ctx.beginPath();
+    ctx.moveTo(front - 5, -localHalfSpan);
+    ctx.quadraticCurveTo(front + bow, 0, front - 5, localHalfSpan);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawBeamVisual(
+  ctx: CanvasRenderingContext2D,
+  pack: VisualPack | null,
+  source: EffectVisualSource,
+  fx: VisualFx,
+  progress: number,
+) {
+  if (fx.x2 === undefined || fx.y2 === undefined) return;
+  const dx = fx.x2 - fx.x;
+  const dy = fx.y2 - fx.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 1) return;
+  const angle = Math.atan2(dy, dx);
+  const middleX = fx.x + dx * 0.5;
+  const middleY = fx.y + dy * 0.5;
+  const thickness = clamp(4 + fx.radius * 0.16, 4, 24);
+  const fade = clamp(fx.life / fx.maxLife, 0, 1);
+
+  ctx.save();
+  ctx.globalAlpha = fade * 0.68;
+  ctx.lineCap = "round";
+  ctx.lineWidth = thickness;
+  const gradient = ctx.createLinearGradient(fx.x, fx.y, fx.x2, fx.y2);
+  gradient.addColorStop(0, "rgba(255,245,218,.18)");
+  gradient.addColorStop(0.2, fx.color);
+  gradient.addColorStop(0.82, fx.color);
+  gradient.addColorStop(1, "rgba(255,245,218,.28)");
+  ctx.strokeStyle = gradient;
+  ctx.beginPath();
+  ctx.moveTo(fx.x + Math.cos(angle) * 8, fx.y + Math.sin(angle) * 8);
+  ctx.quadraticCurveTo(
+    middleX - Math.sin(angle) * Math.min(10, thickness * 0.35),
+    middleY + Math.cos(angle) * Math.min(10, thickness * 0.35),
+    fx.x2,
+    fx.y2,
+  );
+  ctx.stroke();
+  ctx.restore();
+
+  let fusionCapsDrawn = false;
+  if (pack && source.fusionId) {
+    const spriteSize = clamp(32 + thickness * 0.85, 36, 56);
+    fusionCapsDrawn = drawFusionSprite(ctx, pack, {
+      fusionId: source.fusionId,
+      phase: "windup",
+      x: fx.x,
+      y: fx.y,
+      size: spriteSize,
+      rotation: angle,
+      alpha: fade * 0.52,
+    });
+    fusionCapsDrawn = drawFusionSprite(ctx, pack, {
+      fusionId: source.fusionId,
+      phase: "attack",
+      x: middleX,
+      y: middleY,
+      size: spriteSize,
+      rotation: angle,
+      alpha: fade * 0.46,
+    }) || fusionCapsDrawn;
+    fusionCapsDrawn = drawFusionSprite(ctx, pack, {
+      fusionId: source.fusionId,
+      phase: "finish",
+      x: fx.x2,
+      y: fx.y2,
+      size: spriteSize,
+      rotation: angle,
+      alpha: fade * 0.58,
+    }) || fusionCapsDrawn;
+    if (fusionCapsDrawn) return;
+  }
+
+  drawEffectCap(ctx, pack, source, fx.x, fx.y, thickness * 1.35, angle, fade * 0.58);
+  drawEffectCap(
+    ctx,
+    pack,
+    source,
+    fx.x2,
+    fx.y2,
+    thickness * 1.55,
+    angle,
+    fade * 0.74,
+  );
+  if (progress > 0.16 && progress < 0.82) {
+    drawEffectCap(
+      ctx,
+      pack,
+      source,
+      middleX,
+      middleY,
+      thickness,
+      angle,
+      fade * 0.38,
+    );
+  }
+}
+
+function drawChainVisual(
+  ctx: CanvasRenderingContext2D,
+  pack: VisualPack | null,
+  source: EffectVisualSource,
+  fx: VisualFx,
+) {
+  if (fx.x2 === undefined || fx.y2 === undefined) return;
+  const dx = fx.x2 - fx.x;
+  const dy = fx.y2 - fx.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 1) return;
+  const angle = Math.atan2(dy, dx);
+  const normalX = -dy / distance;
+  const normalY = dx / distance;
+  const family = resolveEffectVisualFamily({
+    weaponId: source.weaponId,
+    visualKey: source.visualKey,
+    tags: source.tags,
+  });
+  const amplitude =
+    family === "lightning" ? Math.min(12, distance * 0.08) : Math.min(7, distance * 0.045);
+  const fade = clamp(fx.life / fx.maxLife, 0, 1);
+
+  ctx.save();
+  ctx.globalAlpha = fade * 0.74;
+  ctx.strokeStyle = fx.color;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = family === "lightning" ? 4.2 : family === "music" ? 3.2 : 2.8;
+  ctx.beginPath();
+  ctx.moveTo(fx.x, fx.y);
+  ctx.lineTo(
+    fx.x + dx * 0.34 + normalX * amplitude,
+    fx.y + dy * 0.34 + normalY * amplitude,
+  );
+  ctx.lineTo(
+    fx.x + dx * 0.68 - normalX * amplitude * 0.7,
+    fx.y + dy * 0.68 - normalY * amplitude * 0.7,
+  );
+  ctx.lineTo(fx.x2, fx.y2);
+  ctx.stroke();
+  ctx.restore();
+
+  const fusionCapDrawn = pack && source.fusionId
+    ? drawFusionSprite(ctx, pack, {
+      fusionId: source.fusionId,
+      phase: "finish",
+      x: fx.x2,
+      y: fx.y2,
+      size: 28,
+      rotation: angle,
+      alpha: fade * 0.38,
+    })
+    : false;
+  if (!fusionCapDrawn) {
+    drawEffectCap(ctx, pack, source, fx.x2, fx.y2, 18, angle, fade * 0.7);
+  }
 }
 
 function drawFx(
   ctx: CanvasRenderingContext2D,
   run: RunState,
   pack: VisualPack | null,
+  enemySheets: EnemySpriteSheets | null,
   time: number,
   layer: "friendly" | "overlay",
 ) {
@@ -529,97 +1254,108 @@ function drawFx(
       continue;
     }
     const progress = 1 - fx.life / fx.maxLife;
-    const weaponId: WeaponId = fx.owner
-      ? ownerWeapon(fx.owner)
-      : fx.artKey.includes("thunder") || fx.artKey.includes("celestial")
-      ? "thunderSeal"
-      : fx.artKey.includes("fan")
-        ? "fan"
-        : fx.artKey.includes("umbrella") || fx.artKey.includes("rain")
-          ? "umbrella"
-          : fx.artKey.includes("pipa") || fx.artKey.includes("music")
-            ? "pipa"
-            : fx.artKey.includes("lantern") || fx.artKey.includes("nian")
-              ? "lantern"
-              : "sword";
-    const visual = weaponVisualProgress(run, weaponId);
+    const source = resolveEffectVisualSource(
+      run,
+      fx.owner,
+      fx.artKey,
+    );
+    const visual = weaponVisualProgress(run, source.weaponId);
 
     if (
       fx.kind === "wave" &&
       fx.x2 !== undefined &&
       fx.y2 !== undefined
     ) {
-      const dx = fx.x2 - fx.x;
-      const dy = fx.y2 - fx.y;
-      const distance = Math.hypot(dx, dy);
-      const spread = clamp(fx.radius / 105, 0.34, 0.7);
-      ctx.save();
-      ctx.translate(fx.x, fx.y);
-      ctx.rotate(Math.atan2(dy, dx));
-      ctx.lineCap = "round";
-      ctx.strokeStyle = fx.color;
-      for (let index = 0; index < 3; index += 1) {
-        const localProgress = clamp(
-          progress * 1.32 - index * 0.16,
-          0,
-          1,
-        );
-        if (localProgress <= 0) continue;
-        const front = distance * (0.14 + localProgress * 0.82);
-        ctx.globalAlpha =
-          (1 - localProgress) *
-          (0.46 - index * 0.07) *
-          clamp(fx.life / fx.maxLife + 0.18, 0, 1);
-        ctx.lineWidth = Math.min(10, 4.5 + index * 1.2);
-        ctx.setLineDash(index === 1 ? [26, 9] : []);
-        ctx.beginPath();
-        ctx.arc(0, 0, front, -spread, spread);
-        ctx.stroke();
-      }
-      ctx.restore();
-    } else if ((fx.kind === "beam" || fx.kind === "chain") && fx.x2 !== undefined && fx.y2 !== undefined) {
-      const dx = fx.x2 - fx.x;
-      const dy = fx.y2 - fx.y;
-      const distance = Math.hypot(dx, dy);
-      const count = Math.max(2, Math.ceil(distance / 38));
-      for (let index = 0; index <= count; index += 1) {
-        const ratio = index / count;
-        const x = fx.x + dx * ratio;
-        const y = fx.y + dy * ratio;
-        const drawn = pack
-          ? drawProjectileSprite(ctx, pack, {
-              weaponId,
-              ...visual,
-              x,
-              y,
-              size: fx.kind === "beam" ? fx.radius * 1.8 : 26,
-              rotation: Math.atan2(dy, dx),
-              time: time + index * 0.04,
-              alpha: clamp(fx.life / fx.maxLife, 0, 0.82),
-            })
-          : false;
-        if (!drawn && index % 2 === 0) fallbackWeapon(ctx, weaponId, x, y, 18, Math.atan2(dy, dx), 0.54);
-      }
+      drawWaveVisual(ctx, fx, progress);
+    } else if (fx.kind === "beam") {
+      drawBeamVisual(ctx, pack, source, fx, progress);
+    } else if (fx.kind === "chain") {
+      drawChainVisual(ctx, pack, source, fx);
     } else {
-      const drawn = pack
-          ? drawImpactSprite(ctx, pack, {
-            weaponId,
-            ...visual,
-            x: fx.x,
-            y: fx.y,
-            size: fx.radius * 2,
+      let drawn = !friendly
+        ? drawEndlessBossEffect(
+            ctx,
+            enemySheets,
+            fx.artKey,
+            fx.x,
+            fx.y,
+            fx.radius,
             progress,
-            rotation: time * 0.25,
-            alpha: clamp(fx.life / Math.min(0.35, fx.maxLife), 0, 1),
-          })
+            fx.kind === "warning" ? 0.42 : 0.82,
+          )
         : false;
+      if (pack && source.fusionId) {
+        const phase =
+          fx.kind === "warning"
+            ? "windup"
+            : fx.kind === "terminal"
+              ? "finish"
+              : fx.kind === "hit" || fx.kind === "burst"
+                ? "finish"
+                : "attack";
+        drawn = drawFusionSprite(ctx, pack, {
+          fusionId: source.fusionId,
+          phase,
+          x: fx.x,
+          y: fx.y,
+          size:
+            fx.kind === "terminal"
+              ? 96
+              : clamp(28 + fx.radius * 0.42, 34, 78),
+          rotation: time * 0.16,
+          alpha: clamp(fx.life / Math.min(0.35, fx.maxLife), 0, 0.78),
+        });
+      }
+      if (!drawn && pack) {
+        drawn = drawImpactSprite(ctx, pack, {
+          weaponId: source.weaponId,
+          ...visual,
+          x: fx.x,
+          y: fx.y,
+          size:
+            fx.kind === "terminal"
+              ? 108
+              : clamp(24 + fx.radius * 0.55, 30, 132),
+          progress,
+          rotation: time * 0.25,
+          alpha: clamp(fx.life / Math.min(0.35, fx.maxLife), 0, 1),
+          visualKey: source.visualKey,
+          tags: source.tags,
+          fusionId: source.fusionId,
+          ornament: fx.kind !== "warning",
+        });
+      }
       if (!drawn) {
+        drawAuthoredStaticSubject(
+          ctx,
+          pack,
+          run,
+          source,
+          fx.x,
+          fx.y,
+          fx.kind === "terminal"
+            ? 86
+            : clamp(20 + fx.radius * 0.34, 26, 72),
+          time * 0.2,
+          clamp(fx.life / fx.maxLife, 0, 1) * 0.62,
+        );
+      }
+      if (fx.kind === "warning" || fx.kind === "ring") {
         ctx.save();
-        ctx.globalAlpha = clamp(fx.life / fx.maxLife, 0, 1) * 0.45;
+        ctx.globalAlpha =
+          clamp(fx.life / fx.maxLife, 0, 1) *
+          (fx.kind === "warning" ? 0.46 : 0.3);
         ctx.strokeStyle = fx.color;
-        ctx.lineWidth = Math.max(3, fx.radius * 0.05);
+        ctx.lineWidth = clamp(fx.radius * 0.035, 3, 8);
+        ctx.setLineDash(fx.kind === "warning" ? [16, 10] : []);
         ctx.beginPath();
-        ctx.arc(fx.x, fx.y, fx.radius * (0.28 + progress * 0.72), 0, Math.PI * 2);
+        ctx.arc(
+          fx.x,
+          fx.y,
+          fx.radius * (0.9 + progress * 0.1),
+          0,
+          Math.PI * 2,
+        );
         ctx.stroke();
         ctx.restore();
       }
@@ -646,14 +1382,6 @@ function drawPlayer(
     run.player.formState === "foldingToHuman"
       ? run.player.formFacing
       : run.player.facing;
-  const season = getSolarTermState(run.elapsed, run.endless).season;
-  const paperSeparator =
-    season === "summer" || season === "winter"
-      ? "drop-shadow(2.1px 0 0 rgba(248,241,220,.78)) drop-shadow(-2.1px 0 0 rgba(248,241,220,.78)) drop-shadow(0 2.1px 0 rgba(248,241,220,.78)) drop-shadow(0 -2.1px 0 rgba(248,241,220,.78)) "
-      : "";
-  ctx.save();
-  ctx.filter =
-    `${paperSeparator}drop-shadow(1.6px 0 0 #211e1a) drop-shadow(-1.6px 0 0 #211e1a) drop-shadow(0 1.6px 0 #211e1a) drop-shadow(0 -1.6px 0 #211e1a)`;
   const drawn = pack
     ? drawHeroSprite(ctx, pack, {
         x: run.player.x,
@@ -665,9 +1393,9 @@ function drawPlayer(
         time,
         travelled: motion.travelled,
         alpha,
+        outline: "ink",
       })
     : false;
-  ctx.restore();
   if (!drawn) {
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -781,16 +1509,16 @@ export function drawRun(
   drawTermMotif(ctx, assets.solarTerms, sceneElapsed);
   drawZones(ctx, run, assets.visuals, time);
   drawPickupGlow(ctx, run);
-  drawStrikes(ctx, run, assets.visuals, time);
+  drawStrikes(ctx, run, assets.visuals, assets.enemies, time);
   drawProjectiles(ctx, run, assets.visuals, time);
-  drawFx(ctx, run, assets.visuals, time, "friendly");
+  drawFx(ctx, run, assets.visuals, assets.enemies, time, "friendly");
   drawEnemies(ctx, run, assets.enemies);
   drawPickups(ctx, run, assets.visuals, time);
   drawSummons(ctx, run, assets.visuals, time);
   drawOrbits(ctx, run, assets.visuals, time);
   drawActiveWeaveNode(ctx, run, assets.visuals, time);
   drawPlayer(ctx, run, assets.visuals, time);
-  drawFx(ctx, run, assets.visuals, time, "overlay");
+  drawFx(ctx, run, assets.visuals, assets.enemies, time, "overlay");
   drawBossBars(ctx, run);
   drawJoystick(ctx, joystick);
 }
@@ -825,6 +1553,7 @@ export function drawMenuPreview(
         formProgress: progress,
         state: progress > 0.96 ? "move" : "idle",
         time,
+        outline: "ink",
       })
     : false;
   if (!drawn) {

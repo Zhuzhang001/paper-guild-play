@@ -1,9 +1,13 @@
 import type { EnemyArchetype } from "../art";
+import type { EndlessBossId } from "../content/bosses";
+
+export type EnemyVisualId = EnemyArchetype | EndlessBossId | "bossEffects";
 
 export type EnemyMotionState = "moving" | "attacking" | "hurt" | "dead";
 
 export type EnemySpritePose = {
   type: EnemyArchetype;
+  visualId?: EnemyVisualId;
   x: number;
   y: number;
   radius: number;
@@ -16,9 +20,9 @@ export type EnemySpritePose = {
   boss: boolean;
 };
 
-export type EnemySpriteSheets = Partial<Record<EnemyArchetype, HTMLImageElement>>;
+export type EnemySpriteSheets = Partial<Record<EnemyVisualId, HTMLImageElement>>;
 
-const SPRITE_URLS: Record<EnemyArchetype, string> = {
+const SPRITE_URLS: Record<EnemyVisualId, string> = {
   cup: "/enemies-v3/cup-runtime.webp",
   shoe: "/enemies-v3/shoe-runtime.webp",
   lantern: "/enemies-v3/lantern-runtime.webp",
@@ -29,6 +33,13 @@ const SPRITE_URLS: Record<EnemyArchetype, string> = {
   puppet: "/enemies-v3/puppet-runtime.webp",
   taotie: "/enemies-v3/taotie-runtime.webp",
   nian: "/enemies-v3/nian-runtime.webp",
+  troupeMaster: "/enemies-v6/boss-opera-master-v6.webp",
+  chiefClerk: "/enemies-v6/boss-ledger-clerk-v6.webp",
+  nightWatch: "/enemies-v6/boss-night-watchman-v6.webp",
+  kilnForeman: "/enemies-v6/boss-kiln-overseer-v6.webp",
+  siegeTower: "/enemies-v6/boss-siege-cart-v6.webp",
+  bannerCaptain: "/enemies-v6/boss-banner-officer-v6.webp",
+  bossEffects: "/enemies-v6/boss-effects-v6.webp",
 };
 
 const STRIDE: Record<EnemyArchetype, number> = {
@@ -45,58 +56,119 @@ const STRIDE: Record<EnemyArchetype, number> = {
 };
 
 const BOOT_ENEMIES: readonly EnemyArchetype[] = ["cup", "shoe", "fish", "rib"];
-const STANDARD_DEFERRED_ENEMIES: readonly EnemyArchetype[] = [
-  "lantern",
-  "abacus",
-  "lion",
-  "puppet",
-];
+const sheetLoads = new WeakMap<
+  EnemySpriteSheets,
+  Map<EnemyVisualId, Promise<void>>
+>();
+const retainedSheets = new WeakMap<EnemySpriteSheets, Set<EnemyVisualId>>();
 
-function loadSheet(sheets: EnemySpriteSheets, type: EnemyArchetype) {
+function withBossEffects(types: readonly EnemyVisualId[]) {
+  const requested = new Set<EnemyVisualId>(types);
+  if (types.some((type) => ENDLESS_BOSS_IDS.has(type))) {
+    requested.add("bossEffects");
+  }
+  return requested;
+}
+
+const ENDLESS_BOSS_IDS = new Set<EnemyVisualId>([
+  "troupeMaster",
+  "chiefClerk",
+  "nightWatch",
+  "kilnForeman",
+  "siegeTower",
+  "bannerCaptain",
+]);
+
+function releaseSheet(image: HTMLImageElement | undefined) {
+  if (!image) return;
+  image.removeAttribute("src");
+  image.src = "";
+}
+
+function loadSheet(sheets: EnemySpriteSheets, type: EnemyVisualId) {
   if (sheets[type]) return Promise.resolve();
-  return new Promise<void>((resolve) => {
+  let loads = sheetLoads.get(sheets);
+  if (!loads) {
+    loads = new Map();
+    sheetLoads.set(sheets, loads);
+  }
+  const pending = loads.get(type);
+  if (pending) return pending;
+  const request = new Promise<void>((resolve) => {
     const image = new Image();
     image.decoding = "async";
     image.onload = () => {
-      sheets[type] = image;
+      if (retainedSheets.get(sheets)?.has(type) ?? true) {
+        sheets[type] = image;
+      } else {
+        releaseSheet(image);
+      }
+      loads?.delete(type);
       resolve();
     };
-    image.onerror = () => resolve();
+    image.onerror = () => {
+      loads?.delete(type);
+      resolve();
+    };
     image.src = SPRITE_URLS[type];
   });
+  loads.set(type, request);
+  return request;
 }
 
 export async function loadEnemySpriteSheets(
   onProgress?: (progress: number) => void,
 ): Promise<EnemySpriteSheets> {
-  const entries = Object.entries(SPRITE_URLS) as Array<[EnemyArchetype, string]>;
+  const entries = Object.entries(SPRITE_URLS) as Array<[EnemyVisualId, string]>;
   const sheets: EnemySpriteSheets = {};
-  const bootEntries = entries.filter(([type]) => BOOT_ENEMIES.includes(type));
+  const bootEnemySet = new Set<EnemyVisualId>(BOOT_ENEMIES);
+  retainedSheets.set(sheets, bootEnemySet);
+  const bootEntries = entries.filter(([type]) => bootEnemySet.has(type));
   let complete = 0;
   await Promise.all(bootEntries.map(async ([type]) => {
     await loadSheet(sheets, type);
     complete += 1;
     onProgress?.(complete / bootEntries.length);
   }));
-
-  const hydrate = () => {
-    void Promise.all(
-      STANDARD_DEFERRED_ENEMIES.map((type) => loadSheet(sheets, type)),
-    );
-  };
-  if (typeof window !== "undefined" && "requestIdleCallback" in window) {
-    window.requestIdleCallback(hydrate, { timeout: 1800 });
-  } else if (typeof window !== "undefined") {
-    globalThis.setTimeout(hydrate, 0);
-  }
   return sheets;
 }
 
 export async function preloadEnemySpriteSheets(
   sheets: EnemySpriteSheets,
-  types: readonly EnemyArchetype[],
+  types: readonly EnemyVisualId[],
 ) {
-  await Promise.all(types.map((type) => loadSheet(sheets, type)));
+  const requested = withBossEffects(types);
+  const retained = retainedSheets.get(sheets) ?? new Set<EnemyVisualId>();
+  requested.forEach((type) => retained.add(type));
+  retainedSheets.set(sheets, retained);
+  await Promise.all([...requested].map((type) => loadSheet(sheets, type)));
+}
+
+/**
+ * Atomically retains active archetypes plus the one preselected Boss. Stale
+ * in-flight decodes are discarded when they complete.
+ */
+export async function retainEnemySpriteSheets(
+  sheets: EnemySpriteSheets,
+  types: readonly EnemyVisualId[],
+) {
+  const keep = withBossEffects(types);
+  retainedSheets.set(sheets, keep);
+  for (const type of Object.keys(sheets) as EnemyVisualId[]) {
+    if (keep.has(type)) continue;
+    releaseSheet(sheets[type]);
+    delete sheets[type];
+  }
+  await Promise.all([...keep].map((type) => loadSheet(sheets, type)));
+}
+
+export function releaseEnemySpriteSheets(sheets: EnemySpriteSheets) {
+  retainedSheets.set(sheets, new Set());
+  for (const type of Object.keys(sheets) as EnemyVisualId[]) {
+    releaseSheet(sheets[type]);
+    delete sheets[type];
+  }
+  sheetLoads.get(sheets)?.clear();
 }
 
 function normalizeAngle(angle: number) {
@@ -177,7 +249,7 @@ export function drawEnemySprite(
   sheets: EnemySpriteSheets | null,
   pose: EnemySpritePose,
 ) {
-  const image = sheets?.[pose.type];
+  const image = sheets?.[pose.visualId ?? pose.type];
   if (!image || !image.complete || image.naturalWidth === 0) {
     drawFallbackSilhouette(ctx, pose);
     return;

@@ -9,10 +9,21 @@ import {
   type AtlasSpec,
 } from "./manifest";
 
-type VisualImage = HTMLImageElement | ImageBitmap;
+type VisualImage = HTMLImageElement | ImageBitmap | HTMLCanvasElement;
+
+type OpaqueFrameBounds = {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+};
 
 export type VisualPack = {
   readonly images: Map<string, VisualImage>;
+  /** Cached, one-time processed atlases such as the hero's thin ink outline. */
+  readonly derived: Map<string, VisualImage>;
+  /** Tight per-frame alpha bounds; keeps authored detail large without scaling collisions. */
+  readonly frameBounds: Map<string, readonly (OpaqueFrameBounds | null)[]>;
   readonly failed: Set<string>;
   readonly pending: Set<string>;
 };
@@ -30,6 +41,7 @@ export type DrawHeroOptions = {
   /** Distance travelled in canvas pixels; drives gait without idle sliding. */
   travelled?: number;
   alpha?: number;
+  outline?: "none" | "ink";
 };
 
 export type DrawWeaponOptions = {
@@ -55,6 +67,9 @@ export type DrawProjectileOptions = {
   rotation: number;
   time: number;
   alpha?: number;
+  visualKey?: string;
+  tags?: readonly string[];
+  fusionId?: FusionId;
 };
 
 export type DrawImpactOptions = {
@@ -67,6 +82,10 @@ export type DrawImpactOptions = {
   progress: number;
   rotation?: number;
   alpha?: number;
+  visualKey?: string;
+  tags?: readonly string[];
+  fusionId?: FusionId;
+  ornament?: boolean;
 };
 
 export type DrawXpOptions = {
@@ -95,11 +114,36 @@ export type HeroWeaponSocket = {
 
 export type DrawFusionOptions = {
   fusionId: FusionId;
-  phase: "idle" | "charged" | "attack" | "ultimate";
+  phase:
+    | "idle"
+    | "body"
+    | "charged"
+    | "windup"
+    | "attack"
+    | "ultimate"
+    | "finish";
   x: number;
   y: number;
   size: number;
   rotation: number;
+  alpha?: number;
+};
+
+/**
+ * Last-resort authored subject used when a route/effect frame is unavailable.
+ * It deliberately reuses the owning weapon/fusion artwork instead of drawing
+ * text or a geometric stand-in into the battlefield.
+ */
+export type DrawStaticVisualFallbackOptions = {
+  weaponId: WeaponId;
+  fusionId?: FusionId;
+  level?: number;
+  route?: string;
+  mastery?: string;
+  x: number;
+  y: number;
+  size: number;
+  rotation?: number;
   alpha?: number;
 };
 
@@ -175,6 +219,296 @@ async function loadImage(src: string): Promise<VisualImage> {
   });
 }
 
+const HERO_OUTLINE_PREFIX = "derived.hero-outline.";
+const HERO_IVORY_OUTLINE_PREFIX = "derived.hero-outline-ivory.";
+
+/** The visible ivory band outside the ink outline, in 98px hero-space. */
+export const HERO_IVORY_SEPARATION_PX = 0.65;
+const HERO_INK_OUTLINE_PX = 0.9;
+const HERO_DARK_BACKGROUND_LUMINANCE = 0.42;
+
+function createScratchCanvas(width: number, height: number) {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+function analyzeOpaqueFrameBounds(
+  image: VisualImage,
+  spec: AtlasSpec,
+): readonly (OpaqueFrameBounds | null)[] | null {
+  const imageSize = dimensions(image);
+  const canvas = createScratchCanvas(imageSize.width, imageSize.height);
+  const context = canvas?.getContext("2d", { willReadFrequently: true });
+  if (!canvas || !context) return null;
+  try {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    ).data;
+    const cellWidth = imageSize.width / spec.columns;
+    const cellHeight = imageSize.height / spec.rows;
+    const inset = spec.inset ?? 0;
+    const bounds: (OpaqueFrameBounds | null)[] = [];
+    for (let frame = 0; frame < spec.columns * spec.rows; frame += 1) {
+      const column = frame % spec.columns;
+      const row = Math.floor(frame / spec.columns);
+      const startX = Math.floor(column * cellWidth + inset);
+      const startY = Math.floor(row * cellHeight + inset);
+      const endX = Math.ceil((column + 1) * cellWidth - inset);
+      const endY = Math.ceil((row + 1) * cellHeight - inset);
+      let minX = endX;
+      let minY = endY;
+      let maxX = startX - 1;
+      let maxY = startY - 1;
+      for (let y = startY; y < endY; y += 1) {
+        for (let x = startX; x < endX; x += 1) {
+          if (pixels[(y * imageSize.width + x) * 4 + 3] <= 20) continue;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+      if (maxX < minX || maxY < minY) {
+        bounds.push(null);
+        continue;
+      }
+      const padding = Math.max(
+        1,
+        Math.round(Math.min(cellWidth, cellHeight) * 0.012),
+      );
+      const paddedMinX = Math.max(startX, minX - padding);
+      const paddedMinY = Math.max(startY, minY - padding);
+      const paddedMaxX = Math.min(endX - 1, maxX + padding);
+      const paddedMaxY = Math.min(endY - 1, maxY + padding);
+      bounds.push({
+        x: paddedMinX,
+        y: paddedMinY,
+        width: paddedMaxX - paddedMinX + 1,
+        height: paddedMaxY - paddedMinY + 1,
+      });
+    }
+    return bounds;
+  } catch {
+    return null;
+  }
+}
+
+function createOutlineMask(
+  image: VisualImage,
+  spec: AtlasSpec,
+  width: number,
+  height: number,
+  radius: number,
+  color: string,
+) {
+  const mask = createScratchCanvas(width, height);
+  const maskContext = mask?.getContext("2d");
+  if (!mask || !maskContext) return null;
+  const diagonal = radius * Math.SQRT1_2;
+  const offsets = [
+    [-radius, 0],
+    [radius, 0],
+    [0, -radius],
+    [0, radius],
+    [-diagonal, -diagonal],
+    [diagonal, -diagonal],
+    [-diagonal, diagonal],
+    [diagonal, diagonal],
+  ] as const;
+  const cellWidth = width / spec.columns;
+  const cellHeight = height / spec.rows;
+  for (let row = 0; row < spec.rows; row += 1) {
+    for (let column = 0; column < spec.columns; column += 1) {
+      const sourceX = column * cellWidth;
+      const sourceY = row * cellHeight;
+      maskContext.save();
+      maskContext.beginPath();
+      maskContext.rect(sourceX, sourceY, cellWidth, cellHeight);
+      maskContext.clip();
+      for (const [offsetX, offsetY] of offsets) {
+        maskContext.drawImage(
+          image,
+          sourceX,
+          sourceY,
+          cellWidth,
+          cellHeight,
+          sourceX + offsetX,
+          sourceY + offsetY,
+          cellWidth,
+          cellHeight,
+        );
+      }
+      maskContext.restore();
+    }
+  }
+  maskContext.globalCompositeOperation = "source-in";
+  maskContext.fillStyle = color;
+  maskContext.fillRect(0, 0, width, height);
+  return mask;
+}
+
+function createHeroOutlinedAtlas(
+  image: VisualImage,
+  spec: AtlasSpec,
+  withIvorySeparation: boolean,
+): HTMLCanvasElement | null {
+  const imageSize = dimensions(image);
+  const canvas = createScratchCanvas(imageSize.width, imageSize.height);
+  const context = canvas?.getContext("2d");
+  if (!canvas || !context) return null;
+
+  const cellHeight = imageSize.height / spec.rows;
+  const sourcePixelsPerHeroPixel = cellHeight / 98;
+  const inkRadius = Math.max(1, sourcePixelsPerHeroPixel * HERO_INK_OUTLINE_PX);
+  if (withIvorySeparation) {
+    const ivoryMask = createOutlineMask(
+      image,
+      spec,
+      imageSize.width,
+      imageSize.height,
+      inkRadius + sourcePixelsPerHeroPixel * HERO_IVORY_SEPARATION_PX,
+      "#f5ecd5",
+    );
+    if (ivoryMask) {
+      context.drawImage(ivoryMask, 0, 0);
+      // Release the full-atlas scratch backing store before allocating the
+      // ink mask; this keeps the one-time dark-scene conversion peak bounded.
+      ivoryMask.width = 1;
+      ivoryMask.height = 1;
+    }
+  }
+  const inkMask = createOutlineMask(
+    image,
+    spec,
+    imageSize.width,
+    imageSize.height,
+    inkRadius,
+    "#211e1a",
+  );
+  if (!inkMask) return null;
+  context.drawImage(inkMask, 0, 0);
+  context.drawImage(image, 0, 0);
+  return canvas;
+}
+
+export function relativeLuminance(red: number, green: number, blue: number) {
+  const linear = (channel: number) => {
+    const value = clamp01(channel / 255);
+    return value <= 0.04045
+      ? value / 12.92
+      : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return linear(red) * 0.2126 + linear(green) * 0.7152 + linear(blue) * 0.0722;
+}
+
+export function isLowLightHeroBackground(
+  red: number,
+  green: number,
+  blue: number,
+) {
+  return relativeLuminance(red, green, blue) < HERO_DARK_BACKGROUND_LUMINANCE;
+}
+
+type HeroBackgroundSample = {
+  x: number;
+  y: number;
+  time: number;
+  lowLight: boolean;
+};
+
+const HERO_BACKGROUND_SAMPLES = new WeakMap<
+  CanvasRenderingContext2D,
+  HeroBackgroundSample
+>();
+
+function needsIvoryHeroSeparation(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  time: number,
+) {
+  const previous = HERO_BACKGROUND_SAMPLES.get(ctx);
+  if (
+    previous &&
+    time - previous.time < 0.12 &&
+    Math.hypot(x - previous.x, y - previous.y) < 20
+  ) {
+    return previous.lowLight;
+  }
+  let lowLight = false;
+  try {
+    const canvas = ctx.canvas;
+    const sampleX = Math.max(0, Math.min(canvas.width - 1, Math.round(x)));
+    const sampleY = Math.max(0, Math.min(canvas.height - 1, Math.round(y)));
+    const pixels = ctx.getImageData(sampleX, sampleY, 1, 1).data;
+    const luminance = relativeLuminance(pixels[0], pixels[1], pixels[2]);
+    lowLight = previous?.lowLight
+      ? luminance < HERO_DARK_BACKGROUND_LUMINANCE + 0.08
+      : luminance < HERO_DARK_BACKGROUND_LUMINANCE;
+  } catch {
+    // A tainted or offscreen canvas must never prevent the hero from drawing.
+  }
+  HERO_BACKGROUND_SAMPLES.set(ctx, { x, y, time, lowLight });
+  return lowLight;
+}
+
+function cacheVisualMetadata(
+  pack: VisualPack,
+  spec: AtlasSpec,
+  image: VisualImage,
+) {
+  // Weapon cells have deliberately generous transparent margins, so inspect
+  // them once and size the painted object rather than the atlas cell. Fusion
+  // sheets already use the shared safe inset; scanning every possible fusion
+  // during endless-mode preload would add a noticeable main-thread spike.
+  if (spec.id.startsWith("weapon.")) {
+    const bounds = analyzeOpaqueFrameBounds(image, spec);
+    if (bounds) pack.frameBounds.set(spec.id, bounds);
+  }
+  if (spec.id.startsWith("hero.")) {
+    const outlined = createHeroOutlinedAtlas(image, spec, false);
+    if (outlined) pack.derived.set(`${HERO_OUTLINE_PREFIX}${spec.id}`, outlined);
+  }
+}
+
+function resolveHeroOutlineImage(
+  pack: VisualPack,
+  spec: AtlasSpec,
+  withIvorySeparation: boolean,
+) {
+  const prefix = withIvorySeparation
+    ? HERO_IVORY_OUTLINE_PREFIX
+    : HERO_OUTLINE_PREFIX;
+  const key = `${prefix}${spec.id}`;
+  const cached = pack.derived.get(key);
+  if (cached) return cached;
+  const source = pack.images.get(spec.id);
+  if (!source) return undefined;
+  const outlined = createHeroOutlinedAtlas(
+    source,
+    spec,
+    withIvorySeparation,
+  );
+  if (!outlined) return undefined;
+  // Keep one processed copy per hero atlas. Switching background classes is
+  // rare (normally only at a season boundary) and this avoids doubling the
+  // decoded hero memory for the whole run.
+  const alternatePrefix = withIvorySeparation
+    ? HERO_OUTLINE_PREFIX
+    : HERO_IVORY_OUTLINE_PREFIX;
+  pack.derived.delete(`${alternatePrefix}${spec.id}`);
+  pack.derived.set(key, outlined);
+  return outlined;
+}
+
 async function loadSpecs(
   pack: VisualPack,
   specs: readonly AtlasSpec[],
@@ -194,7 +528,9 @@ async function loadSpecs(
       }
       pack.pending.add(spec.id);
       try {
-        pack.images.set(spec.id, await loadImage(spec.src));
+        const image = await loadImage(spec.src);
+        pack.images.set(spec.id, image);
+        cacheVisualMetadata(pack, spec, image);
       } catch {
         pack.failed.add(spec.id);
       } finally {
@@ -215,6 +551,8 @@ export async function loadVisualPack(
 ): Promise<VisualPack> {
   const pack: VisualPack = {
     images: new Map(),
+    derived: new Map(),
+    frameBounds: new Map(),
     failed: new Set(),
     pending: new Set(),
   };
@@ -271,6 +609,7 @@ export function pruneVisualPack(
       image.close();
     }
     pack.images.delete(id);
+    pack.frameBounds.delete(id);
     released += 1;
   }
   return released;
@@ -297,8 +636,9 @@ function drawFrame(
   rotation = 0,
   alpha = 1,
   flipX = false,
+  imageOverride?: VisualImage,
 ) {
-  const image = pack.images.get(spec.id);
+  const image = imageOverride ?? pack.images.get(spec.id);
   if (!image) return false;
   const { width: imageWidth, height: imageHeight } = dimensions(image);
   if (imageWidth <= 0 || imageHeight <= 0) return false;
@@ -327,6 +667,66 @@ function drawFrame(
     -height / 2,
     width,
     height,
+  );
+  ctx.restore();
+  return true;
+}
+
+function drawTrimmedFrame(
+  ctx: CanvasRenderingContext2D,
+  pack: VisualPack,
+  spec: AtlasSpec,
+  frame: number,
+  x: number,
+  y: number,
+  targetLongAxis: number,
+  rotation = 0,
+  alpha = 1,
+  flipX = false,
+) {
+  const image = pack.images.get(spec.id);
+  if (!image) return false;
+  const imageSize = dimensions(image);
+  const layout = atlasLayout(image, spec);
+  const frameCount = layout.columns * layout.rows;
+  const safeFrame = ((Math.floor(frame) % frameCount) + frameCount) % frameCount;
+  const bounds = pack.frameBounds.get(spec.id)?.[safeFrame];
+  if (!bounds) {
+    return drawFrame(
+      ctx,
+      pack,
+      spec,
+      safeFrame,
+      x,
+      y,
+      targetLongAxis,
+      targetLongAxis,
+      rotation,
+      alpha,
+      flipX,
+    );
+  }
+  const sourceAspect = bounds.width / Math.max(1, bounds.height);
+  const drawWidth =
+    sourceAspect >= 1 ? targetLongAxis : targetLongAxis * sourceAspect;
+  const drawHeight =
+    sourceAspect >= 1 ? targetLongAxis / sourceAspect : targetLongAxis;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+  ctx.scale(flipX ? -1 : 1, 1);
+  ctx.globalAlpha *= clamp01(alpha);
+  ctx.drawImage(
+    image,
+    bounds.x,
+    bounds.y,
+    Math.min(bounds.width, imageSize.width - bounds.x),
+    Math.min(bounds.height, imageSize.height - bounds.y),
+    -drawWidth / 2,
+    -drawHeight / 2,
+    drawWidth,
+    drawHeight,
   );
   ctx.restore();
   return true;
@@ -465,6 +865,24 @@ export function drawHeroSprite(
     state === "move" ? Math.sin(gaitPhase * Math.PI) * size * 0.018 : 0;
   const hurtJitter = state === "hurt" ? Math.sin(time * 42) * size * 0.025 : 0;
   const facing = directionFrame(direction);
+  const withIvorySeparation =
+    options.outline === "ink" && needsIvoryHeroSeparation(ctx, x, y, time);
+  const directionImage =
+    options.outline === "ink"
+      ? resolveHeroOutlineImage(
+          pack,
+          HERO_ATLASES.directions,
+          withIvorySeparation,
+        )
+      : undefined;
+  const foldImage =
+    options.outline === "ink"
+      ? resolveHeroOutlineImage(
+          pack,
+          HERO_ATLASES.fold,
+          withIvorySeparation,
+        )
+      : undefined;
   if (formProgress <= 0) {
     return drawFrame(
       ctx,
@@ -478,6 +896,7 @@ export function drawHeroSprite(
       0,
       alpha,
       facing.flip,
+      directionImage,
     );
   }
 
@@ -506,6 +925,7 @@ export function drawHeroSprite(
     0,
     alpha,
     foldDirection.flip,
+    foldImage,
   );
 }
 
@@ -537,26 +957,120 @@ export function resolveWeaponVisualFrame(
   return routeOffset + (masteryKey(selection.mastery) === "chain" ? 3 : 2);
 }
 
+/**
+ * Chooses an authored frame without ever manufacturing a placeholder. The
+ * requested route frame wins; an unavailable route falls back to the base or
+ * first non-empty frame from the same atlas.
+ */
+export function selectAuthoredStaticFrame(
+  availableFrames: readonly boolean[],
+  requestedFrame: number,
+) {
+  if (availableFrames.length === 0) return undefined;
+  const requested =
+    ((Math.floor(requestedFrame) % availableFrames.length) +
+      availableFrames.length) %
+    availableFrames.length;
+  if (availableFrames[requested]) return requested;
+  if (availableFrames[0]) return 0;
+  if (availableFrames[1]) return 1;
+  const firstAvailable = availableFrames.findIndex(Boolean);
+  return firstAvailable >= 0 ? firstAvailable : undefined;
+}
+
+function drawAuthoredWeaponFrame(
+  ctx: CanvasRenderingContext2D,
+  pack: VisualPack,
+  weaponId: WeaponId,
+  selection: WeaponVisualSelection,
+  x: number,
+  y: number,
+  size: number,
+  rotation: number,
+  alpha = 1,
+) {
+  const spec = WEAPON_ATLASES[weaponId];
+  if (!spec || !pack.images.has(spec.id)) return false;
+  const requestedFrame = resolveWeaponVisualFrame(selection);
+  const bounds = pack.frameBounds.get(spec.id);
+  const frame = bounds
+    ? selectAuthoredStaticFrame(
+        bounds.map((candidate) => candidate !== null),
+        requestedFrame,
+      )
+    : requestedFrame;
+  if (frame === undefined) return false;
+  return drawTrimmedFrame(
+    ctx,
+    pack,
+    spec,
+    frame,
+    x,
+    y,
+    size,
+    rotation,
+    alpha,
+  );
+}
+
+export function drawStaticVisualFallback(
+  ctx: CanvasRenderingContext2D,
+  pack: VisualPack,
+  options: DrawStaticVisualFallbackOptions,
+) {
+  if (options.fusionId) {
+    const fusionSpec = FUSION_ATLASES[options.fusionId];
+    if (
+      fusionSpec &&
+      pack.images.has(fusionSpec.id) &&
+      drawTrimmedFrame(
+        ctx,
+        pack,
+        fusionSpec,
+        0,
+        options.x,
+        options.y,
+        options.size,
+        options.rotation ?? 0,
+        options.alpha,
+      )
+    ) {
+      return true;
+    }
+  }
+  return drawAuthoredWeaponFrame(
+    ctx,
+    pack,
+    options.weaponId,
+    {
+      level: options.level ?? 1,
+      route: options.route,
+      mastery: options.mastery,
+    },
+    options.x,
+    options.y,
+    options.size,
+    options.rotation ?? 0,
+    options.alpha,
+  );
+}
+
 export function drawWeaponSprite(
   ctx: CanvasRenderingContext2D,
   pack: VisualPack,
   options: DrawWeaponOptions,
 ) {
-  const spec = WEAPON_ATLASES[options.weaponId];
-  if (!spec) return false;
-  const frame = resolveWeaponVisualFrame(options);
   const masteryPulse =
     options.level >= 5 ? 1 + Math.sin(options.time * 4.2) * 0.045 : 1;
   const chainTilt =
     options.mastery === "chain" ? Math.sin(options.time * 3.1) * 0.07 : 0;
-  return drawFrame(
+  return drawAuthoredWeaponFrame(
     ctx,
     pack,
-    spec,
-    frame,
+    options.weaponId,
+    options,
     options.x,
     options.y,
-    options.size * masteryPulse,
     options.size * masteryPulse,
     options.rotation + chainTilt,
     options.alpha,
@@ -567,11 +1081,142 @@ function weaponIndex(weaponId: WeaponId) {
   return Math.max(0, WEAPON_ORDER.indexOf(weaponId));
 }
 
+export type EffectVisualFamily =
+  | "blade"
+  | "wind"
+  | "rain"
+  | "craft"
+  | "ledger"
+  | "mechanism"
+  | "music"
+  | "shadow"
+  | "lightning";
+
+const VISUAL_FAMILY_HINTS: readonly [
+  EffectVisualFamily,
+  readonly string[],
+][] = [
+  ["lightning", ["lightning", "thunder", "celestial", "雷"]],
+  ["music", ["music", "pipa", "string", "harmonic", "note", "score", "弦", "音"]],
+  ["rain", ["rain", "umbrella", "canopy", "guard", "雨", "伞"]],
+  ["shadow", ["shadow", "lantern", "fire", "影", "灯"]],
+  ["craft", ["ink", "craft", "scissor", "tailor", "墨", "剪"]],
+  ["ledger", ["ledger", "abacus", "pearl", "bead", "珠", "算"]],
+  ["wind", ["wind", "fan", "gale", "风", "扇"]],
+  ["mechanism", ["mechanism", "crossbow", "bolt", "turret", "弩"]],
+  ["blade", ["blade", "sword", "剑"]],
+];
+
+export function resolveEffectVisualFamily(options: {
+  weaponId: WeaponId;
+  visualKey?: string;
+  tags?: readonly string[];
+}): EffectVisualFamily {
+  const haystack = `${options.visualKey ?? ""} ${(options.tags ?? []).join(" ")}`.toLowerCase();
+  for (const [family, hints] of VISUAL_FAMILY_HINTS) {
+    if (hints.some((hint) => haystack.includes(hint.toLowerCase()))) {
+      return family;
+    }
+  }
+  const familyByWeapon: Record<WeaponId, EffectVisualFamily> = {
+    sword: "blade",
+    fan: "wind",
+    umbrella: "rain",
+    scissors: "craft",
+    abacus: "ledger",
+    crossbow: "mechanism",
+    pipa: "music",
+    inkline: "craft",
+    lantern: "shadow",
+    thunderSeal: "lightning",
+  };
+  return familyByWeapon[options.weaponId];
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function drawMusicProjectile(
+  ctx: CanvasRenderingContext2D,
+  options: DrawProjectileOptions,
+) {
+  const size = clampNumber(options.size, 15, 38);
+  const route = routeKey(options.route);
+  const pulse = 1 + Math.sin(options.time * 10.5) * 0.055;
+  ctx.save();
+  ctx.translate(options.x, options.y);
+  ctx.rotate(options.rotation);
+  ctx.scale(pulse, pulse);
+  ctx.globalAlpha *= clamp01(options.alpha ?? 1);
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "#28231f";
+  ctx.fillStyle = route === "c" ? "#c08a45" : "#78658b";
+  ctx.lineWidth = 1.8;
+
+  if (route === "a") {
+    ctx.beginPath();
+    ctx.arc(-size * 0.12, 0, size * 0.48, -0.72, 0.72);
+    ctx.stroke();
+  } else if (route === "c") {
+    ctx.globalAlpha *= 0.86;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, size * 0.38, size * 0.24, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.5, 0);
+    ctx.quadraticCurveTo(0, -size * 0.16, size * 0.48, 0);
+    ctx.stroke();
+  }
+
+  ctx.rotate(Math.PI / 4);
+  const bead = size * (route === "b" ? 0.18 : 0.15);
+  ctx.fillRect(-bead, -bead, bead * 2, bead * 2);
+  ctx.strokeStyle = "#fff1d2";
+  ctx.lineWidth = 1.3;
+  ctx.strokeRect(-bead, -bead, bead * 2, bead * 2);
+  ctx.restore();
+  return true;
+}
+
+function drawInkProjectile(
+  ctx: CanvasRenderingContext2D,
+  options: DrawProjectileOptions,
+) {
+  const size = clampNumber(options.size, 14, 34);
+  ctx.save();
+  ctx.translate(options.x, options.y);
+  ctx.rotate(options.rotation);
+  ctx.globalAlpha *= clamp01(options.alpha ?? 1);
+  ctx.strokeStyle = "#242725";
+  ctx.fillStyle = "#3f5b57";
+  ctx.lineCap = "round";
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.55, 0);
+  ctx.quadraticCurveTo(0, -size * 0.1, size * 0.5, 0);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(size * 0.36, 0, size * 0.13, size * 0.09, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  return true;
+}
+
 export function drawProjectileSprite(
   ctx: CanvasRenderingContext2D,
   pack: VisualPack,
   options: DrawProjectileOptions,
 ) {
+  const family = resolveEffectVisualFamily(options);
+  if (family === "music") return drawMusicProjectile(ctx, options);
+  if (
+    family === "craft" &&
+    /ink|line|rule|score/i.test(options.visualKey ?? "")
+  ) {
+    return drawInkProjectile(ctx, options);
+  }
   const flutter =
     options.weaponId === "fan" ||
     options.weaponId === "pipa" ||
@@ -609,11 +1254,46 @@ export function drawProjectileSprite(
   return drawn;
 }
 
+function drawMusicImpact(
+  ctx: CanvasRenderingContext2D,
+  options: DrawImpactOptions,
+) {
+  const progress = clamp01(options.progress);
+  const size = clampNumber(options.size, 20, 104);
+  const appear = clamp01(progress / 0.14);
+  const disappear = clamp01((1 - progress) / 0.24);
+  const alpha = (options.alpha ?? 1) * Math.min(appear, disappear);
+  ctx.save();
+  ctx.translate(options.x, options.y);
+  ctx.rotate(options.rotation ?? 0);
+  ctx.globalAlpha *= alpha;
+  ctx.strokeStyle = "#77648b";
+  ctx.lineCap = "round";
+  for (let index = 0; index < 3; index += 1) {
+    const radius = size * (0.18 + progress * 0.25 + index * 0.09);
+    ctx.globalAlpha = alpha * (0.72 - index * 0.14);
+    ctx.lineWidth = Math.min(4.5, 1.8 + index * 0.7);
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, -0.72, 0.72);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#b94e3d";
+  ctx.globalAlpha = alpha * 0.86;
+  ctx.beginPath();
+  ctx.arc(size * 0.04, 0, Math.max(2, size * 0.035), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  return true;
+}
+
 export function drawImpactSprite(
   ctx: CanvasRenderingContext2D,
   pack: VisualPack,
   options: DrawImpactOptions,
 ) {
+  if (resolveEffectVisualFamily(options) === "music") {
+    return drawMusicImpact(ctx, options);
+  }
   const progress = clamp01(options.progress);
   const frame = weaponIndex(options.weaponId);
   const appear = clamp01(progress / 0.16);
@@ -631,7 +1311,11 @@ export function drawImpactSprite(
     options.rotation ?? 0,
     (options.alpha ?? 1) * Math.min(appear, disappear),
   );
-  if (drawn && (options.route || options.mastery)) {
+  if (
+    drawn &&
+    options.ornament !== false &&
+    (options.route || options.mastery)
+  ) {
     const supernaturalFrame =
       (weaponIndex(options.weaponId) +
         (options.route === "b" ? 3 : options.route === "c" ? 7 : 0) +
@@ -757,18 +1441,20 @@ export function drawFusionSprite(
   if (!spec) return false;
   const frame = {
     idle: 0,
+    body: 0,
     charged: 1,
+    windup: 1,
     attack: 2,
     ultimate: 3,
+    finish: 3,
   }[options.phase];
-  return drawFrame(
+  return drawTrimmedFrame(
     ctx,
     pack,
     spec,
     frame,
     options.x,
     options.y,
-    options.size,
     options.size,
     options.rotation,
     options.alpha,

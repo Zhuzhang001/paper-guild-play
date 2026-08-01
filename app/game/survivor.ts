@@ -1,11 +1,39 @@
 import type { BossTier, EnemyArchetype } from "./art";
 import {
+  BOSS_TRAIT_IDS,
+  ENDLESS_BOSS_IDS,
+  getEndlessBoss,
+  type BossSkillDefinition,
+  type BossTraitId,
+  type EndlessBossId,
+} from "./content/bosses";
+import {
+  getDifficultyDefinition,
+  nextDifficultyId,
+  resolveDifficultyId,
+  type DifficultyId,
+} from "./content/difficulty";
+import {
+  BOSS_THREAT_COST,
+  ENDLESS_ACTOR_CAP,
+  ELITE_THREAT_COST,
+  sampleEndlessDifficulty,
+  type EndlessDifficultySample,
+} from "./content/difficultyCurve";
+import {
+  COMMON_ENEMY_IDS,
+  ELITE_ENEMY_IDS,
+  getEnemyDefinition,
+  type EnemySkillDefinition,
+} from "./content/enemies";
+import {
   chooseActiveSynergies as resolveChosenSynergies,
   getSynergyChoices as getEligibleSynergies,
   getWeaponDefinition,
   getWeaponRoute,
   type CombatEventKind,
   type CombatBuild,
+  type CelestialIntrusionId,
   type EndlessPerkAction,
   type EffectSpec,
   type EffectTag,
@@ -33,12 +61,18 @@ import {
   fuseAdjacentNodes,
   generateUpgradeOptions,
   insertWeaponNode,
+  keepNewestAndRecycleInPlace,
+  keepNewestInPlace,
   nextRandom,
+  ObjectPool,
+  recycleRejectedInPlace,
+  retainInPlace,
   resolveWeaponEffects,
   resolveWeaponKit,
   stepEndlessPerkState,
   stepCelestialIntrusion,
   swapWeaveNodes,
+  SpatialGrid,
   type EndlessPerkProc,
   type EndlessPerkRuntimeEvent,
   type RngState,
@@ -56,12 +90,48 @@ export const GAME_WIDTH = 1280;
 export const GAME_HEIGHT = 720;
 export const STANDARD_SECONDS = 480;
 
-export type TrialId = "swift" | "crowd" | "elite";
+export type TrialId =
+  | "swift"
+  | "crowd"
+  | "elite"
+  | "bossRush"
+  | "noRecovery"
+  | "thinPower";
 export type SynergyChoiceOption = {
   id: string;
   name: string;
   description: string;
   weapons: readonly WeaponId[];
+  /** Two level-three weapons are always the entry condition. */
+  conditionText: string;
+  /** The authored combat event and cadence that actually releases the effect. */
+  triggerText: string;
+  /** A plain-language account of what the current resolved effect does. */
+  effectText: string;
+  /** Explains whether the currently chosen routes alter this pairing. */
+  routeImpactText: string;
+};
+
+export type PrimaryWeaponSelection = {
+  weaponId: WeaponId;
+  assignedBy: "startingWeapon" | "firstNonLantern" | "player";
+  assignedAt: number;
+};
+
+/**
+ * One semantic attack captured at the moment it was performed.  The replay is
+ * deliberately made from EffectSpec data rather than from whatever sprite or
+ * projectile happens to remain on screen, so beams, waves, chains, fields and
+ * summons keep their actual behaviour when the lantern copies them.
+ */
+export type AttackReplayRecord = {
+  owner: ProjectileOwner;
+  sourceWeaponId?: WeaponId;
+  effects: readonly EffectSpec[];
+  targetId?: number;
+  aimAngle: number;
+  capturedAt: number;
+  copyDepth: 0 | 1;
 };
 
 export type RunEvent =
@@ -81,7 +151,16 @@ export type RunEvent =
       selectedIds: readonly string[];
     }
   | { type: "terminal"; name: string }
-  | { type: "bossSpawn"; tier: Exclude<BossTier, null> }
+  | {
+      type: "bossSpawn";
+      tier: Exclude<BossTier, null>;
+      bossId?: EndlessBossId;
+    }
+  | {
+      type: "difficultyClear";
+      difficultyId: DifficultyId;
+      unlocks?: DifficultyId;
+    }
   | { type: "pickup" }
   | { type: "playerHit" };
 
@@ -108,7 +187,7 @@ export type EnemyActionPhase =
   | "land"
   | "recovery";
 
-export type EnemyActionState = {
+export type NianLeapActionState = {
   kind: "nianLeap";
   phase: EnemyActionPhase;
   elapsed: number;
@@ -118,6 +197,45 @@ export type EnemyActionState = {
   targetY: number;
   warningFxId?: number;
 };
+
+export type EnemySkillActionState = {
+  kind: "enemySkill";
+  skillId: string;
+  phase: "telegraph" | "active" | "recovery";
+  elapsed: number;
+  startX: number;
+  startY: number;
+  targetX: number;
+  targetY: number;
+  committed: boolean;
+  warningFxId?: number;
+  partnerId?: number;
+  lineX1?: number;
+  lineY1?: number;
+  lineX2?: number;
+  lineY2?: number;
+  previousPlayerSide?: number;
+  followupCommitted?: boolean;
+};
+
+export type EndlessBossActionState = {
+  kind: "endlessBossSkill";
+  skillId: string;
+  phase: "telegraph" | "active" | "recovery";
+  elapsed: number;
+  startX: number;
+  startY: number;
+  targetX: number;
+  targetY: number;
+  committed: boolean;
+  warningFxId?: number;
+  bossPhase: 1 | 2;
+};
+
+export type EnemyActionState =
+  | NianLeapActionState
+  | EnemySkillActionState
+  | EndlessBossActionState;
 
 export type Enemy = {
   id: number;
@@ -149,6 +267,18 @@ export type Enemy = {
   skillIndex: number;
   intrusionAvatar: boolean;
   action?: EnemyActionState;
+  endlessBossId?: EndlessBossId;
+  bossName?: string;
+  bossTraits?: readonly BossTraitId[];
+  bossPhase?: 1 | 2;
+  artKey?: string;
+  actionSpeed?: number;
+  partnerId?: number;
+  patternCycle?: number;
+  guardedUntil?: number;
+  guardFacing?: number;
+  ralliedUntil?: number;
+  celestialSourceId?: CelestialIntrusionId;
   lastHitOwner?: ProjectileOwner;
 };
 
@@ -248,6 +378,9 @@ export type PendingStrike = {
   maxDelay: number;
   hostile: boolean;
   canProc?: boolean;
+  velocityX?: number;
+  velocityY?: number;
+  contactOnly?: boolean;
 };
 
 export type VisualFxKind =
@@ -312,6 +445,20 @@ export type EndlessPerkCombatState = {
   pendingFinishReplays: PendingPerkReplay[];
 };
 
+export type EndlessDirectorState = {
+  startedAt: number;
+  nonBossThreatBudget: number;
+  bossBudget: number;
+  totalThreatSpent: number;
+  commonSpawned: number;
+  eliteSpawned: number;
+  bossesSpawned: number;
+  recentBossIds: EndlessBossId[];
+  nextBossId: EndlessBossId;
+  pendingBossSlot: boolean;
+  lastSample: EndlessDifficultySample;
+};
+
 export type RunState = {
   elapsed: number;
   endless: boolean;
@@ -357,6 +504,12 @@ export type RunState = {
   endlessPerks: EndlessPerkState;
   perkCombat: EndlessPerkCombatState;
   testModifiers: TestModifiers;
+  difficultyId: DifficultyId;
+  difficultyUnlockCandidate?: DifficultyId;
+  difficultyClearEligible: boolean;
+  endlessDirector?: EndlessDirectorState;
+  primaryWeapon?: PrimaryWeaponSelection;
+  attackReplays: Map<ProjectileOwner, AttackReplayRecord>;
 };
 
 export type TestModifiers = {
@@ -365,9 +518,180 @@ export type TestModifiers = {
   assisted: boolean;
 };
 
+type ProjectileSeed = Omit<Projectile, "hitAt">;
+type ZoneSeed = Omit<Zone, "enteredEnemyIds">;
+type SummonSeed = Summon;
+type DeathActorSeed = DeathActor;
+
+type CombatObjectPools = {
+  projectiles: ObjectPool<Projectile, ProjectileSeed>;
+  zones: ObjectPool<Zone, ZoneSeed>;
+  summons: ObjectPool<Summon, SummonSeed>;
+  deaths: ObjectPool<DeathActor, DeathActorSeed>;
+};
+
+const RUN_OBJECT_POOLS = new WeakMap<RunState, CombatObjectPools>();
+const ZONE_INSIDE_SCRATCH = new Set<number>();
+
+function createCombatObjectPools(): CombatObjectPools {
+  const projectiles = new ObjectPool<Projectile, ProjectileSeed>(
+    () => ({
+      id: 0,
+      owner: "terminal",
+      artKey: "",
+      tags: [],
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      radius: 0,
+      damage: 0,
+      life: 0,
+      pierce: 0,
+      homing: 0,
+      markSeconds: 0,
+      hitCooldown: 0,
+      hitAt: new Map(),
+    }),
+    (value, seed) => {
+      value.hitAt.clear();
+      value.targetId = undefined;
+      value.canProc = undefined;
+      value.spawnDelay = undefined;
+      value.windTouched = undefined;
+      value.weatherTouched = undefined;
+      Object.assign(value, seed);
+    },
+    520,
+    (value) => {
+      value.hitAt.clear();
+      value.targetId = undefined;
+      value.canProc = undefined;
+      value.spawnDelay = undefined;
+      value.windTouched = undefined;
+      value.weatherTouched = undefined;
+    },
+  );
+  const zones = new ObjectPool<Zone, ZoneSeed>(
+    () => ({
+      id: 0,
+      owner: "terminal",
+      artKey: "",
+      x: 0,
+      y: 0,
+      radius: 0,
+      damagePerSecond: 0,
+      life: 0,
+      maxLife: 0,
+      tick: 0,
+      tickRate: 0,
+      followsPlayer: false,
+      slow: 0,
+      enteredEnemyIds: new Set(),
+    }),
+    (value, seed) => {
+      value.enteredEnemyIds.clear();
+      value.canProc = undefined;
+      Object.assign(value, seed);
+    },
+    48,
+    (value) => {
+      value.enteredEnemyIds.clear();
+      value.canProc = undefined;
+    },
+  );
+  const summons = new ObjectPool<Summon, SummonSeed>(
+    () => ({
+      id: 0,
+      owner: "terminal",
+      artKey: "",
+      angle: 0,
+      radius: 0,
+      life: 0,
+      attackDamage: 0,
+      attackCooldown: 0,
+      cooldown: 0,
+      index: 0,
+      total: 0,
+      moveSpeed: 0,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      formationSlot: 0,
+      retargetClock: 0,
+    }),
+    (value, seed) => {
+      value.targetId = undefined;
+      value.canProc = undefined;
+      Object.assign(value, seed);
+    },
+    36,
+    (value) => {
+      value.targetId = undefined;
+      value.canProc = undefined;
+    },
+  );
+  const deaths = new ObjectPool<DeathActor, DeathActorSeed>(
+    () => ({ enemy: undefined as unknown as Enemy, life: 0 }),
+    (value, seed) => Object.assign(value, seed),
+    48,
+    (value) => {
+      value.enemy = undefined as unknown as Enemy;
+      value.life = 0;
+    },
+  );
+  return { projectiles, zones, summons, deaths };
+}
+
+function objectPools(run: RunState): CombatObjectPools {
+  let pools = RUN_OBJECT_POOLS.get(run);
+  if (!pools) {
+    pools = createCombatObjectPools();
+    RUN_OBJECT_POOLS.set(run, pools);
+  }
+  return pools;
+}
+
+function pushProjectile(run: RunState, seed: ProjectileSeed): Projectile {
+  const projectile = objectPools(run).projectiles.acquire(seed);
+  run.projectiles.push(projectile);
+  return projectile;
+}
+
+function pushZone(run: RunState, seed: ZoneSeed): Zone {
+  const zone = objectPools(run).zones.acquire(seed);
+  run.zones.push(zone);
+  return zone;
+}
+
+function pushSummon(run: RunState, seed: SummonSeed): Summon {
+  const summon = objectPools(run).summons.acquire(seed);
+  run.summons.push(summon);
+  return summon;
+}
+
+function pushDeathActor(run: RunState, seed: DeathActorSeed): DeathActor {
+  const actor = objectPools(run).deaths.acquire(seed);
+  run.deaths.push(actor);
+  return actor;
+}
+
+export function combatPoolStatsForTest(run: RunState) {
+  const pools = objectPools(run);
+  return {
+    projectiles: pools.projectiles.available,
+    zones: pools.zones.available,
+    summons: pools.summons.available,
+    deaths: pools.deaths.available,
+  };
+}
+
 export type CreateRunOptions = {
   initialWeaponId?: WeaponId | "random";
   unlockedWeaponIds?: readonly WeaponId[];
+  difficultyId?: DifficultyId;
+  unlockedDifficultyIds?: readonly DifficultyId[];
 };
 
 export type RunSnapshot = {
@@ -387,6 +711,11 @@ export type RunSnapshot = {
   endlessPerks?: EndlessPerkState;
   terminalLabel: string;
   terminalLabelLife: number;
+  difficultyId?: DifficultyId;
+  primaryWeaponId?: WeaponId;
+  primaryWeaponValid: boolean;
+  availablePrimaryWeaponIds: readonly WeaponId[];
+  primaryWeaponRule: string;
 };
 
 export type MoveInput = {
@@ -443,6 +772,15 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
+function difficultyFor(run: Pick<RunState, "difficultyId">) {
+  return getDifficultyDefinition(run.difficultyId ?? "normal");
+}
+
+function recoveryFor(run: Pick<RunState, "difficultyId" | "trials">) {
+  if (run.trials.has("noRecovery")) return 0;
+  return difficultyFor(run).recoveryMultiplier;
+}
+
 function length(x: number, y: number) {
   return Math.hypot(x, y);
 }
@@ -451,6 +789,42 @@ function distanceSquared(ax: number, ay: number, bx: number, by: number) {
   const dx = ax - bx;
   const dy = ay - by;
   return dx * dx + dy * dy;
+}
+
+const ENEMY_SPATIAL_GRIDS = new WeakMap<RunState, SpatialGrid<Enemy>>();
+const ENEMY_SPATIAL_SCRATCH = new WeakMap<RunState, Map<string, Enemy[]>>();
+
+function enemyGrid(run: RunState) {
+  let grid = ENEMY_SPATIAL_GRIDS.get(run);
+  if (!grid) {
+    grid = new SpatialGrid<Enemy>(96);
+    ENEMY_SPATIAL_GRIDS.set(run, grid);
+  }
+  return grid;
+}
+
+function rebuildEnemyGrid(run: RunState) {
+  enemyGrid(run).rebuild(run.enemies);
+}
+
+function nearbyEnemies(
+  run: RunState,
+  x: number,
+  y: number,
+  radius: number,
+  scratchKey = "default",
+) {
+  let scratchByPurpose = ENEMY_SPATIAL_SCRATCH.get(run);
+  if (!scratchByPurpose) {
+    scratchByPurpose = new Map();
+    ENEMY_SPATIAL_SCRATCH.set(run, scratchByPurpose);
+  }
+  let scratch = scratchByPurpose.get(scratchKey);
+  if (!scratch) {
+    scratch = [];
+    scratchByPurpose.set(scratchKey, scratch);
+  }
+  return enemyGrid(run).query(x, y, radius, scratch);
 }
 
 function normalized(x: number, y: number) {
@@ -513,6 +887,11 @@ export function createRun(
   options: CreateRunOptions = {},
 ): RunState {
   let rng = createRngState(seed);
+  const difficultyId = resolveDifficultyId(
+    options.difficultyId,
+    options.unlockedDifficultyIds,
+  );
+  const difficulty = getDifficultyDefinition(difficultyId);
   const availableWeapons = (options.unlockedWeaponIds ?? WEAPON_IDS).filter(
     (weaponId): weaponId is WeaponId => WEAPON_IDS.includes(weaponId),
   );
@@ -532,6 +911,14 @@ export function createRun(
   } else if (!availableWeapons.includes(initialWeaponId)) {
     initialWeaponId = availableWeapons[0] ?? "sword";
   }
+  const primaryWeapon: PrimaryWeaponSelection | undefined =
+    initialWeaponId === "lantern"
+      ? undefined
+      : {
+          weaponId: initialWeaponId,
+          assignedBy: "startingWeapon",
+          assignedAt: 0,
+        };
   return {
     elapsed: 0,
     endless: false,
@@ -542,14 +929,15 @@ export function createRun(
       x: GAME_WIDTH / 2,
       y: GAME_HEIGHT / 2,
       facing: -Math.PI / 2,
-      life: 5,
-      maxLife: 5,
+      life: difficulty.playerLife,
+      maxLife: difficulty.playerLife,
       xp: 0,
       nextXp: 7,
       level: 1,
       invulnerability: 0,
       speedMultiplier: 1,
-      powerMultiplier: 1,
+      powerMultiplier:
+        difficulty.playerPower * (trials.has("thinPower") ? 0.88 : 1),
       magnetMultiplier: 1,
     },
     build: createCombatBuild(initialWeaponId),
@@ -593,17 +981,91 @@ export function createRun(
       incomingDamageScale: 1,
       assisted: false,
     },
+    difficultyId,
+    difficultyUnlockCandidate: nextDifficultyId(difficultyId),
+    difficultyClearEligible: true,
+    primaryWeapon,
+    attackReplays: new Map(),
   };
+}
+
+export const PRIMARY_WEAPON_RULE =
+  "主武器须是当前持有的一把非走马灯武器；走马灯的“照样”只重放它最近一次完整核心攻击，重放不会再次触发照样或搭手。";
+
+function primaryWeaponIsHeld(run: RunState, weaponId: WeaponId) {
+  if (
+    weaponId === "lantern" ||
+    !run.build.weapons.some((weapon) => weapon.id === weaponId)
+  ) {
+    return false;
+  }
+  // In endless mode a fusion or dismantle consumes the source node.  The
+  // historical build entry remains for combat bookkeeping, but it is no
+  // longer a selectable object on the wheel and therefore cannot be “照样”.
+  return !run.weave || run.weave.nodes.some(
+    (node) => node.kind === "weapon" && node.sourceId === weaponId,
+  );
+}
+
+export function setPrimaryWeapon(
+  run: RunState,
+  weaponId: WeaponId,
+): boolean {
+  if (!primaryWeaponIsHeld(run, weaponId)) return false;
+  run.primaryWeapon = {
+    weaponId,
+    assignedBy: "player",
+    assignedAt: run.elapsed,
+  };
+  return true;
+}
+
+export function availablePrimaryWeapons(run: RunState): readonly WeaponId[] {
+  return run.build.weapons
+    .map((weapon) => weapon.id)
+    .filter((weaponId) => primaryWeaponIsHeld(run, weaponId));
+}
+
+export function getPrimaryWeaponSelection(
+  run: RunState,
+): PrimaryWeaponSelection | undefined {
+  const selection = run.primaryWeapon;
+  return selection && primaryWeaponIsHeld(run, selection.weaponId)
+    ? selection
+    : undefined;
 }
 
 function synergyChoiceOption(
   synergy: ReturnType<typeof getEligibleSynergies>[number],
 ): SynergyChoiceOption {
+  const weaponLabel = (weaponId: WeaponId) =>
+    getWeaponDefinition(weaponId).name;
+  const rule = synergy.eventRules[0];
+  const eventLabel: Record<CombatEventKind, string> = {
+    weaponAttack: "完成一次核心攻击",
+    weaponHit: "攻击命中",
+    weaponKill: "击倒目标",
+    guardBlock: "成功挡下一击",
+  };
+  const source = rule.sourceWeapon
+    ? weaponLabel(rule.sourceWeapon)
+    : synergy.definition.weapons.map(weaponLabel).join("或");
+  const cadence = Math.max(1, rule.every ?? 1);
+  const triggerText = `${source}${eventLabel[rule.event]}${
+    cadence > 1 ? `累计${cadence}次` : "时"
+  }触发`;
+  const routeImpactText = synergy.variant
+    ? `当前改法已改成“${synergy.name}”：${synergy.variant.description}`
+    : "当前改法没有额外变体，按基础动作生效。";
   return {
     id: synergy.definition.id,
     name: synergy.name,
     description: synergy.description,
     weapons: synergy.definition.weapons,
+    conditionText: `${synergy.definition.weapons.map(weaponLabel).join("＋")}均达到3/5后成立；不占武器槽。`,
+    triggerText,
+    effectText: synergy.description,
+    routeImpactText,
   };
 }
 
@@ -683,34 +1145,45 @@ export function snapshotRun(run: RunState): RunSnapshot {
     endlessPerks: run.endlessPerks,
     terminalLabel: run.terminalLabel,
     terminalLabelLife: run.terminalLabelLife,
+    difficultyId: run.difficultyId,
+    primaryWeaponId: run.primaryWeapon?.weaponId,
+    primaryWeaponValid: getPrimaryWeaponSelection(run) !== undefined,
+    availablePrimaryWeaponIds: availablePrimaryWeapons(run),
+    primaryWeaponRule: PRIMARY_WEAPON_RULE,
   };
 }
 
 export function getUpgradeChoices(run: RunState): readonly UpgradeOption[] {
   const generated = generateUpgradeOptions(run.build, run.rng, {
     maxWeapons: 4,
-    optionCount: 3,
+    optionCount: run.difficultyId === "oneLife" ? 4 : 3,
   });
   run.rng = generated.rngState;
-  return generated.options;
+  return run.difficultyId === "oneLife"
+    ? generated.options.filter(
+        (option) =>
+          option.kind !== "utility" || option.modifierId !== "paperWard",
+      ).slice(0, 3)
+    : generated.options;
 }
 
 export type RareChoice = {
   id: "master-now" | "resonance-slot" | "weapon-soul";
   name: string;
   description: string;
+  reason?: string;
 };
 
 export const RARE_CHOICES: readonly RareChoice[] = [
   {
     id: "master-now",
-    name: "先做定型",
-    description: "将当前最高阶但尚未定型的本命武器直接推进一阶。",
+    name: "趁热做细",
+    description: "先选一件未定型武器，再推进一阶；改法或定型仍由你亲自选。",
   },
   {
     id: "resonance-slot",
-    name: "多留一手",
-    description: "搭手容量增加一格，并立即启用所有已满足条件的搭手。",
+    name: "搭手续作",
+    description: "仍只启用三项搭手；每累计触发三次，第三次按原动作再做一遍。",
   },
   {
     id: "weapon-soul",
@@ -718,6 +1191,108 @@ export const RARE_CHOICES: readonly RareChoice[] = [
     description: "每件本命武器累计命中十八次，便用这门手艺追击强敌并弹射三次。",
   },
 ] as const;
+
+export type RareAdvanceTarget = {
+  weaponId: WeaponId;
+  weaponName: string;
+  currentLevel: number;
+  nextLevel: number;
+  options: readonly UpgradeOption[];
+  needsExplicitChoice: boolean;
+};
+
+export type RareChoiceAvailability = RareChoice & {
+  enabled: boolean;
+  reason?: string;
+};
+
+export type RareAdvanceSelection = {
+  weaponId: WeaponId;
+  upgradeOptionId?: string;
+};
+
+function rareAdvanceOptions(weapon: WeaponState): readonly UpgradeOption[] {
+  const definition = getWeaponDefinition(weapon.id);
+  if (weapon.level === 1) {
+    return [{
+      id: `rare-refine-${weapon.id}`,
+      kind: "refine",
+      weaponId: weapon.id,
+      title: `${definition.name}·做细`,
+      description: "把这件武器由1/5推进到2/5。",
+      artKey: definition.artKeys.tier2,
+    }];
+  }
+  if (weapon.level === 2) {
+    return definition.routes.map((route) => ({
+      id: `rare-route-${route.id}`,
+      kind: "route" as const,
+      weaponId: weapon.id,
+      routeId: route.id,
+      title: `${definition.name}·${route.name}`,
+      description: route.description,
+      artKey: route.artKeys.tier3,
+    }));
+  }
+  if (weapon.level === 3 && weapon.routeId) {
+    const route = getWeaponRoute(weapon.routeId);
+    return [{
+      id: `rare-enhance-${route.id}`,
+      kind: "routeEnhancement",
+      weaponId: weapon.id,
+      title: `${definition.name}·再磨${route.name}`,
+      description: `把“${route.name}”由3/5推进到4/5。`,
+      artKey: route.artKeys.tier4,
+    }];
+  }
+  if (weapon.level === 4 && weapon.routeId) {
+    const route = getWeaponRoute(weapon.routeId);
+    return route.masteries.map((mastery) => ({
+      id: `rare-mastery-${mastery.id}`,
+      kind: "mastery" as const,
+      weaponId: weapon.id,
+      routeId: route.id,
+      masteryId: mastery.id,
+      title: `${definition.name}·${mastery.name}`,
+      description: mastery.description,
+      artKey: mastery.artKey,
+    }));
+  }
+  return [];
+}
+
+export function getRareAdvanceTargets(
+  run: RunState,
+): readonly RareAdvanceTarget[] {
+  return run.build.weapons.flatMap((weapon) => {
+    const options = rareAdvanceOptions(weapon);
+    return options.length === 0
+      ? []
+      : [{
+          weaponId: weapon.id,
+          weaponName: getWeaponDefinition(weapon.id).name,
+          currentLevel: weapon.level,
+          nextLevel: weapon.level + 1,
+          options,
+          needsExplicitChoice: options.length > 1,
+        }];
+  });
+}
+
+export function getRareChoiceAvailability(
+  run: RunState,
+): readonly RareChoiceAvailability[] {
+  const canAdvance = getRareAdvanceTargets(run).length > 0;
+  return RARE_CHOICES.map<RareChoiceAvailability>((choice) =>
+    choice.id === "master-now"
+      ? {
+          ...choice,
+          enabled: canAdvance,
+          reason: canAdvance ? undefined : "当前器物均已定型",
+        }
+      : { ...choice, enabled: true },
+  );
+}
 
 export function applyUpgrade(run: RunState, option: UpgradeOption): string | undefined {
   const before = new Set(
@@ -728,12 +1303,26 @@ export function applyUpgrade(run: RunState, option: UpgradeOption): string | und
     ).map((item) => item.definition.id),
   );
   run.build = applyUpgradeOption(run.build, option);
+  if (
+    option.kind === "acquire" &&
+    option.weaponId !== "lantern" &&
+    !getPrimaryWeaponSelection(run)
+  ) {
+    run.primaryWeapon = {
+      weaponId: option.weaponId,
+      assignedBy: "firstNonLantern",
+      assignedAt: run.elapsed,
+    };
+  }
   if (option.kind === "utility") {
     if (option.modifierId === "keenEdge") run.player.powerMultiplier *= 1.08;
     if (option.modifierId === "gatheringWind") run.player.magnetMultiplier *= 1.18;
-    if (option.modifierId === "paperWard") {
+    if (option.modifierId === "paperWard" && run.difficultyId !== "oneLife") {
       run.player.maxLife = Math.min(7, run.player.maxLife + 1);
-      run.player.life = Math.min(run.player.maxLife, run.player.life + 1);
+      run.player.life = Math.min(
+        run.player.maxLife,
+        run.player.life + recoveryFor(run),
+      );
     }
   }
   const eligible = getEligibleSynergies(run.build.weapons);
@@ -744,9 +1333,21 @@ export function applyUpgrade(run: RunState, option: UpgradeOption): string | und
   return newlyActive?.name;
 }
 
-export function applyRareChoice(run: RunState, choice: RareChoice["id"]) {
+export function applyRareChoice(
+  run: RunState,
+  choice: RareChoice["id"],
+  selection?: RareAdvanceSelection,
+): boolean {
   if (choice === "resonance-slot") {
-    run.build = { ...run.build, synergyCapacity: Math.min(5, run.build.synergyCapacity + 1) };
+    run.build = {
+      ...run.build,
+      synergyCapacity: 3,
+      modifiers: {
+        ...run.build.modifiers,
+        helpingHand: (run.build.modifiers.helpingHand ?? 0) + 1,
+      },
+    };
+    return true;
   } else if (choice === "weapon-soul") {
     run.build = {
       ...run.build,
@@ -755,74 +1356,23 @@ export function applyRareChoice(run: RunState, choice: RareChoice["id"]) {
         weaponSoul: (run.build.modifiers.weaponSoul ?? 0) + 1,
       },
     };
+    return true;
   } else {
-    const candidate = [...run.build.weapons]
-      .filter((weapon) => weapon.level < 5)
-      .sort((a, b) => b.level - a.level)[0];
-    if (!candidate) {
-      run.build = {
-        ...run.build,
-        modifiers: {
-          ...run.build.modifiers,
-          weaponSoul: (run.build.modifiers.weaponSoul ?? 0) + 1,
-        },
-      };
-      return;
-    }
-    if (candidate.level === 1) {
-      run.build = applyUpgradeOption(run.build, {
-        id: `rare-refine-${candidate.id}`,
-        kind: "refine",
-        weaponId: candidate.id,
-        title: "先声精炼",
-        description: "",
-        artKey: getWeaponDefinition(candidate.id).artKeys.tier2,
-      });
-      return;
-    }
-    if (candidate.level === 2) {
-      const routes = getWeaponDefinition(candidate.id).routes;
-      const picked = Math.floor(random(run) * routes.length);
-      const route = routes[picked];
-      run.build = applyUpgradeOption(run.build, {
-        id: `rare-route-${route.id}`,
-        kind: "route",
-        weaponId: candidate.id,
-        routeId: route.id,
-        title: route.name,
-        description: route.description,
-        artKey: route.artKeys.tier3,
-      });
-      return;
-    }
-    if (candidate.level === 3) {
-      const route = candidate.routeId
-        ? getWeaponRoute(candidate.routeId)
-        : getWeaponDefinition(candidate.id).routes[0];
-      run.build = applyUpgradeOption(run.build, {
-        id: `rare-enhance-${route.id}`,
-        kind: "routeEnhancement",
-        weaponId: candidate.id,
-        title: `${route.name}·再造`,
-        description: "",
-        artKey: route.artKeys.tier4,
-      });
-      return;
-    }
-    const route = candidate.routeId
-      ? getWeaponRoute(candidate.routeId)
-      : getWeaponDefinition(candidate.id).routes[0];
-    const mastery = route.masteries[Math.floor(random(run) * route.masteries.length)];
-    run.build = applyUpgradeOption(run.build, {
-      id: `rare-mastery-${mastery.id}`,
-      kind: "mastery",
-      weaponId: candidate.id,
-      routeId: route.id,
-      masteryId: mastery.id,
-      title: mastery.name,
-      description: mastery.description,
-      artKey: mastery.artKey,
-    });
+    if (!selection) return false;
+    const target = getRareAdvanceTargets(run).find(
+      (candidate) => candidate.weaponId === selection.weaponId,
+    );
+    if (!target) return false;
+    const option = selection.upgradeOptionId
+      ? target.options.find(
+          (candidate) => candidate.id === selection.upgradeOptionId,
+        )
+      : target.options.length === 1
+        ? target.options[0]
+        : undefined;
+    if (!option) return false;
+    run.build = applyUpgradeOption(run.build, option);
+    return true;
   }
 }
 
@@ -861,7 +1411,17 @@ function pickNearest(
 ) {
   let best: Enemy | undefined;
   let bestDistance = Number.POSITIVE_INFINITY;
-  for (const enemy of run.enemies) {
+  const grid = ENEMY_SPATIAL_GRIDS.get(run);
+  const candidates = grid
+    ? nearbyEnemies(
+        run,
+        x,
+        y,
+        Math.hypot(GAME_WIDTH, GAME_HEIGHT) + 180,
+        "target",
+      )
+    : run.enemies;
+  for (const enemy of candidates) {
     if (enemy.hp <= 0 || ignored.has(enemy.id)) continue;
     const distance = distanceSquared(x, y, enemy.x, enemy.y);
     if (distance < bestDistance) {
@@ -891,8 +1451,12 @@ function spawnProjectilePattern(
   owner: ProjectileOwner,
   damageScale = 1,
   canProc = true,
+  targetOverride?: Enemy,
 ) {
-  const target = pickNearest(run);
+  const target =
+    targetOverride?.hp && targetOverride.hp > 0
+      ? targetOverride
+      : pickNearest(run);
   if (!target) return;
   const baseAngle = Math.atan2(target.y - run.player.y, target.x - run.player.x);
   const count = Math.max(1, effect.count);
@@ -907,7 +1471,7 @@ function spawnProjectilePattern(
       const side = index === 0 ? 0 : (index % 2 === 0 ? 1 : -1);
       angle += side * Math.min(spread * 0.08, 0.045);
     }
-    run.projectiles.push({
+    pushProjectile(run, {
       id: nextId(run),
       owner,
       artKey: effect.visualKey ?? `projectile/${owner}`,
@@ -924,7 +1488,6 @@ function spawnProjectilePattern(
       targetId: target.id,
       markSeconds: effect.markSeconds ?? 0,
       hitCooldown: effect.singleTargetHitCooldown ?? 0.16,
-      hitAt: new Map(),
       canProc,
       spawnDelay: effect.pattern === "burst" ? index * 0.065 : 0,
     });
@@ -940,7 +1503,37 @@ function damageEnemy(
 ) {
   if (enemy.hp <= 0) return;
   const markMultiplier = enemy.marked > 0 ? enemy.markMultiplier : 1;
-  enemy.hp -= damage * markMultiplier;
+  let guardMultiplier = 1;
+  if (
+    (enemy.guardedUntil ?? 0) > run.elapsed &&
+    enemy.guardFacing !== undefined
+  ) {
+    const currentPlayerAngle = Math.atan2(
+      run.player.y - enemy.y,
+      run.player.x - enemy.x,
+    );
+    if (
+      Math.abs(normalizeAngle(currentPlayerAngle - enemy.guardFacing)) <=
+      (70 * Math.PI) / 180
+    ) {
+      guardMultiplier = 0.35;
+      const guardFxKey = `enemy-guard:${enemy.id}`;
+      if ((run.cooldowns.get(guardFxKey) ?? 0) <= 0) {
+        run.cooldowns.set(guardFxKey, 0.16);
+        addFx(
+          run,
+          "ring",
+          enemy.x,
+          enemy.y,
+          enemy.radius * 1.45,
+          0.22,
+          "#667b72",
+          "enemy/rib/guard-block",
+        );
+      }
+    }
+  }
+  enemy.hp -= damage * markMultiplier * guardMultiplier;
   enemy.lastHitOwner = owner;
   enemy.hitFlash = 0.1;
   // Boss actions own their motion timeline. A hit may flash the sprite, but it
@@ -1098,8 +1691,12 @@ function fireBeam(
   owner: ProjectileOwner,
   damageScale = 1,
   canProc = true,
+  targetOverride?: Enemy,
 ) {
-  const target = pickNearest(run);
+  const target =
+    targetOverride?.hp && targetOverride.hp > 0
+      ? targetOverride
+      : pickNearest(run);
   if (!target) return;
   const baseAngle = Math.atan2(
     target.y - run.player.y,
@@ -1107,8 +1704,9 @@ function fireBeam(
   );
   const sweepRadians = ((effect.sweepDegrees ?? 0) * Math.PI) / 180;
   const rayCount = sweepRadians > 0.8 ? 5 : sweepRadians > 0 ? 3 : 1;
-  const isPipaWave =
-    directWeaponOwner(owner) === "pipa" && effect.tags.includes("music");
+  // Music is a semantic visual family.  A lantern replay still draws the
+  // restrained three-arc wave instead of falling back to a generic beam.
+  const isPipaWave = effect.tags.includes("music");
   const hitIds = new Set<number>();
   const candidates = [...run.enemies].sort((a, b) =>
     distanceSquared(run.player.x, run.player.y, a.x, a.y) -
@@ -1195,6 +1793,7 @@ function scheduleLightning(
   owner: ProjectileOwner,
   damageScale = 1,
   canProc = true,
+  start?: Enemy,
 ) {
   const ignored = new Set<number>();
   let originX = run.player.x;
@@ -1210,7 +1809,8 @@ function scheduleLightning(
         effect.chainRange! ** 2
         ? chained
         : index === 0
-          ? pickNearest(run, run.player.x, run.player.y, ignored) ??
+          ? (start?.hp && start.hp > 0 ? start : undefined) ??
+            pickNearest(run, run.player.x, run.player.y, ignored) ??
             pickStrongest(run)
           : effect.chainRange
             ? undefined
@@ -1241,9 +1841,14 @@ function spawnZone(
   owner: ProjectileOwner,
   damageScale = 1,
   canProc = false,
+  targetOverride?: Enemy,
 ) {
-  const target = effect.followsOwner ? undefined : pickNearest(run);
-  run.zones.push({
+  const target = effect.followsOwner
+    ? undefined
+    : targetOverride?.hp && targetOverride.hp > 0
+      ? targetOverride
+      : pickNearest(run);
+  pushZone(run, {
     id: nextId(run),
     owner,
     artKey: effect.visualKey ?? `zone/${owner}`,
@@ -1258,7 +1863,6 @@ function spawnZone(
     followsPlayer: effect.followsOwner ?? false,
     slow: effect.slow ?? 0,
     canProc,
-    enteredEnemyIds: new Set(),
   });
 }
 
@@ -1291,7 +1895,7 @@ function spawnSummons(
   for (let index = same.length; index < effect.count; index += 1) {
     const angle = (Math.PI * 2 * index) / effect.count;
     const radius = 118 + index * 8;
-    run.summons.push({
+    pushSummon(run, {
       id: nextId(run),
       owner,
       artKey: effect.summonKey,
@@ -1379,7 +1983,7 @@ function spawnPerkProjectile(
   tags: readonly EffectTag[] = [],
 ) {
   const base = Math.atan2(target.y - y, target.x - x) + angleOffset;
-  run.projectiles.push({
+  pushProjectile(run, {
     id: nextId(run),
     owner,
     artKey: `perk/${owner}/projectile`,
@@ -1396,7 +2000,6 @@ function spawnPerkProjectile(
     targetId: target.id,
     markSeconds: 0,
     hitCooldown: 0.16,
-    hitAt: new Map(),
     canProc: false,
     spawnDelay: 0,
   });
@@ -1462,6 +2065,25 @@ function executeEndlessPerkAction(
       run.perkCombat.temporaryGuardUntil,
       run.elapsed + (action.durationSeconds ?? 0.6) * strength,
     );
+  } else if (action.kind === "releaseUmbrellaRain") {
+    const first = context.firstTarget ?? target ?? pickNearest(run);
+    if (first) {
+      const needles = Math.max(3, action.count ?? 5);
+      for (let index = 0; index < needles; index += 1) {
+        const offset =
+          needles === 1 ? 0 : (index / (needles - 1) - 0.5) * 0.72;
+        spawnPerkProjectile(
+          run,
+          "umbrella",
+          run.player.x,
+          run.player.y,
+          first,
+          24 * strength * run.player.powerMultiplier,
+          offset,
+          ["rain", "guard"],
+        );
+      }
+    }
   } else if (action.kind === "crossCutMarked") {
     const marked = run.enemies
       .filter((enemy) => enemy.hp > 0 && enemy.marked > 0)
@@ -1543,11 +2165,30 @@ function executeEndlessPerkAction(
         canProc: false,
       });
     }
+  } else if (action.kind === "leaveEchoField") {
+    const centre = context.firstTarget ?? target ?? pickNearest(run);
+    const duration = (action.durationSeconds ?? 2.4) * strength;
+    pushZone(run, {
+      id: nextId(run),
+      owner: "pipa",
+      artKey: "perk/pipa/echo-field",
+      x: centre?.x ?? run.player.x,
+      y: centre?.y ?? run.player.y,
+      radius: 108,
+      damagePerSecond: 30 * strength * run.player.powerMultiplier,
+      life: duration,
+      maxLife: duration,
+      tick: 0,
+      tickRate: 0.3,
+      followsPlayer: false,
+      slow: 0.08,
+      canProc: false,
+    });
   } else if (action.kind === "extendInkAndBurstCross") {
     const cross = target ?? pickNearest(run);
     const x = cross?.x ?? run.player.x;
     const y = cross?.y ?? run.player.y;
-    run.zones.push({
+    pushZone(run, {
       id: nextId(run),
       owner: "inkline",
       artKey: "perk/inkline/cross-stay",
@@ -1562,7 +2203,6 @@ function executeEndlessPerkAction(
       followsPlayer: false,
       slow: 0.16,
       canProc: false,
-      enteredEnemyIds: new Set(),
     });
     run.strikes.push({
       id: nextId(run),
@@ -1585,7 +2225,7 @@ function executeEndlessPerkAction(
   } else if (action.kind === "leaveLightningRelay") {
     const relay = context.lastTarget ?? target ?? pickNearest(run);
     if (relay) {
-      run.zones.push({
+      pushZone(run, {
         id: nextId(run),
         owner: "thunderSeal",
         artKey: "perk/thunder/relay",
@@ -1600,7 +2240,6 @@ function executeEndlessPerkAction(
         followsPlayer: false,
         slow: 0,
         canProc: false,
-        enteredEnemyIds: new Set(),
       });
     }
   } else if (action.kind === "reverseNextCycle") {
@@ -1695,7 +2334,7 @@ function executeEndlessPerkAction(
         bundled.reduce((sum, pickup) => sum + pickup.x, 0) / bundled.length;
       const y =
         bundled.reduce((sum, pickup) => sum + pickup.y, 0) / bundled.length;
-      run.pickups = run.pickups.filter((pickup) => !ids.has(pickup.id));
+      retainInPlace(run.pickups, (pickup) => !ids.has(pickup.id));
       addExperiencePickup(run, x, y, total);
     }
   } else if (action.kind === "sweepDistantPickups") {
@@ -1738,6 +2377,23 @@ function executeEndlessPerkAction(
       action.radius ?? 132,
       strength,
     );
+  } else if (action.kind === "pullDistantPickups") {
+    const radius = (action.radius ?? 420) * strength;
+    const pullRatio = clamp(action.value ?? 0.46, 0.15, 0.82);
+    for (const pickup of run.pickups) {
+      if (pickup.value <= 0) continue;
+      const dx = run.player.x - pickup.x;
+      const dy = run.player.y - pickup.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance <= 30 || distance > radius) continue;
+      const travel = Math.min(distance - 30, distance * pullRatio);
+      pickup.x += (dx / distance) * travel;
+      pickup.y += (dy / distance) * travel;
+      pickup.magnetRadius = Math.max(
+        pickup.magnetRadius ?? 0,
+        radius * 0.7,
+      );
+    }
   } else if (action.kind === "preventLethalDamage") {
     run.player.life = Math.max(action.value ?? 1, 1);
     run.player.invulnerability = Math.max(
@@ -1773,7 +2429,8 @@ function executeEndlessPerkAction(
   } else if (action.kind === "healWhileIdle") {
     run.player.life = Math.min(
       run.player.maxLife,
-      run.player.life + (action.value ?? 0.2) * strength,
+      run.player.life +
+        (action.value ?? 0.2) * strength * recoveryFor(run),
     );
   }
 }
@@ -1836,23 +2493,95 @@ function dispatchSynergyEvent(
       for (const effect of rule.effects) {
         fireEffect(run, effect, owner, target, 1, false);
       }
+      const helpingHandRank = run.build.modifiers.helpingHand ?? 0;
+      if (helpingHandRank > 0) {
+        const helpingKey = "rare:helping-hand";
+        const helpingCount = (run.synergyCounters.get(helpingKey) ?? 0) + 1;
+        if (helpingCount >= 3) {
+          run.synergyCounters.set(helpingKey, helpingCount - 3);
+          for (const effect of rule.effects) {
+            fireEffect(
+              run,
+              effect,
+              owner,
+              target,
+              Math.min(1, 0.45 + helpingHandRank * 0.1),
+              false,
+            );
+          }
+        } else {
+          run.synergyCounters.set(helpingKey, helpingCount);
+        }
+      }
     }
   }
 }
 
-function copySourceProjectile(
+function replaySafeEffect(effect: EffectSpec): EffectSpec | undefined {
+  if (effect.kind === "copy") return undefined;
+  if (effect.kind !== "accumulator") return effect;
+  const procEffects = effect.procEffects
+    .map(replaySafeEffect)
+    .filter((candidate): candidate is EffectSpec => candidate !== undefined);
+  return procEffects.length > 0 ? { ...effect, procEffects } : undefined;
+}
+
+function captureAttackReplay(
+  run: RunState,
+  owner: ProjectileOwner,
+  effects: readonly EffectSpec[],
+  target?: Enemy,
+  sourceWeaponId = directWeaponOwner(owner),
+) {
+  const replayEffects = effects
+    .map(replaySafeEffect)
+    .filter((candidate): candidate is EffectSpec => candidate !== undefined);
+  if (replayEffects.length === 0) {
+    run.attackReplays.delete(owner);
+    return;
+  }
+  const aimTarget =
+    target?.hp && target.hp > 0 ? target : pickNearest(run);
+  run.attackReplays.set(owner, {
+    owner,
+    sourceWeaponId,
+    effects: replayEffects,
+    targetId: aimTarget?.id,
+    aimAngle: aimTarget
+      ? Math.atan2(aimTarget.y - run.player.y, aimTarget.x - run.player.x)
+      : run.player.facing,
+    capturedAt: run.elapsed,
+    copyDepth: 0,
+  });
+}
+
+function latestAttackReplay(
+  run: RunState,
+  predicate: (replay: AttackReplayRecord) => boolean,
+) {
+  let result: AttackReplayRecord | undefined;
+  for (const replay of run.attackReplays.values()) {
+    if (
+      predicate(replay) &&
+      (!result || replay.capturedAt > result.capturedAt)
+    ) {
+      result = replay;
+    }
+  }
+  return result;
+}
+
+function copySourceReplay(
   run: RunState,
   effect: Extract<EffectSpec, { kind: "copy" }>,
   owner: ProjectileOwner,
   target?: Enemy,
-): Projectile | undefined {
-  const latest = (predicate: (projectile: Projectile) => boolean) =>
-    [...run.projectiles].reverse().find(predicate);
+): AttackReplayRecord | undefined {
   if (effect.source === "primaryWeapon") {
-    const primary = run.build.weapons[0]?.id;
-    return primary
-      ? latest((projectile) => projectile.owner === primary)
-      : undefined;
+    const primary = getPrimaryWeaponSelection(run)?.weaponId;
+    if (!primary) return undefined;
+    const replay = run.attackReplays.get(primary);
+    return replay?.copyDepth === 0 ? replay : undefined;
   }
   if (effect.source === "previousWeaveNode") {
     if (owner.startsWith("weave:") && run.weave) {
@@ -1866,9 +2595,7 @@ function copySourceProjectile(
             (index - 1 + run.weave.nodes.length) % run.weave.nodes.length
           ];
         const previousOwner: ProjectileOwner = `weave:${previous.instanceId}`;
-        const found = latest(
-          (projectile) => projectile.owner === previousOwner,
-        );
+        const found = run.attackReplays.get(previousOwner);
         if (found) return found;
       }
     }
@@ -1878,15 +2605,15 @@ function copySourceProjectile(
       : -1;
     if (index > 0) {
       const previous = run.build.weapons[index - 1].id;
-      const found = latest((projectile) => projectile.owner === previous);
+      const found = run.attackReplays.get(previous);
       if (found) return found;
     }
-    return latest((projectile) => projectile.owner !== owner);
+    return latestAttackReplay(run, (replay) => replay.owner !== owner);
   }
   if (target?.marked) {
-    const byTarget = latest(
-      (projectile) =>
-        projectile.owner !== owner && projectile.targetId === target.id,
+    const byTarget = latestAttackReplay(
+      run,
+      (replay) => replay.owner !== owner && replay.targetId === target.id,
     );
     if (byTarget) return byTarget;
   }
@@ -1895,11 +2622,12 @@ function copySourceProjectile(
       .filter((enemy) => enemy.marked > 0)
       .map((enemy) => enemy.id),
   );
-  return latest(
-    (projectile) =>
-      projectile.owner !== owner &&
-      projectile.targetId !== undefined &&
-      markedIds.has(projectile.targetId),
+  return latestAttackReplay(
+    run,
+    (replay) =>
+      replay.owner !== owner &&
+      replay.targetId !== undefined &&
+      markedIds.has(replay.targetId),
   );
 }
 
@@ -1910,6 +2638,7 @@ function fireEffect(
   start?: Enemy,
   damageScale = 1,
   canProc = true,
+  copyDepth: 0 | 1 = 0,
 ) {
   if (effect.kind === "mark") {
     const target =
@@ -1952,21 +2681,21 @@ function fireEffect(
         effect.resetOnProc ? 0 : current - effect.required,
       );
       for (const proc of effect.procEffects) {
-        fireEffect(run, proc, owner, start, damageScale, canProc);
+        fireEffect(run, proc, owner, start, damageScale, canProc, copyDepth);
       }
     } else {
       run.accumulators.set(counterKey, current);
     }
   } else if (effect.kind === "projectile") {
-    spawnProjectilePattern(run, effect, owner, damageScale, canProc);
+    spawnProjectilePattern(run, effect, owner, damageScale, canProc, start);
   } else if (effect.kind === "beam") {
-    fireBeam(run, effect, owner, damageScale, canProc);
+    fireBeam(run, effect, owner, damageScale, canProc, start);
   } else if (effect.kind === "lightning") {
-    scheduleLightning(run, effect, owner, damageScale, canProc);
+    scheduleLightning(run, effect, owner, damageScale, canProc, start);
   } else if (effect.kind === "chain") {
     fireChain(run, effect, owner, start, damageScale, canProc);
   } else if (effect.kind === "zone") {
-    spawnZone(run, effect, owner, damageScale, canProc);
+    spawnZone(run, effect, owner, damageScale, canProc, start);
   } else if (effect.kind === "summon") {
     spawnSummons(run, effect, owner, damageScale, canProc);
   } else if (effect.kind === "orbit") {
@@ -1981,7 +2710,13 @@ function fireEffect(
       effect.visualKey ?? `orbit/${owner}`,
       { owner },
     );
-    for (const enemy of run.enemies) {
+    for (const enemy of nearbyEnemies(
+      run,
+      run.player.x,
+      run.player.y,
+      effect.radius + 90,
+      "orbit",
+    )) {
       if (
         enemy.hp > 0 &&
         distanceSquared(run.player.x, run.player.y, enemy.x, enemy.y) <=
@@ -2017,20 +2752,25 @@ function fireEffect(
       });
     }
   } else if (effect.kind === "copy") {
-    const projectile = copySourceProjectile(run, effect, owner, start);
-    if (!projectile) return;
+    if (copyDepth >= 1) return;
+    const replay = copySourceReplay(run, effect, owner, start);
+    if (!replay || replay.copyDepth >= 1) return;
+    const replayTarget =
+      run.enemies.find(
+        (enemy) => enemy.id === replay.targetId && enemy.hp > 0,
+      ) ?? start ?? pickNearest(run);
     for (let index = 0; index < effect.maxCopies; index += 1) {
-      run.projectiles.push({
-        ...projectile,
-        id: nextId(run),
-        owner,
-        damage: projectile.damage * effect.damageMultiplier,
-        vx: projectile.vx * Math.cos((index + 1) * 0.12) - projectile.vy * Math.sin((index + 1) * 0.12),
-        vy: projectile.vx * Math.sin((index + 1) * 0.12) + projectile.vy * Math.cos((index + 1) * 0.12),
-        hitAt: new Map(),
-        canProc,
-        spawnDelay: 0,
-      });
+      for (const replayEffect of replay.effects) {
+        fireEffect(
+          run,
+          replayEffect,
+          owner,
+          replayTarget,
+          damageScale * effect.damageMultiplier,
+          false,
+          1,
+        );
+      }
     }
   }
 }
@@ -2073,7 +2813,7 @@ function dispatchEffectTrigger(
     activeTrigger &&
     announceAttack &&
     sourceWeapon !== undefined &&
-    sourceWeapon === run.build.weapons[0]?.id &&
+    sourceWeapon === getPrimaryWeaponSelection(run)?.weaponId &&
     run.perkCombat.signatureCharges > 0
   ) {
     damageScale = run.perkCombat.signatureMultiplier;
@@ -2169,6 +2909,12 @@ function updateActiveEffects(run: RunState, delta: number) {
           effect.trigger === "periodic") &&
         effect.kind !== "orbit",
     );
+    const replayEffects = kit.effects.filter((effect) =>
+      effect.trigger === "onAttack" ||
+      effect.trigger === "periodic" ||
+      effect.trigger === "onHit" ||
+      effect.trigger === "onMarkedHit"
+    );
     const primary =
       kit.core.find(
         (effect) =>
@@ -2176,15 +2922,31 @@ function updateActiveEffects(run: RunState, delta: number) {
             effect.trigger === "periodic") &&
           effect.kind !== "orbit",
       ) ?? activeEffects[0];
-    if (!primary) continue;
     const attackKey = `weapon-attack:${owner}`;
+    if (!primary) {
+      if (
+        replayEffects.length > 0 &&
+        (run.cooldowns.get(attackKey) ?? 0) <= 0
+      ) {
+        captureAttackReplay(
+          run,
+          owner,
+          replayEffects,
+          pickNearest(run),
+          weaponState.id,
+        );
+        run.cooldowns.set(attackKey, minimumWeaponCadence[weaponState.id]);
+      }
+      continue;
+    }
     if ((run.cooldowns.get(attackKey) ?? 0) > 0) continue;
+    const attackTarget = pickNearest(run);
     const fired = dispatchEffectTrigger(
       run,
       owner,
       primary,
       primary.trigger,
-      undefined,
+      attackTarget,
       true,
     );
     run.cooldowns.set(
@@ -2195,6 +2957,17 @@ function updateActiveEffects(run: RunState, delta: number) {
       ),
     );
     if (!fired) continue;
+    captureAttackReplay(
+      run,
+      owner,
+      // One attack snapshot includes the core cadence plus its on-hit route
+      // and mastery emitters. on-kill/defensive effects are deliberately
+      // excluded, and replaySafeEffect strips copy nodes, so the replay is a
+      // bounded one-layer attack rather than a second proc graph.
+      replayEffects,
+      attackTarget,
+      weaponState.id,
+    );
     for (const linked of activeEffects) {
       if (linked === primary) continue;
       dispatchEffectTrigger(
@@ -2202,7 +2975,7 @@ function updateActiveEffects(run: RunState, delta: number) {
         owner,
         linked,
         linked.trigger,
-        undefined,
+        attackTarget,
         false,
       );
     }
@@ -2308,11 +3081,20 @@ function spawnEnemy(
       : type === "nian"
         ? "final"
         : null;
-  const baseHp = 12 + run.elapsed * 0.06;
+  const difficulty = difficultyFor(run);
+  const endlessSample = run.endlessDirector?.lastSample;
+  const baseHp =
+    12 + (run.endless ? STANDARD_SECONDS : run.elapsed) * 0.06;
   const trialHp = run.trials.has("elite") && (elite || boss) ? 1.42 : 1;
-  const endlessScale = run.endless ? 1 + Math.max(0, run.elapsed - STANDARD_SECONDS) / 420 : 1;
+  const endlessScale = endlessSample?.hpMultiplier ?? 1;
   const intrusionScale = options.intrusion ? 17 : 1;
-  const maxHp = baseHp * stat.hp * trialHp * endlessScale * intrusionScale;
+  const maxHp =
+    baseHp *
+    stat.hp *
+    trialHp *
+    endlessScale *
+    intrusionScale *
+    difficulty.enemyHpMultiplier;
   const towardPlayer = Math.atan2(run.player.y - y, run.player.x - x);
   const enemy: Enemy = {
     id: nextId(run),
@@ -2326,9 +3108,13 @@ function spawnEnemy(
     radius: stat.radius * (options.intrusion ? 1.38 : 1),
     hp: maxHp,
     maxHp,
-    speed: stat.speed * (run.trials.has("swift") ? 1.18 : 1),
+    speed:
+      stat.speed *
+      (run.trials.has("swift") ? 1.18 : 1) *
+      difficulty.enemySpeedMultiplier *
+      (endlessSample?.speedMultiplier ?? 1),
     turnSpeed: stat.turn,
-    damage: stat.damage,
+    damage: endlessSample?.contactDamage ?? stat.damage,
     elite,
     boss,
     bossTier,
@@ -2343,6 +3129,7 @@ function spawnEnemy(
     attackCommitted: false,
     skillIndex: 0,
     intrusionAvatar: options.intrusion === true,
+    actionSpeed: endlessSample?.actionMultiplier ?? 1,
   };
   run.enemies.push(enemy);
   if (options.intrusion) run.intrusionAvatarId = enemy.id;
@@ -2350,32 +3137,245 @@ function spawnEnemy(
   return enemy;
 }
 
+export function endlessMinutes(run: RunState): number {
+  if (!run.endlessDirector) return 0;
+  return Math.max(0, run.elapsed - run.endlessDirector.startedAt) / 60;
+}
+
+export function getEndlessDifficultySample(
+  run: RunState,
+): EndlessDifficultySample {
+  const sample = sampleEndlessDifficulty(
+    endlessMinutes(run),
+    difficultyFor(run),
+  );
+  return run.trials.has("bossRush")
+    ? {
+        ...sample,
+        bossBudgetPerMinute: sample.bossBudgetPerMinute * 1.4,
+      }
+    : sample;
+}
+
+function chooseFrom<T>(run: RunState, values: readonly T[]): T {
+  return values[
+    Math.min(values.length - 1, Math.floor(random(run) * values.length))
+  ];
+}
+
+function chooseEndlessCommon(run: RunState): EnemyArchetype {
+  const season = getSolarTermState(run.elapsed, true).season;
+  const seasonal: Record<string, readonly EnemyArchetype[]> = {
+    spring: ["cup", "shoe", "fish", "rib"],
+    summer: ["lantern", "fish", "shoe", "rib"],
+    autumn: ["abacus", "cup", "lantern", "fish"],
+    winter: ["rib", "abacus", "shoe", "lantern"],
+  };
+  return chooseFrom(run, seasonal[season] ?? COMMON_ENEMY_IDS);
+}
+
+function chooseBossTraits(run: RunState): readonly BossTraitId[] {
+  const difficulty = difficultyFor(run);
+  if (random(run) >= difficulty.firstBossTraitChance) return [];
+  const first = chooseFrom(run, BOSS_TRAIT_IDS);
+  const result: BossTraitId[] = [first];
+  if (
+    difficulty.secondBossTraitChance > 0 &&
+    random(run) < difficulty.secondBossTraitChance
+  ) {
+    result.push(
+      chooseFrom(
+        run,
+        BOSS_TRAIT_IDS.filter((trait) => trait !== first),
+      ),
+    );
+  }
+  return result;
+}
+
+function chooseEndlessBossId(run: RunState): EndlessBossId {
+  const recent = new Set(run.endlessDirector?.recentBossIds ?? []);
+  const candidates = ENDLESS_BOSS_IDS.filter((id) => !recent.has(id));
+  const available = candidates.length > 0 ? candidates : [...ENDLESS_BOSS_IDS];
+  const totalWeight = available.reduce(
+    (sum, id) => sum + getEndlessBoss(id).weight,
+    0,
+  );
+  let roll = random(run) * totalWeight;
+  for (const id of available) {
+    roll -= getEndlessBoss(id).weight;
+    if (roll <= 0) return id;
+  }
+  return available.at(-1) ?? "troupeMaster";
+}
+
+function spawnEndlessBoss(
+  run: RunState,
+  events: RunEvent[],
+  forcedBossId?: EndlessBossId,
+): boolean {
+  if (!run.endlessDirector || run.enemies.length >= ENDLESS_ACTOR_CAP) {
+    return false;
+  }
+  const director = run.endlessDirector;
+  const bossId = forcedBossId ?? director.nextBossId;
+  const definition = getEndlessBoss(bossId);
+  const enemy = spawnEnemy(run, definition.fallbackArchetype);
+  if (!enemy) return false;
+  const sample = director.lastSample;
+  const difficulty = difficultyFor(run);
+  const maxHp =
+    (12 + STANDARD_SECONDS * 0.06) *
+    definition.hpFactor *
+    difficulty.enemyHpMultiplier *
+    sample.hpMultiplier;
+  enemy.endlessBossId = bossId;
+  enemy.bossName = definition.name;
+  enemy.bossTraits = chooseBossTraits(run);
+  enemy.bossPhase = 1;
+  enemy.artKey = definition.artKey;
+  enemy.boss = true;
+  enemy.elite = false;
+  enemy.bossTier = "mid";
+  enemy.radius = definition.radius;
+  enemy.maxHp = maxHp;
+  enemy.hp = maxHp;
+  enemy.speed =
+    definition.speed *
+    difficulty.enemySpeedMultiplier *
+    sample.speedMultiplier;
+  enemy.turnSpeed = definition.turnSpeed;
+  enemy.damage = sample.contactDamage;
+  enemy.actionSpeed = sample.actionMultiplier;
+  enemy.attackCooldown = 0.8;
+  enemy.skillIndex = 0;
+  run.currentBoss = "mid";
+  run.endlessBossCount += 1;
+  director.bossesSpawned += 1;
+  director.totalThreatSpent += BOSS_THREAT_COST;
+  director.recentBossIds = [
+    ...director.recentBossIds,
+    bossId,
+  ].slice(-2);
+  if (!forcedBossId) director.nextBossId = chooseEndlessBossId(run);
+  events.push({ type: "bossSpawn", tier: "mid", bossId });
+  return true;
+}
+
+function updateEndlessSpawning(
+  run: RunState,
+  delta: number,
+  events: RunEvent[],
+) {
+  const director = run.endlessDirector;
+  if (!director) return;
+  const sample = getEndlessDifficultySample(run);
+  if (sample.post45Step !== director.lastSample.post45Step) {
+    const hpRatio =
+      sample.hpMultiplier / director.lastSample.hpMultiplier;
+    const speedRatio =
+      sample.speedMultiplier / director.lastSample.speedMultiplier;
+    for (const enemy of run.enemies) {
+      enemy.maxHp *= hpRatio;
+      enemy.hp *= hpRatio;
+      enemy.speed *= speedRatio;
+      enemy.actionSpeed = sample.actionMultiplier;
+      enemy.damage = sample.contactDamage;
+    }
+  }
+  director.lastSample = sample;
+  director.nonBossThreatBudget = Math.min(
+    sample.nonBossThreatPerSecond * 10,
+    director.nonBossThreatBudget +
+      sample.nonBossThreatPerSecond * delta,
+  );
+  director.bossBudget = Math.min(
+    6,
+    director.bossBudget +
+      (sample.bossBudgetPerMinute * delta) / 60,
+  );
+
+  let activeBosses = run.enemies.filter(
+    (enemy) => enemy.boss && enemy.hp > 0,
+  ).length;
+  let spawnedThisStep = 0;
+  while (
+    director.nonBossThreatBudget >= 1 &&
+    run.enemies.length < ENDLESS_ACTOR_CAP &&
+    spawnedThisStep < 24
+  ) {
+    const special =
+      director.pendingBossSlot || random(run) < sample.specialProbability;
+    const bossAllowed =
+      special &&
+      director.bossBudget >= 1 &&
+      activeBosses < sample.bossConcurrency;
+    if (bossAllowed) {
+      if (director.nonBossThreatBudget < BOSS_THREAT_COST) {
+        director.pendingBossSlot = true;
+        break;
+      }
+      if (!spawnEndlessBoss(run, events)) break;
+      director.pendingBossSlot = false;
+      director.nonBossThreatBudget -= BOSS_THREAT_COST;
+      director.bossBudget -= 1;
+      activeBosses += 1;
+      spawnedThisStep += 1;
+      continue;
+    }
+    director.pendingBossSlot = false;
+    const threatCost = special ? ELITE_THREAT_COST : 1;
+    if (director.nonBossThreatBudget < threatCost) break;
+    const type = special
+      ? chooseFrom(run, ELITE_ENEMY_IDS)
+      : chooseEndlessCommon(run);
+    spawnEnemy(run, type);
+    director.nonBossThreatBudget -= threatCost;
+    director.totalThreatSpent += threatCost;
+    if (special) director.eliteSpawned += 1;
+    else director.commonSpawned += 1;
+    spawnedThisStep += 1;
+  }
+
+}
+
 function updateSpawning(run: RunState, delta: number, events: RunEvent[]) {
   const bossAlive = run.enemies.some((enemy) => enemy.boss && enemy.hp > 0);
   if (!run.endless) {
-    if (run.elapsed >= 360 && !run.midBossSpawned && !bossAlive) {
+    if (
+      run.elapsed >= 360 &&
+      !run.midBossSpawned &&
+      !bossAlive &&
+      run.enemies.length < ENDLESS_ACTOR_CAP
+    ) {
       spawnEnemy(run, "taotie");
       run.midBossSpawned = true;
       events.push({ type: "bossSpawn", tier: "mid" });
     }
-    if (run.elapsed >= STANDARD_SECONDS && !run.finalBossSpawned && !bossAlive) {
+    if (
+      run.elapsed >= STANDARD_SECONDS &&
+      !run.finalBossSpawned &&
+      !bossAlive &&
+      run.enemies.length < ENDLESS_ACTOR_CAP
+    ) {
       spawnEnemy(run, "nian");
       run.finalBossSpawned = true;
       events.push({ type: "bossSpawn", tier: "final" });
     }
-  } else if (run.elapsed >= run.endlessBossAt && !bossAlive) {
-    const type = run.endlessBossCount % 2 === 0 ? "taotie" : "nian";
-    spawnEnemy(run, type);
-    run.endlessBossCount += 1;
-    run.endlessBossAt += 240;
-    events.push({ type: "bossSpawn", tier: type === "taotie" ? "mid" : "final" });
+  } else {
+    updateEndlessSpawning(run, delta, events);
+    return;
   }
 
   run.spawnClock -= delta;
-  if (run.spawnClock <= 0 && run.enemies.length < 145) {
+  if (run.spawnClock <= 0 && run.enemies.length < ENDLESS_ACTOR_CAP) {
     const density = run.trials.has("crowd") ? 1.3 : 1;
     const count = Math.min(5, 1 + Math.floor(run.elapsed / 115));
-    for (let index = 0; index < count; index += 1) spawnEnemy(run);
+    const available = Math.min(
+      count,
+      ENDLESS_ACTOR_CAP - run.enemies.length,
+    );
+    for (let index = 0; index < available; index += 1) spawnEnemy(run);
     run.spawnClock = Math.max(0.18, (0.88 - run.elapsed * 0.00072) / density);
   }
   for (const [at, type] of [[120, "lion"], [300, "puppet"]] as Array<[number, EnemyArchetype]>) {
@@ -2386,7 +3386,12 @@ function updateSpawning(run: RunState, delta: number, events: RunEvent[]) {
 function applySeparation(run: RunState, enemy: Enemy) {
   let pushX = 0;
   let pushY = 0;
-  for (const other of run.enemies) {
+  for (const other of nearbyEnemies(
+    run,
+    enemy.x,
+    enemy.y,
+    enemy.radius + 92,
+  )) {
     if (other === enemy || other.hp <= 0) continue;
     const dx = enemy.x - other.x;
     const dy = enemy.y - other.y;
@@ -2399,6 +3404,1240 @@ function applySeparation(run: RunState, enemy: Enemy) {
     }
   }
   return { x: pushX, y: pushY };
+}
+
+function actionTarget(
+  run: RunState,
+  enemy: Enemy,
+  travelDistance = 0,
+) {
+  const direction = normalized(
+    run.player.x - enemy.x,
+    run.player.y - enemy.y,
+  );
+  const distance = Math.hypot(
+    run.player.x - enemy.x,
+    run.player.y - enemy.y,
+  );
+  const travel = Math.min(travelDistance, Math.max(0, distance - 46));
+  return {
+    x: clamp(
+      enemy.x + direction.x * travel,
+      enemy.radius,
+      GAME_WIDTH - enemy.radius,
+    ),
+    y: clamp(
+      enemy.y + direction.y * travel,
+      enemy.radius,
+      GAME_HEIGHT - enemy.radius,
+    ),
+  };
+}
+
+function scheduleEnemyPattern(
+  run: RunState,
+  enemy: Enemy,
+  skill: EnemySkillDefinition,
+  targetX: number,
+  targetY: number,
+) {
+  const count =
+    skill.behavior === "abacusThreeFive"
+      ? (enemy.patternCycle ?? 1) % 2 === 1
+        ? 3
+        : 5
+      : Math.max(1, skill.strikeCount ?? 1);
+  const delayStep = skill.strikeDelay ?? 0.25;
+  for (let index = 0; index < count; index += 1) {
+    const centered = index - (count - 1) / 2;
+    const angle =
+      skill.mode === "burst"
+        ? (Math.PI * 2 * index) / count
+        : enemy.heading + Math.PI / 2;
+    const spread =
+      skill.mode === "burst"
+        ? 72
+        : centered * Math.min(42, skill.radius * 0.62);
+    const x =
+      skill.mode === "burst"
+        ? targetX + Math.cos(angle) * spread
+        : targetX + Math.cos(angle) * spread;
+    const y =
+      skill.mode === "burst"
+        ? targetY + Math.sin(angle) * spread
+        : targetY + Math.sin(angle) * spread;
+    const delay =
+      (skill.mode === "burst" ? 0.38 : 0.3) +
+      index * delayStep;
+    run.strikes.push({
+      id: nextId(run),
+      owner: "terminal",
+      artKey: `${skill.artKey}/strike`,
+      x: clamp(x, 40, GAME_WIDTH - 40),
+      y: clamp(y, 40, GAME_HEIGHT - 40),
+      radius: skill.radius,
+      damage: enemy.damage,
+      delay,
+      maxDelay: delay,
+      hostile: true,
+    });
+  }
+}
+
+function scheduleSlowHostileVolley(
+  run: RunState,
+  enemy: Enemy,
+  skill: EnemySkillDefinition,
+  count: number,
+) {
+  const baseAngle = Math.atan2(
+    run.player.y - enemy.y,
+    run.player.x - enemy.x,
+  );
+  for (let index = 0; index < count; index += 1) {
+    const centered = index - (count - 1) / 2;
+    const angle = baseAngle + centered * 0.17;
+    const life = 2.75 + index * 0.08;
+    run.strikes.push({
+      id: nextId(run),
+      owner: "terminal",
+      artKey: `${skill.artKey}/slow-fire/${index + 1}`,
+      x: enemy.x + Math.cos(angle) * (enemy.radius + 18),
+      y: enemy.y + Math.sin(angle) * (enemy.radius + 18),
+      radius: 18,
+      damage: enemy.damage,
+      delay: life,
+      maxDelay: life,
+      hostile: true,
+      velocityX: Math.cos(angle) * 142,
+      velocityY: Math.sin(angle) * 142,
+      contactOnly: true,
+    });
+  }
+}
+
+function enemyLineSide(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  x: number,
+  y: number,
+) {
+  return (x2 - x1) * (y - y1) - (y2 - y1) * (x - x1);
+}
+
+function distanceToSegmentSquared(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  x: number,
+  y: number,
+) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared <= 0.0001) return distanceSquared(x1, y1, x, y);
+  const t = clamp(((x - x1) * dx + (y - y1) * dy) / lengthSquared, 0, 1);
+  return distanceSquared(x1 + dx * t, y1 + dy * t, x, y);
+}
+
+function assignEnemySkillAction(
+  run: RunState,
+  enemy: Enemy,
+  skill: EnemySkillDefinition,
+  targetX: number,
+  targetY: number,
+  partnerId?: number,
+) {
+  const warningFxId = addFx(
+    run,
+    "warning",
+    targetX,
+    targetY,
+    skill.radius,
+    skill.telegraph + 0.18,
+    enemy.elite ? "#8b573e" : "#73584a",
+    `${skill.artKey}/warning`,
+  );
+  enemy.action = {
+    kind: "enemySkill",
+    skillId: skill.id,
+    phase: "telegraph",
+    elapsed: 0,
+    startX: enemy.x,
+    startY: enemy.y,
+    targetX,
+    targetY,
+    committed: false,
+    warningFxId,
+    partnerId,
+  };
+  enemy.motion = "attacking";
+  enemy.motionTime = 0;
+  enemy.vx = 0;
+  enemy.vy = 0;
+}
+
+function ensureShoePartner(run: RunState, enemy: Enemy): Enemy | undefined {
+  const linked = run.enemies.find(
+    (candidate) =>
+      candidate.id === enemy.partnerId &&
+      candidate.type === "shoe" &&
+      candidate.hp > 0,
+  );
+  if (linked) return linked;
+  const available = run.enemies.find(
+    (candidate) =>
+      candidate !== enemy &&
+      candidate.type === "shoe" &&
+      candidate.hp > 0 &&
+      candidate.partnerId === undefined &&
+      !candidate.intrusionAvatar,
+  );
+  if (available) {
+    enemy.partnerId = available.id;
+    available.partnerId = enemy.id;
+    return available;
+  }
+  if (
+    enemy.intrusionAvatar ||
+    run.enemies.length >= ENDLESS_ACTOR_CAP ||
+    (run.endlessDirector && run.endlessDirector.nonBossThreatBudget < 1)
+  ) {
+    return undefined;
+  }
+  const partner = spawnEnemy(run, "shoe", {
+    x: clamp(run.player.x * 2 - enemy.x, 32, GAME_WIDTH - 32),
+    y: clamp(run.player.y * 2 - enemy.y, 32, GAME_HEIGHT - 32),
+  });
+  enemy.partnerId = partner.id;
+  partner.partnerId = enemy.id;
+  partner.attackCooldown = Number.POSITIVE_INFINITY;
+  if (run.endlessDirector) {
+    run.endlessDirector.nonBossThreatBudget -= 1;
+    run.endlessDirector.totalThreatSpent += 1;
+    run.endlessDirector.commonSpawned += 1;
+  }
+  return partner;
+}
+
+function beginEnemySkill(
+  run: RunState,
+  enemy: Enemy,
+  skill: EnemySkillDefinition,
+) {
+  if (skill.behavior === "pairedShoeCross") {
+    const partner = ensureShoePartner(run, enemy);
+    const direction = normalized(
+      run.player.x - enemy.x,
+      run.player.y - enemy.y,
+    );
+    assignEnemySkillAction(
+      run,
+      enemy,
+      skill,
+      clamp(run.player.x + direction.x * 126, 30, GAME_WIDTH - 30),
+      clamp(run.player.y + direction.y * 126, 30, GAME_HEIGHT - 30),
+      partner?.id,
+    );
+    if (partner) {
+      assignEnemySkillAction(
+        run,
+        partner,
+        skill,
+        clamp(run.player.x - direction.x * 126, 30, GAME_WIDTH - 30),
+        clamp(run.player.y - direction.y * 126, 30, GAME_HEIGHT - 30),
+        enemy.id,
+      );
+    }
+    enemy.patternCycle = (enemy.patternCycle ?? 0) + 1;
+    return;
+  }
+
+  let target =
+    skill.mode === "dash" ||
+    skill.mode === "hop" ||
+    skill.mode === "pounce"
+      ? actionTarget(run, enemy, skill.travelDistance)
+      : { x: run.player.x, y: run.player.y };
+  if (skill.behavior === "fishFlyby") {
+    const direction = normalized(
+      run.player.x - enemy.x,
+      run.player.y - enemy.y,
+    );
+    const travel = Math.hypot(GAME_WIDTH, GAME_HEIGHT) + 180;
+    target = {
+      x: enemy.x + direction.x * travel,
+      y: enemy.y + direction.y * travel,
+    };
+  }
+  assignEnemySkillAction(run, enemy, skill, target.x, target.y);
+  enemy.patternCycle = (enemy.patternCycle ?? 0) + 1;
+
+  if (skill.behavior === "puppetTripwire" && enemy.action?.kind === "enemySkill") {
+    const direction = normalized(
+      run.player.x - enemy.x,
+      run.player.y - enemy.y,
+    );
+    const centerX = run.player.x - direction.x * 42;
+    const centerY = run.player.y - direction.y * 42;
+    const perpendicularX = -direction.y;
+    const perpendicularY = direction.x;
+    const halfLength = 245;
+    enemy.action.lineX1 = centerX + perpendicularX * halfLength;
+    enemy.action.lineY1 = centerY + perpendicularY * halfLength;
+    enemy.action.lineX2 = centerX - perpendicularX * halfLength;
+    enemy.action.lineY2 = centerY - perpendicularY * halfLength;
+    enemy.action.previousPlayerSide = enemyLineSide(
+      enemy.action.lineX1,
+      enemy.action.lineY1,
+      enemy.action.lineX2,
+      enemy.action.lineY2,
+      run.player.x,
+      run.player.y,
+    );
+    addFx(
+      run,
+      "beam",
+      enemy.action.lineX1,
+      enemy.action.lineY1,
+      20,
+      skill.telegraph + skill.active,
+      "#795363",
+      `${skill.artKey}/thread`,
+      { x2: enemy.action.lineX2, y2: enemy.action.lineY2 },
+    );
+    for (const [x, y] of [
+      [enemy.action.lineX1, enemy.action.lineY1],
+      [enemy.action.lineX2, enemy.action.lineY2],
+    ] as const) {
+      const life = skill.telegraph + skill.active;
+      run.strikes.push({
+        id: nextId(run),
+        owner: "terminal",
+        artKey: `${skill.artKey}/thread-anchor`,
+        x,
+        y,
+        radius: 12,
+        damage: enemy.damage,
+        delay: life,
+        maxDelay: life,
+        hostile: true,
+        contactOnly: true,
+      });
+    }
+  }
+}
+
+function stepEnemySkill(
+  run: RunState,
+  enemy: Enemy,
+  delta: number,
+  events: RunEvent[],
+): boolean {
+  const action = enemy.action;
+  if (!action || action.kind !== "enemySkill") return false;
+  const definition = getEnemyDefinition(enemy.type);
+  const skill =
+    definition?.skill.id === action.skillId
+      ? definition.skill
+      : undefined;
+  if (!skill) {
+    enemy.action = undefined;
+    enemy.motion = "moving";
+    return false;
+  }
+  const haste = (enemy.ralliedUntil ?? 0) > run.elapsed ? 1.24 : 1;
+  const scaledDelta = delta * (enemy.actionSpeed ?? 1) * haste;
+  action.elapsed += scaledDelta;
+  enemy.vx = 0;
+  enemy.vy = 0;
+  enemy.heading = Math.atan2(
+    action.targetY - enemy.y,
+    action.targetX - enemy.x,
+  );
+
+  if (action.phase === "telegraph") {
+    if (action.elapsed >= skill.telegraph) {
+      action.phase = "active";
+      action.elapsed = 0;
+    }
+    return true;
+  }
+
+  if (action.phase === "active") {
+    const moving =
+      skill.mode === "dash" ||
+      skill.mode === "hop" ||
+      skill.mode === "pounce";
+    if (moving) {
+      const ratio = clamp(action.elapsed / skill.active, 0, 1);
+      const eased = ratio * ratio * (3 - 2 * ratio);
+      const previousX = enemy.x;
+      const previousY = enemy.y;
+      let x =
+        action.startX + (action.targetX - action.startX) * eased;
+      let y =
+        action.startY + (action.targetY - action.startY) * eased;
+      if (skill.id === "fish-arc") {
+        const dx = action.targetX - action.startX;
+        const dy = action.targetY - action.startY;
+        const distance = Math.hypot(dx, dy) || 1;
+        const arc = Math.sin(ratio * Math.PI) * 58;
+        x += (-dy / distance) * arc;
+        y += (dx / distance) * arc;
+      }
+      if (skill.behavior === "fishFlyby") {
+        enemy.x = x;
+        enemy.y = y;
+      } else {
+        enemy.x = clamp(x, enemy.radius, GAME_WIDTH - enemy.radius);
+        enemy.y = clamp(y, enemy.radius, GAME_HEIGHT - enemy.radius);
+      }
+      enemy.travelled += Math.hypot(
+        enemy.x - previousX,
+        enemy.y - previousY,
+      );
+      const contactDuringTravel =
+        skill.behavior === "pairedShoeCross" ||
+        skill.behavior === "fishFlyby";
+      if (
+        contactDuringTravel &&
+        !action.committed &&
+        distanceSquared(
+          enemy.x,
+          enemy.y,
+          run.player.x,
+          run.player.y,
+        ) <=
+          (skill.radius + 18) ** 2
+      ) {
+        action.committed = true;
+        if (hurtPlayer(run, enemy.damage)) {
+          events.push({ type: "playerHit" });
+        }
+      }
+      if (ratio >= 1 && !action.committed) {
+        action.committed = true;
+        addFx(
+          run,
+          "burst",
+          enemy.x,
+          enemy.y,
+          skill.radius,
+          0.42,
+          "#7a5544",
+          `${skill.artKey}/impact`,
+        );
+        if (
+          !contactDuringTravel &&
+          distanceSquared(
+            enemy.x,
+            enemy.y,
+            run.player.x,
+            run.player.y,
+          ) <=
+            (skill.radius + 18) ** 2 &&
+          hurtPlayer(run, enemy.damage)
+        ) {
+          events.push({ type: "playerHit" });
+        }
+      }
+      if (
+        ratio >= 1 &&
+        !action.followupCommitted &&
+        skill.behavior === "umbrellaGuard"
+      ) {
+        action.followupCommitted = true;
+        for (const protectedEnemy of nearbyEnemies(
+          run,
+          enemy.x,
+          enemy.y,
+          225,
+          "umbrella-guard",
+        )) {
+          if (protectedEnemy.hp <= 0 || protectedEnemy.boss) continue;
+          protectedEnemy.guardedUntil = Math.max(
+            protectedEnemy.guardedUntil ?? 0,
+            run.elapsed + 2.25,
+          );
+          protectedEnemy.guardFacing = Math.atan2(
+            run.player.y - protectedEnemy.y,
+            run.player.x - protectedEnemy.x,
+          );
+        }
+        addFx(
+          run,
+          "wave",
+          enemy.x,
+          enemy.y,
+          225,
+          0.55,
+          "#60766d",
+          `${skill.artKey}/guard`,
+        );
+      }
+      if (
+        ratio >= 1 &&
+        !action.followupCommitted &&
+        skill.behavior === "lionChargeRoar"
+      ) {
+        action.followupCommitted = true;
+        for (const rallied of nearbyEnemies(
+          run,
+          enemy.x,
+          enemy.y,
+          320,
+          "lion-rally",
+        )) {
+          if (rallied.hp <= 0 || rallied.boss || rallied === enemy) continue;
+          rallied.ralliedUntil = Math.max(
+            rallied.ralliedUntil ?? 0,
+            run.elapsed + 2.8,
+          );
+        }
+        addFx(
+          run,
+          "wave",
+          enemy.x,
+          enemy.y,
+          320,
+          0.64,
+          "#9a5a3d",
+          `${skill.artKey}/roar`,
+        );
+      }
+    } else if (!action.committed) {
+      if (skill.behavior === "puppetTripwire") {
+        const { lineX1, lineY1, lineX2, lineY2 } = action;
+        if (
+          lineX1 !== undefined &&
+          lineY1 !== undefined &&
+          lineX2 !== undefined &&
+          lineY2 !== undefined
+        ) {
+          const side = enemyLineSide(
+            lineX1,
+            lineY1,
+            lineX2,
+            lineY2,
+            run.player.x,
+            run.player.y,
+          );
+          const crossed =
+            action.previousPlayerSide !== undefined &&
+            side * action.previousPlayerSide < 0;
+          const touching =
+            distanceToSegmentSquared(
+              lineX1,
+              lineY1,
+              lineX2,
+              lineY2,
+              run.player.x,
+              run.player.y,
+            ) <= 20 ** 2;
+          if (crossed || touching) {
+            action.committed = true;
+            addFx(
+              run,
+              "beam",
+              lineX1,
+              lineY1,
+              28,
+              0.35,
+              "#9d4550",
+              `${skill.artKey}/close`,
+              { x2: lineX2, y2: lineY2 },
+            );
+            if (hurtPlayer(run, enemy.damage)) {
+              events.push({ type: "playerHit" });
+            }
+          }
+          action.previousPlayerSide = side;
+        }
+      } else {
+        action.committed = true;
+        if (skill.behavior === "lanternSlowFire") {
+          scheduleSlowHostileVolley(run, enemy, skill, 3);
+        } else {
+          scheduleEnemyPattern(
+            run,
+            enemy,
+            skill,
+            action.targetX,
+            action.targetY,
+          );
+        }
+        addFx(
+          run,
+          "burst",
+          enemy.x,
+          enemy.y,
+          skill.radius,
+          0.38,
+          "#705747",
+          `${skill.artKey}/cast`,
+        );
+      }
+    }
+    if (action.elapsed >= skill.active) {
+      action.phase = "recovery";
+      action.elapsed = 0;
+    }
+    return true;
+  }
+
+  if (action.elapsed >= skill.recovery) {
+    if (skill.behavior === "fishFlyby") {
+      const margin = enemy.radius + 26;
+      enemy.x = clamp(action.targetX, -margin, GAME_WIDTH + margin);
+      enemy.y = clamp(action.targetY, -margin, GAME_HEIGHT + margin);
+      const returnDirection = normalized(
+        run.player.x - enemy.x,
+        run.player.y - enemy.y,
+      );
+      enemy.heading = Math.atan2(returnDirection.y, returnDirection.x);
+      enemy.vx = returnDirection.x * enemy.speed;
+      enemy.vy = returnDirection.y * enemy.speed;
+    }
+    enemy.action = undefined;
+    enemy.motion = "moving";
+    enemy.motionTime = 0;
+    enemy.attackCooldown =
+      skill.cooldown / Math.max(1, enemy.actionSpeed ?? 1);
+    if (enemy.partnerId !== undefined && skill.behavior === "pairedShoeCross") {
+      const partner = run.enemies.find(
+        (candidate) => candidate.id === enemy.partnerId && candidate.hp > 0,
+      );
+      if (partner && partner.attackCooldown === Number.POSITIVE_INFINITY) {
+        partner.attackCooldown = enemy.attackCooldown;
+      }
+    }
+  }
+  return true;
+}
+
+function scheduleBossVolley(
+  run: RunState,
+  enemy: Enemy,
+  skill: BossSkillDefinition,
+  targetX: number,
+  targetY: number,
+  delayOffset = 0,
+) {
+  const phaseBonus =
+    enemy.endlessBossId && enemy.bossPhase === 2
+      ? getEndlessBoss(enemy.endlessBossId).halfHealth.patternBonus
+      : 0;
+  const count = Math.max(1, (skill.count ?? 1) + phaseBonus);
+  for (let index = 0; index < count; index += 1) {
+    const angle = (Math.PI * 2 * index) / count + enemy.heading;
+    const band = 42 + (index % 3) * 38;
+    const delay =
+      delayOffset + 0.48 + index * (skill.delay ?? 0.2);
+    run.strikes.push({
+      id: nextId(run),
+      owner: "terminal",
+      artKey: `${skill.artKey}/strike`,
+      x: clamp(
+        targetX + Math.cos(angle) * band,
+        45,
+        GAME_WIDTH - 45,
+      ),
+      y: clamp(
+        targetY + Math.sin(angle) * band,
+        45,
+        GAME_HEIGHT - 45,
+      ),
+      radius: skill.radius,
+      damage: enemy.damage,
+      delay,
+      maxDelay: delay,
+      hostile: true,
+    });
+  }
+}
+
+function pushBossStrike(
+  run: RunState,
+  enemy: Enemy,
+  skill: BossSkillDefinition,
+  x: number,
+  y: number,
+  delay: number,
+  options: {
+    radius?: number;
+    velocityX?: number;
+    velocityY?: number;
+    contactOnly?: boolean;
+    suffix?: string;
+  } = {},
+) {
+  run.strikes.push({
+    id: nextId(run),
+    owner: "terminal",
+    artKey: `${skill.artKey}/${options.suffix ?? "strike"}`,
+    x: clamp(x, -70, GAME_WIDTH + 70),
+    y: clamp(y, -70, GAME_HEIGHT + 70),
+    radius: options.radius ?? skill.radius,
+    damage: enemy.damage,
+    delay,
+    maxDelay: delay,
+    hostile: true,
+    velocityX: options.velocityX,
+    velocityY: options.velocityY,
+    contactOnly: options.contactOnly,
+  });
+}
+
+function scheduleBossLine(
+  run: RunState,
+  enemy: Enemy,
+  skill: BossSkillDefinition,
+  centerX: number,
+  centerY: number,
+  angle: number,
+  count: number,
+  spacing: number,
+  delayStep = 0.08,
+  suffix = "line",
+) {
+  for (let index = 0; index < count; index += 1) {
+    const offset = (index - (count - 1) / 2) * spacing;
+    pushBossStrike(
+      run,
+      enemy,
+      skill,
+      centerX + Math.cos(angle) * offset,
+      centerY + Math.sin(angle) * offset,
+      0.46 + index * delayStep,
+      { suffix },
+    );
+  }
+}
+
+function scheduleBossArc(
+  run: RunState,
+  enemy: Enemy,
+  skill: BossSkillDefinition,
+  centerX: number,
+  centerY: number,
+  facing: number,
+  count: number,
+  distance: number,
+  arc: number,
+  suffix = "arc",
+) {
+  for (let index = 0; index < count; index += 1) {
+    const ratio = count <= 1 ? 0.5 : index / (count - 1);
+    const angle = facing + (ratio - 0.5) * arc;
+    pushBossStrike(
+      run,
+      enemy,
+      skill,
+      centerX + Math.cos(angle) * distance,
+      centerY + Math.sin(angle) * distance,
+      0.42 + index * 0.07,
+      { suffix },
+    );
+  }
+}
+
+function spawnBossReinforcements(
+  run: RunState,
+  enemy: Enemy,
+  count: number,
+  forcedType?: EnemyArchetype,
+) {
+  for (
+    let index = 0;
+    index < count && run.enemies.length < ENDLESS_ACTOR_CAP;
+    index += 1
+  ) {
+    const angle = (Math.PI * 2 * index) / Math.max(1, count);
+    spawnEnemy(run, forcedType ?? chooseFrom(run, COMMON_ENEMY_IDS), {
+      x: clamp(
+        enemy.x + Math.cos(angle) * 105,
+        30,
+        GAME_WIDTH - 30,
+      ),
+      y: clamp(
+        enemy.y + Math.sin(angle) * 84,
+        30,
+        GAME_HEIGHT - 30,
+      ),
+    });
+  }
+}
+
+function executeEndlessBossBehavior(
+  run: RunState,
+  enemy: Enemy,
+  skill: BossSkillDefinition,
+  targetX: number,
+  targetY: number,
+) {
+  const phaseBonus =
+    enemy.endlessBossId && enemy.bossPhase === 2
+      ? getEndlessBoss(enemy.endlessBossId).halfHealth.patternBonus
+      : 0;
+  const facing = Math.atan2(targetY - enemy.y, targetX - enemy.x);
+  switch (skill.behavior) {
+    case "maskCrossing": {
+      scheduleBossArc(
+        run,
+        enemy,
+        skill,
+        enemy.x,
+        enemy.y,
+        facing,
+        5 + phaseBonus,
+        105,
+        Math.PI * 0.8,
+        "mask-fan",
+      );
+      break;
+    }
+    case "fanCurtain": {
+      scheduleBossArc(
+        run,
+        enemy,
+        skill,
+        targetX,
+        targetY,
+        facing + Math.PI,
+        7 + phaseBonus * 2,
+        150,
+        Math.PI * 1.15,
+        "fan-curtain",
+      );
+      break;
+    }
+    case "shadowCast": {
+      const before = run.enemies.length;
+      spawnBossReinforcements(run, enemy, 3 + phaseBonus, "puppet");
+      for (let index = before; index < run.enemies.length; index += 1) {
+        run.enemies[index].attackCooldown = 0.45 + (index - before) * 0.2;
+        run.enemies[index].artKey = `${skill.artKey}/shadow`;
+      }
+      break;
+    }
+    case "inkGrid": {
+      const count = 7 + phaseBonus * 2;
+      scheduleBossLine(
+        run,
+        enemy,
+        skill,
+        targetX,
+        targetY,
+        0,
+        count,
+        64,
+        0.045,
+        "grid-horizontal",
+      );
+      scheduleBossLine(
+        run,
+        enemy,
+        skill,
+        targetX,
+        targetY,
+        Math.PI / 2,
+        count,
+        54,
+        0.045,
+        "grid-vertical",
+      );
+      break;
+    }
+    case "fallingSeal": {
+      const count = 1 + phaseBonus;
+      for (let index = 0; index < count; index += 1) {
+        const angle = (Math.PI * 2 * index) / Math.max(1, count);
+        pushBossStrike(
+          run,
+          enemy,
+          skill,
+          targetX + Math.cos(angle) * index * 96,
+          targetY + Math.sin(angle) * index * 72,
+          0.82 + index * 0.22,
+          { radius: skill.radius, suffix: "falling-seal" },
+        );
+      }
+      break;
+    }
+    case "orderedClosure": {
+      const width = 310;
+      const height = 210;
+      const count = 5 + phaseBonus;
+      scheduleBossLine(run, enemy, skill, targetX, targetY - height / 2, 0, count, width / (count - 1), 0.08, "close-top");
+      scheduleBossLine(run, enemy, skill, targetX + width / 2, targetY, Math.PI / 2, count, height / (count - 1), 0.08, "close-right");
+      scheduleBossLine(run, enemy, skill, targetX, targetY + height / 2, 0, count, width / (count - 1), 0.08, "close-bottom");
+      scheduleBossLine(run, enemy, skill, targetX - width / 2, targetY, Math.PI / 2, count, height / (count - 1), 0.08, "close-left");
+      break;
+    }
+    case "bellRings": {
+      for (let ring = 0; ring < 2 + phaseBonus; ring += 1) {
+        const count = 8 + ring * 2;
+        const radius = 92 + ring * 88;
+        for (let index = 0; index < count; index += 1) {
+          const angle = (Math.PI * 2 * index) / count;
+          pushBossStrike(
+            run,
+            enemy,
+            skill,
+            enemy.x + Math.cos(angle) * radius,
+            enemy.y + Math.sin(angle) * radius,
+            0.48 + ring * 0.34,
+            { radius: Math.min(44, skill.radius * 0.24), suffix: `bell-ring-${ring + 1}` },
+          );
+        }
+      }
+      break;
+    }
+    case "lanternPatrol": {
+      scheduleBossArc(run, enemy, skill, enemy.x, enemy.y, facing, 3 + phaseBonus, 132, Math.PI * 0.45, "lantern-cone");
+      break;
+    }
+    case "thirdWatchCone": {
+      const rays = 3 + phaseBonus;
+      for (let ray = 0; ray < rays; ray += 1) {
+        const rayAngle = facing + (ray - (rays - 1) / 2) * 0.22;
+        for (let step = 1; step <= 4; step += 1) {
+          pushBossStrike(
+            run,
+            enemy,
+            skill,
+            enemy.x + Math.cos(rayAngle) * step * 105,
+            enemy.y + Math.sin(rayAngle) * step * 105,
+            0.38 + step * 0.12,
+            { radius: Math.min(58, skill.radius), suffix: "watch-cone" },
+          );
+        }
+      }
+      break;
+    }
+    case "rollingClay": {
+      const count = 3 + phaseBonus;
+      for (let index = 0; index < count; index += 1) {
+        const angle = facing + (index - (count - 1) / 2) * 0.18;
+        const life = 3.4;
+        pushBossStrike(run, enemy, skill, enemy.x, enemy.y, life, {
+          radius: 26,
+          velocityX: Math.cos(angle) * 175,
+          velocityY: Math.sin(angle) * 175,
+          contactOnly: true,
+          suffix: "rolling-clay",
+        });
+      }
+      break;
+    }
+    case "kilnFireLanes": {
+      const lanes = 3 + phaseBonus;
+      for (let lane = 0; lane < lanes; lane += 1) {
+        const side = (lane - (lanes - 1) / 2) * 82;
+        const perpendicular = facing + Math.PI / 2;
+        const centerX = targetX + Math.cos(perpendicular) * side;
+        const centerY = targetY + Math.sin(perpendicular) * side;
+        scheduleBossLine(run, enemy, skill, centerX, centerY, facing, 5, 86, 0.12, "kiln-lane");
+      }
+      break;
+    }
+    case "furnaceBlast": {
+      scheduleBossArc(run, enemy, skill, enemy.x, enemy.y, facing, 5 + phaseBonus, 142, Math.PI * 0.72, "furnace-blast");
+      break;
+    }
+    case "turretVolley": {
+      const count = 7 + phaseBonus * 2;
+      for (let index = 0; index < count; index += 1) {
+        const angle = facing + (index - (count - 1) / 2) * 0.075;
+        const life = 2.4;
+        pushBossStrike(run, enemy, skill, enemy.x, enemy.y, life, {
+          radius: 16,
+          velocityX: Math.cos(angle) * 260,
+          velocityY: Math.sin(angle) * 260,
+          contactOnly: true,
+          suffix: "turret-bolt",
+        });
+      }
+      break;
+    }
+    case "edgeDeployment": {
+      const count = 2 + phaseBonus;
+      for (let index = 0; index < count; index += 1) {
+        if (run.enemies.length >= ENDLESS_ACTOR_CAP) break;
+        const x = index % 2 === 0 ? 44 : GAME_WIDTH - 44;
+        const y = clamp(targetY + (index - (count - 1) / 2) * 128, 70, GAME_HEIGHT - 70);
+        const deployed = spawnEnemy(run, "abacus", { x, y });
+        deployed.attackCooldown = 0.38 + index * 0.16;
+        deployed.artKey = `${skill.artKey}/deployed-turret`;
+        scheduleBossLine(run, enemy, skill, (x + targetX) / 2, y, 0, 5, Math.abs(targetX - x) / 5, 0.1, "edge-fire");
+      }
+      break;
+    }
+    case "sweepingArm": {
+      scheduleBossLine(run, enemy, skill, enemy.x, enemy.y, facing + Math.PI / 2, 9 + phaseBonus, 54, 0.045, "sweeping-arm");
+      break;
+    }
+    case "spearPass": {
+      scheduleBossLine(run, enemy, skill, enemy.x, enemy.y, facing + Math.PI, 6 + phaseBonus, 58, 0.045, "spear-trail");
+      break;
+    }
+    case "plantFlags": {
+      const count = 3 + phaseBonus;
+      const before = run.enemies.length;
+      spawnBossReinforcements(run, enemy, count, "shoe");
+      for (let index = before; index < run.enemies.length; index += 1) {
+        run.enemies[index].ralliedUntil = run.elapsed + 4.5;
+        run.enemies[index].artKey = `${skill.artKey}/flag-guard`;
+      }
+      for (let index = 0; index < count; index += 1) {
+        const angle = (Math.PI * 2 * index) / count;
+        pushBossStrike(run, enemy, skill, enemy.x + Math.cos(angle) * 165, enemy.y + Math.sin(angle) * 125, 0.7 + index * 0.12, { radius: 48, suffix: "planted-flag" });
+      }
+      break;
+    }
+    case "commandFormation": {
+      const followers = nearbyEnemies(run, enemy.x, enemy.y, 620, "banner-command")
+        .filter((candidate) => !candidate.boss && candidate.hp > 0)
+        .slice(0, 8 + phaseBonus * 2);
+      for (let index = 0; index < followers.length; index += 1) {
+        const follower = followers[index];
+        follower.ralliedUntil = run.elapsed + 3.8;
+        follower.heading = normalizeAngle(
+          facing + (index - (followers.length - 1) / 2) * 0.075,
+        );
+        follower.attackCooldown = Math.min(follower.attackCooldown, 0.32 + index * 0.05);
+      }
+      scheduleBossLine(run, enemy, skill, targetX, targetY, facing + Math.PI / 2, 7 + phaseBonus, 68, 0.08, "formation-line");
+      break;
+    }
+  }
+}
+
+function applyEndlessBossTraits(
+  run: RunState,
+  enemy: Enemy,
+  definition: ReturnType<typeof getEndlessBoss>,
+  skill: BossSkillDefinition,
+  targetX: number,
+  targetY: number,
+) {
+  if (enemy.bossTraits?.includes("reinforcements")) {
+    spawnBossReinforcements(run, enemy, 2);
+  }
+  if (enemy.bossTraits?.includes("lingeringGround")) {
+    const delay = 0.82;
+    run.strikes.push({
+      id: nextId(run),
+      owner: "terminal",
+      artKey: `${definition.artKey}/trait/lingering-ground`,
+      x: targetX,
+      y: targetY,
+      radius: Math.max(86, skill.radius * 0.72),
+      damage: enemy.damage,
+      delay,
+      maxDelay: delay,
+      hostile: true,
+    });
+  }
+  if (enemy.bossTraits?.includes("delayedRepeat")) {
+    scheduleBossVolley(
+      run,
+      enemy,
+      { ...skill, count: Math.min(3, skill.count ?? 1) },
+      targetX,
+      targetY,
+      1.05,
+    );
+  }
+}
+
+function beginEndlessBossSkill(run: RunState, enemy: Enemy) {
+  if (!enemy.endlessBossId) return;
+  const definition = getEndlessBoss(enemy.endlessBossId);
+  const skill =
+    definition.skills[enemy.skillIndex % definition.skills.length];
+  enemy.skillIndex += 1;
+  const target =
+    skill.mode === "dash"
+      ? actionTarget(run, enemy, skill.travelDistance)
+      : { x: run.player.x, y: run.player.y };
+  const bossPhase = enemy.bossPhase ?? 1;
+  const telegraphScale =
+    bossPhase === 2 ? definition.halfHealth.telegraphScale : 1;
+  const warningFxId = addFx(
+    run,
+    "warning",
+    target.x,
+    target.y,
+    skill.radius,
+    skill.telegraph * telegraphScale + 0.24,
+    "#8e4336",
+    `${skill.artKey}/warning`,
+  );
+  enemy.action = {
+    kind: "endlessBossSkill",
+    skillId: skill.id,
+    phase: "telegraph",
+    elapsed: 0,
+    startX: enemy.x,
+    startY: enemy.y,
+    targetX: target.x,
+    targetY: target.y,
+    committed: false,
+    warningFxId,
+    bossPhase,
+  };
+  enemy.motion = "attacking";
+  enemy.motionTime = 0;
+  enemy.vx = 0;
+  enemy.vy = 0;
+}
+
+function stepEndlessBossSkill(
+  run: RunState,
+  enemy: Enemy,
+  delta: number,
+  events: RunEvent[],
+): boolean {
+  const action = enemy.action;
+  if (
+    !action ||
+    action.kind !== "endlessBossSkill" ||
+    !enemy.endlessBossId
+  ) {
+    return false;
+  }
+  const definition = getEndlessBoss(enemy.endlessBossId);
+  const skill = definition.skills.find(
+    (candidate) => candidate.id === action.skillId,
+  );
+  if (!skill) {
+    enemy.action = undefined;
+    enemy.motion = "moving";
+    return false;
+  }
+  const scaledDelta = delta * (enemy.actionSpeed ?? 1);
+  action.elapsed += scaledDelta;
+  enemy.vx = 0;
+  enemy.vy = 0;
+
+  if (action.phase === "telegraph") {
+    enemy.heading = Math.atan2(
+      action.targetY - enemy.y,
+      action.targetX - enemy.x,
+    );
+    const telegraph =
+      skill.telegraph *
+      (action.bossPhase === 2
+        ? definition.halfHealth.telegraphScale
+        : 1);
+    if (action.elapsed >= telegraph) {
+      action.phase = "active";
+      action.elapsed = 0;
+    }
+    return true;
+  }
+
+  if (action.phase === "active") {
+    if (skill.mode === "dash") {
+      const ratio = clamp(action.elapsed / skill.active, 0, 1);
+      const eased = ratio * ratio * (3 - 2 * ratio);
+      const previousX = enemy.x;
+      const previousY = enemy.y;
+      enemy.x =
+        action.startX + (action.targetX - action.startX) * eased;
+      enemy.y =
+        action.startY + (action.targetY - action.startY) * eased;
+      enemy.travelled += Math.hypot(
+        enemy.x - previousX,
+        enemy.y - previousY,
+      );
+      if (ratio >= 1 && !action.committed) {
+        action.committed = true;
+        if (
+          distanceSquared(
+            enemy.x,
+            enemy.y,
+            run.player.x,
+            run.player.y,
+          ) <=
+            (skill.radius + 18) ** 2 &&
+          hurtPlayer(run, enemy.damage)
+        ) {
+          events.push({ type: "playerHit" });
+        }
+        executeEndlessBossBehavior(
+          run,
+          enemy,
+          skill,
+          action.targetX,
+          action.targetY,
+        );
+        applyEndlessBossTraits(
+          run,
+          enemy,
+          definition,
+          skill,
+          enemy.x,
+          enemy.y,
+        );
+      }
+    } else if (!action.committed) {
+      action.committed = true;
+      executeEndlessBossBehavior(
+        run,
+        enemy,
+        skill,
+        action.targetX,
+        action.targetY,
+      );
+      applyEndlessBossTraits(
+        run,
+        enemy,
+        definition,
+        skill,
+        action.targetX,
+        action.targetY,
+      );
+    }
+    if (action.elapsed >= skill.active) {
+      action.phase = "recovery";
+      action.elapsed = 0;
+      addFx(
+        run,
+        "burst",
+        enemy.x,
+        enemy.y,
+        skill.radius,
+        0.42,
+        "#913f34",
+        `${skill.artKey}/finish`,
+      );
+    }
+    return true;
+  }
+
+  const recovery = enemy.bossTraits?.includes("quickRecovery")
+    ? skill.recovery * 0.7
+    : skill.recovery;
+  if (action.elapsed >= recovery) {
+    enemy.action = undefined;
+    enemy.motion = "moving";
+    enemy.motionTime = 0;
+    const recoveryScale = enemy.bossTraits?.includes("quickRecovery")
+      ? 0.78
+      : 1;
+    const phaseRecoveryScale =
+      action.bossPhase === 2 ? definition.halfHealth.cooldownScale : 1;
+    enemy.attackCooldown =
+      (skill.cooldown * recoveryScale * phaseRecoveryScale) /
+      Math.max(1, enemy.actionSpeed ?? 1);
+  }
+  return true;
 }
 
 function beginNianLeap(run: RunState, enemy: Enemy) {
@@ -2515,7 +4754,7 @@ function stepNianLeap(
           run.player.y,
         ) <
           150 ** 2 &&
-        hurtPlayer(run)
+        hurtPlayer(run, enemy.damage)
       ) {
         events.push({ type: "playerHit" });
       }
@@ -2550,7 +4789,7 @@ function executeBossSkill(run: RunState, enemy: Enemy) {
       addFx(run, "ink", enemy.x, enemy.y, 120, 0.55, "#55776e", "boss/taotie/charge");
     } else if (ability === 1) {
       addFx(run, "ring", enemy.x, enemy.y, 205, 0.55, "#708c83", "boss/taotie/shock");
-      if (distanceSquared(enemy.x, enemy.y, run.player.x, run.player.y) < 205 ** 2) hurtPlayer(run);
+      if (distanceSquared(enemy.x, enemy.y, run.player.x, run.player.y) < 205 ** 2) hurtPlayer(run, enemy.damage);
     } else {
       const pull = normalized(enemy.x - run.player.x, enemy.y - run.player.y);
       run.player.x += pull.x * 58;
@@ -2577,12 +4816,12 @@ function executeBossSkill(run: RunState, enemy: Enemy) {
       });
     } else {
       addFx(run, "ring", enemy.x, enemy.y, 260, 0.72, "#b74b35", "boss/nian/roar");
-      if (distanceSquared(enemy.x, enemy.y, run.player.x, run.player.y) < 260 ** 2) hurtPlayer(run);
+      if (distanceSquared(enemy.x, enemy.y, run.player.x, run.player.y) < 260 ** 2) hurtPlayer(run, enemy.damage);
     }
   }
 }
 
-function hurtPlayer(run: RunState) {
+function hurtPlayer(run: RunState, incomingDamage = 1) {
   if (run.player.invulnerability > 0) return false;
   if (run.testModifiers.incomingDamageScale === 0) return false;
   if (
@@ -2655,7 +4894,7 @@ function hurtPlayer(run: RunState) {
       return false;
     }
   }
-  if (run.player.life <= 1) {
+  if (run.difficultyId !== "oneLife" && run.player.life <= 1) {
     const procs = dispatchEndlessPerkEvent(run, { type: "lethalDamage" });
     if (
       procs.some((proc) =>
@@ -2678,7 +4917,13 @@ function hurtPlayer(run: RunState) {
       return true;
     }
   }
-  run.player.life -= 1;
+  const damage = clamp(
+    incomingDamage * run.testModifiers.incomingDamageScale,
+    0,
+    3,
+  );
+  if (damage <= 0) return false;
+  run.player.life -= damage;
   run.player.invulnerability = 1.25;
   forceHumanForm(run.player);
   addFx(run, "burst", run.player.x, run.player.y, 76, 0.42, "#a54535", "fx/player-hit");
@@ -2695,10 +4940,35 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
       enemy.markStacks = 0;
     }
     enemy.slow = Math.max(0, enemy.slow - delta);
-    enemy.attackCooldown -= delta;
+    const ralliedScale = (enemy.ralliedUntil ?? 0) > run.elapsed ? 1.24 : 1;
+    enemy.attackCooldown -= delta * ralliedScale;
     enemy.motionTime += delta;
 
-    if (stepNianLeap(run, enemy, delta, events)) {
+    if (
+      enemy.endlessBossId &&
+      (enemy.bossPhase ?? 1) === 1 &&
+      enemy.hp > 0 &&
+      enemy.hp <= enemy.maxHp * 0.5
+    ) {
+      enemy.bossPhase = 2;
+      enemy.attackCooldown = Math.min(enemy.attackCooldown, 0.28);
+      addFx(
+        run,
+        "ring",
+        enemy.x,
+        enemy.y,
+        enemy.radius * 2.4,
+        0.85,
+        "#a54337",
+        `${getEndlessBoss(enemy.endlessBossId).artKey}/half-health`,
+      );
+    }
+
+    if (
+      stepNianLeap(run, enemy, delta, events) ||
+      stepEnemySkill(run, enemy, delta, events) ||
+      stepEndlessBossSkill(run, enemy, delta, events)
+    ) {
       continue;
     }
 
@@ -2709,8 +4979,40 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
 
     const distanceToPlayer = Math.sqrt(distanceSquared(enemy.x, enemy.y, run.player.x, run.player.y));
     const attackRange = enemy.radius + 24;
-    const isBossSkill = enemy.boss && enemy.attackCooldown <= 0 && distanceToPlayer < 430;
-    const isContactAttack = !enemy.boss && enemy.attackCooldown <= 0 && distanceToPlayer < attackRange + 18;
+    const enemyDefinition = getEnemyDefinition(enemy.type);
+    if (
+      enemy.endlessBossId &&
+      enemy.attackCooldown <= 0
+    ) {
+      const bossDefinition = getEndlessBoss(enemy.endlessBossId);
+      const nextSkill =
+        bossDefinition.skills[
+          enemy.skillIndex % bossDefinition.skills.length
+        ];
+      if (distanceToPlayer < nextSkill.triggerRange) {
+        beginEndlessBossSkill(run, enemy);
+        continue;
+      }
+    }
+    if (
+      !enemy.boss &&
+      enemyDefinition &&
+      enemy.attackCooldown <= 0 &&
+      distanceToPlayer < enemyDefinition.skill.triggerRange
+    ) {
+      beginEnemySkill(run, enemy, enemyDefinition.skill);
+      continue;
+    }
+    const isBossSkill =
+      enemy.boss &&
+      !enemy.endlessBossId &&
+      enemy.attackCooldown <= 0 &&
+      distanceToPlayer < 430;
+    const isContactAttack =
+      !enemy.boss &&
+      !enemyDefinition &&
+      enemy.attackCooldown <= 0 &&
+      distanceToPlayer < attackRange + 18;
     if (enemy.motion !== "attacking" && (isBossSkill || isContactAttack)) {
       if (
         enemy.type === "nian" &&
@@ -2735,7 +5037,7 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
         if (enemy.boss) {
           executeBossSkill(run, enemy);
           enemy.skillIndex += 1;
-        } else if (distanceToPlayer < attackRange + 24 && hurtPlayer(run)) {
+        } else if (distanceToPlayer < attackRange + 24 && hurtPlayer(run, enemy.damage)) {
           events.push({ type: "playerHit" });
         }
       }
@@ -2747,15 +5049,43 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
       continue;
     }
 
-    const targetAngle = Math.atan2(run.player.y - enemy.y, run.player.x - enemy.x);
-    const turnDelta = clamp(normalizeAngle(targetAngle - enemy.heading), -enemy.turnSpeed * delta, enemy.turnSpeed * delta);
+    const playerAngle = Math.atan2(
+      run.player.y - enemy.y,
+      run.player.x - enemy.x,
+    );
+    let targetAngle = playerAngle;
+    if (enemy.type === "lantern") {
+      if (distanceToPlayer < 265) targetAngle = normalizeAngle(playerAngle + Math.PI);
+      else if (distanceToPlayer < 390) {
+        targetAngle = normalizeAngle(
+          playerAngle + (enemy.id % 2 === 0 ? 1 : -1) * Math.PI * 0.48,
+        );
+      }
+    } else if (enemy.type === "abacus" && distanceToPlayer < 360) {
+      targetAngle = normalizeAngle(
+        playerAngle + (enemy.id % 2 === 0 ? 1 : -1) * Math.PI * 0.42,
+      );
+    } else if (enemy.type === "shoe" && distanceToPlayer < 300) {
+      targetAngle = normalizeAngle(
+        playerAngle + (enemy.id % 2 === 0 ? 1 : -1) * 0.42,
+      );
+    }
+    const turnRate =
+      enemy.type === "lantern" && distanceToPlayer < 265
+        ? enemy.turnSpeed * 3.2
+        : enemy.turnSpeed;
+    const turnDelta = clamp(
+      normalizeAngle(targetAngle - enemy.heading),
+      -turnRate * delta,
+      turnRate * delta,
+    );
     enemy.heading = normalizeAngle(enemy.heading + turnDelta);
     const separation = applySeparation(run, enemy);
     const fishCurve = enemy.type === "fish" ? Math.sin(run.elapsed * 2.6 + enemy.id) * 0.34 : 0;
     const desiredAngle = enemy.heading + fishCurve;
     const slowScale = enemy.slow > 0 ? 0.72 : 1;
-    const desiredX = Math.cos(desiredAngle) * enemy.speed * slowScale + separation.x * 42;
-    const desiredY = Math.sin(desiredAngle) * enemy.speed * slowScale + separation.y * 42;
+    const desiredX = Math.cos(desiredAngle) * enemy.speed * slowScale * ralliedScale + separation.x * 42;
+    const desiredY = Math.sin(desiredAngle) * enemy.speed * slowScale * ralliedScale + separation.y * 42;
     const response = 1 - Math.exp(-delta * (enemy.type === "fish" ? 3.2 : 5.4));
     enemy.vx += (desiredX - enemy.vx) * response;
     enemy.vy += (desiredY - enemy.vy) * response;
@@ -2830,7 +5160,13 @@ function updateProjectiles(run: RunState, delta: number) {
         { projectile },
       );
     }
-    for (const enemy of run.enemies) {
+    for (const enemy of nearbyEnemies(
+      run,
+      projectile.x,
+      projectile.y,
+      projectile.radius + 90,
+      "projectile",
+    )) {
       if (enemy.hp <= 0 || projectile.hitAt.has(enemy.id)) continue;
       if (distanceSquared(projectile.x, projectile.y, enemy.x, enemy.y) <= (projectile.radius + enemy.radius) ** 2) {
         if (projectile.markSeconds > 0) enemy.marked = Math.max(enemy.marked, projectile.markSeconds);
@@ -2854,11 +5190,18 @@ function updateProjectiles(run: RunState, delta: number) {
       }
     }
   }
-  run.projectiles = run.projectiles.filter((projectile) =>
-    projectile.life > 0 &&
-    projectile.x > -140 && projectile.x < GAME_WIDTH + 140 &&
-    projectile.y > -140 && projectile.y < GAME_HEIGHT + 140
-  ).slice(-460);
+  const projectilePool = objectPools(run).projectiles;
+  recycleRejectedInPlace(
+    run.projectiles,
+    (projectile) =>
+      projectile.life > 0 &&
+      projectile.x > -140 &&
+      projectile.x < GAME_WIDTH + 140 &&
+      projectile.y > -140 &&
+      projectile.y < GAME_HEIGHT + 140,
+    projectilePool,
+  );
+  keepNewestAndRecycleInPlace(run.projectiles, 460, projectilePool);
 }
 
 function updateZones(run: RunState, delta: number) {
@@ -2869,14 +5212,21 @@ function updateZones(run: RunState, delta: number) {
       zone.x = run.player.x;
       zone.y = run.player.y;
     }
-    const insideNow = new Set<number>();
-    for (const enemy of run.enemies) {
+    const zoneCandidates = nearbyEnemies(
+      run,
+      zone.x,
+      zone.y,
+      zone.radius + 90,
+      "zone",
+    );
+    ZONE_INSIDE_SCRATCH.clear();
+    for (const enemy of zoneCandidates) {
       if (
         enemy.hp > 0 &&
         distanceSquared(zone.x, zone.y, enemy.x, enemy.y) <=
           (zone.radius + enemy.radius) ** 2
       ) {
-        insideNow.add(enemy.id);
+        ZONE_INSIDE_SCRATCH.add(enemy.id);
         if (!zone.enteredEnemyIds.has(enemy.id)) {
           dispatchEndlessPerkEvent(
             run,
@@ -2890,11 +5240,14 @@ function updateZones(run: RunState, delta: number) {
         }
       }
     }
-    zone.enteredEnemyIds = insideNow;
+    zone.enteredEnemyIds.clear();
+    for (const enemyId of ZONE_INSIDE_SCRATCH) {
+      zone.enteredEnemyIds.add(enemyId);
+    }
     if (zone.tick <= 0) {
       zone.tick += zone.tickRate;
       let firstHit: Enemy | undefined;
-      for (const enemy of run.enemies) {
+      for (const enemy of zoneCandidates) {
         if (enemy.hp > 0 && distanceSquared(zone.x, zone.y, enemy.x, enemy.y) <= (zone.radius + enemy.radius) ** 2) {
           firstHit ??= enemy;
           damageEnemy(
@@ -2920,7 +5273,9 @@ function updateZones(run: RunState, delta: number) {
       }
     }
   }
-  run.zones = run.zones.filter((zone) => zone.life > 0).slice(-36);
+  const zonePool = objectPools(run).zones;
+  recycleRejectedInPlace(run.zones, (zone) => zone.life > 0, zonePool);
+  keepNewestAndRecycleInPlace(run.zones, 36, zonePool);
 }
 
 function updateSummons(run: RunState, delta: number) {
@@ -2941,18 +5296,28 @@ function updateSummons(run: RunState, delta: number) {
             (enemy) => enemy.id === summon.targetId && enemy.hp > 0,
           );
     if (current && summon.retargetClock > 0) return current;
-    const candidates = run.enemies.filter((enemy) => enemy.hp > 0);
-    const selected = candidates.sort((left, right) => {
-      const leftLoad = assignedTargets.get(left.id) ?? 0;
-      const rightLoad = assignedTargets.get(right.id) ?? 0;
-      const leftScore =
-        distanceSquared(summon.x, summon.y, left.x, left.y) +
-        leftLoad * 160 ** 2;
-      const rightScore =
-        distanceSquared(summon.x, summon.y, right.x, right.y) +
-        rightLoad * 160 ** 2;
-      return leftScore - rightScore || left.id - right.id;
-    })[0];
+    let selected: Enemy | undefined;
+    let selectedScore = Number.POSITIVE_INFINITY;
+    for (const candidate of nearbyEnemies(
+      run,
+      summon.x,
+      summon.y,
+      Math.hypot(GAME_WIDTH, GAME_HEIGHT) + 180,
+      "summon-target",
+    )) {
+      if (candidate.hp <= 0) continue;
+      const load = assignedTargets.get(candidate.id) ?? 0;
+      const score =
+        distanceSquared(summon.x, summon.y, candidate.x, candidate.y) +
+        load * 160 ** 2;
+      if (
+        score < selectedScore ||
+        (score === selectedScore && candidate.id < (selected?.id ?? Infinity))
+      ) {
+        selected = candidate;
+        selectedScore = score;
+      }
+    }
     if (summon.targetId !== selected?.id) {
       if (summon.targetId !== undefined) {
         assignedTargets.set(
@@ -3065,7 +5430,7 @@ function updateSummons(run: RunState, delta: number) {
           target.x - summon.x,
           target.y - summon.y,
         );
-        run.projectiles.push({
+        pushProjectile(run, {
           id: nextId(run),
           owner: summon.owner,
           artKey: `summon-shot/${summon.artKey}`,
@@ -3082,28 +5447,79 @@ function updateSummons(run: RunState, delta: number) {
           targetId: target.id,
           markSeconds: 0,
           hitCooldown: 0.18,
-          hitAt: new Map(),
           canProc: summon.canProc,
         });
       }
       summon.cooldown += summon.attackCooldown;
     }
   }
-  run.summons = run.summons.filter((summon) => summon.life > 0).slice(-24);
+  const summonPool = objectPools(run).summons;
+  recycleRejectedInPlace(
+    run.summons,
+    (summon) => summon.life > 0,
+    summonPool,
+  );
+  keepNewestAndRecycleInPlace(run.summons, 24, summonPool);
 }
 
 function updateStrikes(run: RunState, delta: number, events: RunEvent[]) {
   for (const strike of run.strikes) {
     strike.delay -= delta;
+    if (strike.velocityX !== undefined || strike.velocityY !== undefined) {
+      strike.x += (strike.velocityX ?? 0) * delta;
+      strike.y += (strike.velocityY ?? 0) * delta;
+      if (
+        strike.x < -80 ||
+        strike.x > GAME_WIDTH + 80 ||
+        strike.y < -80 ||
+        strike.y > GAME_HEIGHT + 80
+      ) {
+        strike.delay = 0;
+      }
+    }
+    if (strike.hostile && strike.contactOnly) {
+      const contacted =
+        strike.delay > 0 &&
+        distanceSquared(
+          strike.x,
+          strike.y,
+          run.player.x,
+          run.player.y,
+        ) <=
+          (strike.radius + 18) ** 2;
+      if (contacted) {
+        if (hurtPlayer(run, strike.damage)) {
+          events.push({ type: "playerHit" });
+        }
+        addFx(
+          run,
+          "burst",
+          strike.x,
+          strike.y,
+          strike.radius * 1.7,
+          0.34,
+          "#742f32",
+          `${strike.artKey}/contact`,
+        );
+        strike.delay = 0;
+      }
+      continue;
+    }
     if (strike.delay > 0) continue;
     if (strike.hostile) {
       if (
         distanceSquared(strike.x, strike.y, run.player.x, run.player.y) <=
         (strike.radius + 18) ** 2 &&
-        hurtPlayer(run)
+        hurtPlayer(run, strike.damage)
       ) events.push({ type: "playerHit" });
     } else {
-      for (const enemy of run.enemies) {
+      for (const enemy of nearbyEnemies(
+        run,
+        strike.x,
+        strike.y,
+        strike.radius + 90,
+        "strike",
+      )) {
         if (enemy.hp > 0 && distanceSquared(strike.x, strike.y, enemy.x, enemy.y) <= (strike.radius + enemy.radius) ** 2) {
           damageEnemy(
             run,
@@ -3119,7 +5535,8 @@ function updateStrikes(run: RunState, delta: number, events: RunEvent[]) {
       owner: strike.hostile ? undefined : strike.owner,
     });
   }
-  run.strikes = run.strikes.filter((strike) => strike.delay > 0).slice(-80);
+  retainInPlace(run.strikes, (strike) => strike.delay > 0);
+  keepNewestInPlace(run.strikes, 80);
 }
 
 function experienceTier(value: number): 1 | 2 | 3 {
@@ -3167,7 +5584,7 @@ function mergeExperience(run: RunState) {
   const x = low.reduce((sum, pickup) => sum + pickup.x, 0) / low.length;
   const y = low.reduce((sum, pickup) => sum + pickup.y, 0) / low.length;
   const removed = new Set(low.map((pickup) => pickup.id));
-  run.pickups = run.pickups.filter((pickup) => !removed.has(pickup.id));
+  retainInPlace(run.pickups, (pickup) => !removed.has(pickup.id));
   addExperiencePickup(run, x, y, total);
 }
 
@@ -3180,8 +5597,9 @@ function removeDead(run: RunState, events: RunEvent[]) {
       living.push(enemy);
       continue;
     }
-    const dead = { ...enemy, motion: "dead" as const, motionTime: 0 };
-    run.deaths.push({ enemy: dead, life: 0.72 });
+    enemy.motion = "dead";
+    enemy.motionTime = 0;
+    pushDeathActor(run, { enemy, life: 0.72 });
     run.kills += 1;
     killedThisFrame.push(enemy);
     run.score += enemy.bossTier === "final" ? 3200 : enemy.bossTier === "mid" ? 1400 : enemy.elite ? 520 : 20;
@@ -3233,10 +5651,23 @@ function removeDead(run: RunState, events: RunEvent[]) {
     if (enemy.bossTier === "final") {
       run.currentBoss = null;
       if (run.endless) grantForgeOpportunity(run, events);
-      else events.push({ type: "finalBoss" });
+      else {
+        events.push({ type: "finalBoss" });
+        run.difficultyClearEligible = !run.testModifiers.assisted;
+        if (run.difficultyClearEligible) {
+          events.push({
+            type: "difficultyClear",
+            difficultyId: run.difficultyId,
+            unlocks: run.difficultyUnlockCandidate,
+          });
+        }
+      }
     }
   }
   run.enemies = living;
+  run.currentBoss =
+    living.find((enemy) => enemy.boss && enemy.hp > 0)?.bossTier ??
+    null;
   const ordinaryKills = killedThisFrame.filter(
     (enemy) => !enemy.boss && !enemy.intrusionAvatar,
   );
@@ -3272,7 +5703,7 @@ function updatePickups(run: RunState, delta: number, events: RunEvent[]) {
       if (pickup.kind === "healingLeaf") {
         run.player.life = Math.min(
           run.player.maxLife,
-          run.player.life + pickup.value,
+          run.player.life + pickup.value * recoveryFor(run),
         );
       } else {
         run.player.xp += pickup.value;
@@ -3287,7 +5718,7 @@ function updatePickups(run: RunState, delta: number, events: RunEvent[]) {
       }
     }
   }
-  run.pickups = run.pickups.filter((pickup) => pickup.value > 0);
+  retainInPlace(run.pickups, (pickup) => pickup.value > 0);
 }
 
 function updateFx(run: RunState, delta: number) {
@@ -3296,8 +5727,15 @@ function updateFx(run: RunState, delta: number) {
     actor.life -= delta;
     actor.enemy.motionTime += delta;
   }
-  run.fx = run.fx.filter((fx) => fx.life > 0).slice(-260);
-  run.deaths = run.deaths.filter((actor) => actor.life > 0).slice(-36);
+  retainInPlace(run.fx, (fx) => fx.life > 0);
+  keepNewestInPlace(run.fx, 260);
+  const deathPool = objectPools(run).deaths;
+  recycleRejectedInPlace(
+    run.deaths,
+    (actor) => actor.life > 0,
+    deathPool,
+  );
+  keepNewestAndRecycleInPlace(run.deaths, 36, deathPool);
   run.terminalLabelLife = Math.max(0, run.terminalLabelLife - delta);
 }
 
@@ -3313,12 +5751,20 @@ function fireWeaveNode(
   const owner: ProjectileOwner = node.kind === "fusion"
     ? `fusion:${node.sourceId}`
     : `weave:${node.instanceId}`;
+  const target = pickNearest(run);
+  captureAttackReplay(
+    run,
+    owner,
+    node.passEffects,
+    target,
+    node.kind === "weapon" ? (node.sourceId as WeaponId) : undefined,
+  );
   for (const effect of node.passEffects) {
     fireEffect(
       run,
       effect,
       owner,
-      undefined,
+      target,
       damageScale,
       false,
     );
@@ -3533,6 +5979,182 @@ function advancePerkedWeave(
   }
 }
 
+function pushCelestialStrike(
+  run: RunState,
+  id: CelestialIntrusionId,
+  x: number,
+  y: number,
+  radius: number,
+  delay: number,
+  suffix: string,
+  options: {
+    velocityX?: number;
+    velocityY?: number;
+    contactOnly?: boolean;
+  } = {},
+) {
+  run.strikes.push({
+    id: nextId(run),
+    owner: "terminal",
+    artKey: `celestial/${id}/hostile/${suffix}`,
+    x,
+    y,
+    radius,
+    damage: 1,
+    delay,
+    maxDelay: delay,
+    hostile: true,
+    velocityX: options.velocityX,
+    velocityY: options.velocityY,
+    contactOnly: options.contactOnly,
+  });
+}
+
+/** Returns the authored cadence before this天变 may act again. */
+export function emitCelestialHazard(
+  run: RunState,
+  id: CelestialIntrusionId,
+): number {
+  switch (id) {
+    case "thunderTrial": {
+      const offsets = [
+        [0, 0],
+        [92, 0],
+        [-92, 0],
+        [0, 92],
+      ] as const;
+      for (let index = 0; index < offsets.length; index += 1) {
+        const [dx, dy] = offsets[index];
+        pushCelestialStrike(
+          run,
+          id,
+          clamp(run.player.x + dx, 55, GAME_WIDTH - 55),
+          clamp(run.player.y + dy, 55, GAME_HEIGHT - 55),
+          58,
+          0.72 + index * 0.16,
+          `lightning-${index + 1}`,
+        );
+      }
+      return 3.25;
+    }
+    case "galeTrial": {
+      const travelAngle = Math.atan2(
+        run.player.y - GAME_HEIGHT / 2,
+        run.player.x - GAME_WIDTH / 2,
+      );
+      const perpendicular = travelAngle + Math.PI / 2;
+      for (let lane = -1; lane <= 1; lane += 1) {
+        const startX =
+          run.player.x - Math.cos(travelAngle) * 760 + Math.cos(perpendicular) * lane * 118;
+        const startY =
+          run.player.y - Math.sin(travelAngle) * 760 + Math.sin(perpendicular) * lane * 118;
+        pushCelestialStrike(run, id, startX, startY, 44, 4.5, `gale-lane-${lane + 2}`, {
+          velocityX: Math.cos(travelAngle) * 340,
+          velocityY: Math.sin(travelAngle) * 340,
+          contactOnly: true,
+        });
+      }
+      addFx(
+        run,
+        "beam",
+        run.player.x - Math.cos(travelAngle) * 700,
+        run.player.y - Math.sin(travelAngle) * 700,
+        94,
+        1.1,
+        "#72868a",
+        `celestial/${id}/hostile/wind-band`,
+        {
+          x2: run.player.x + Math.cos(travelAngle) * 700,
+          y2: run.player.y + Math.sin(travelAngle) * 700,
+        },
+      );
+      return 4.8;
+    }
+    case "fireTrial": {
+      const centers = [
+        [run.player.x, run.player.y],
+        [run.player.x + 125, run.player.y - 72],
+        [run.player.x - 125, run.player.y + 72],
+      ] as const;
+      for (let repeat = 0; repeat < 2; repeat += 1) {
+        for (let index = 0; index < centers.length; index += 1) {
+          const [x, y] = centers[index];
+          pushCelestialStrike(
+            run,
+            id,
+            clamp(x, 70, GAME_WIDTH - 70),
+            clamp(y, 70, GAME_HEIGHT - 70),
+            94,
+            1.05 + repeat * 1.15 + index * 0.08,
+            `fire-field-${repeat + 1}-${index + 1}`,
+          );
+        }
+      }
+      return 5.1;
+    }
+    case "frostTrial": {
+      const x = run.player.x;
+      const y = run.player.y;
+      for (let pulse = 0; pulse < 10; pulse += 1) {
+        pushCelestialStrike(
+          run,
+          id,
+          x,
+          y,
+          260,
+          0.6 + pulse * 0.5,
+          `frost-domain-${pulse + 1}`,
+        );
+      }
+      addFx(run, "ring", x, y, 260, 5, "#708798", `celestial/${id}/hostile/frost-domain`);
+      return 7.2;
+    }
+    case "ghostMarch": {
+      const side = random(run) < 0.5 ? -1 : 1;
+      const x = side < 0 ? -36 : GAME_WIDTH + 36;
+      for (let index = 0; index < 5; index += 1) {
+        if (run.enemies.length >= ENDLESS_ACTOR_CAP) break;
+        const ghost = spawnEnemy(run, "puppet", {
+          x,
+          y: clamp(
+            run.player.y + (index - 2) * 72,
+            45,
+            GAME_HEIGHT - 45,
+          ),
+        });
+        ghost.celestialSourceId = id;
+        ghost.artKey = `celestial/${id}/hostile/ghost-${index + 1}`;
+        ghost.heading = side < 0 ? 0 : Math.PI;
+        ghost.ralliedUntil = run.elapsed + 12;
+        ghost.attackCooldown = 0.55 + index * 0.12;
+      }
+      return 8.2;
+    }
+    case "eclipseTrial": {
+      const avatar = run.enemies.find(
+        (enemy) => enemy.id === run.intrusionAvatarId,
+      );
+      let x = avatar?.x ?? run.player.x - 210;
+      let y = avatar?.y ?? run.player.y;
+      for (let jump = 0; jump < 8; jump += 1) {
+        const remaining = 8 - jump;
+        x += (run.player.x - x) / remaining + (jump % 2 === 0 ? 42 : -42);
+        y += (run.player.y - y) / remaining + (jump % 3 - 1) * 34;
+        pushCelestialStrike(
+          run,
+          id,
+          clamp(x, 50, GAME_WIDTH - 50),
+          clamp(y, 50, GAME_HEIGHT - 50),
+          48,
+          0.44 + jump * 0.18,
+          `eclipse-jump-${jump + 1}`,
+        );
+      }
+      return 4.4;
+    }
+  }
+}
+
 function updateEndless(run: RunState, delta: number, events: RunEvent[]) {
   if (!run.endless || !run.weave) return;
 
@@ -3545,11 +6167,17 @@ function updateEndless(run: RunState, delta: number, events: RunEvent[]) {
   if (active?.phase === "expired") {
     const expiredId = active.id;
     if (run.intrusionAvatarId !== undefined) {
-      run.enemies = run.enemies.filter(
+      retainInPlace(
+        run.enemies,
         (enemy) => enemy.id !== run.intrusionAvatarId,
       );
     }
-    run.strikes = run.strikes.filter(
+    retainInPlace(
+      run.enemies,
+      (enemy) => enemy.celestialSourceId !== expiredId,
+    );
+    retainInPlace(
+      run.strikes,
       (strike) =>
         !(
           strike.hostile &&
@@ -3561,14 +6189,21 @@ function updateEndless(run: RunState, delta: number, events: RunEvent[]) {
     active = undefined;
   }
   if (beforePhase === "warning" && active?.phase === "active" && run.intrusionAvatarId === undefined) {
+    run.celestialHazardClock = 0;
     const avatarType: Record<string, EnemyArchetype> = {
       thunderTrial: "lion",
       galeTrial: "rib",
       fireTrial: "lantern",
-      frostTrial: "taotie",
+      frostTrial: "abacus",
       ghostMarch: "puppet",
-      eclipseTrial: "nian",
+      eclipseTrial: "shoe",
     };
+    if (run.enemies.length >= ENDLESS_ACTOR_CAP) {
+      const replaceIndex = run.enemies.findIndex(
+        (enemy) => !enemy.boss && !enemy.intrusionAvatar,
+      );
+      if (replaceIndex >= 0) run.enemies.splice(replaceIndex, 1);
+    }
     const avatar = spawnEnemy(run, avatarType[active.id], { intrusion: true });
     run.weave = {
       ...run.weave,
@@ -3599,19 +6234,7 @@ function updateEndless(run: RunState, delta: number, events: RunEvent[]) {
     }
     run.celestialHazardClock -= delta;
     if (run.celestialHazardClock <= 0) {
-      run.celestialHazardClock = 2.4;
-      run.strikes.push({
-        id: nextId(run),
-        owner: "terminal",
-        artKey: `celestial/${active.id}/hostile`,
-        x: clamp(run.player.x + randomRange(run, -130, 130), 60, GAME_WIDTH - 60),
-        y: clamp(run.player.y + randomRange(run, -100, 100), 60, GAME_HEIGHT - 60),
-        radius: 72,
-        damage: 1,
-        delay: 1.05,
-        maxDelay: 1.05,
-        hostile: true,
-      });
+      run.celestialHazardClock = emitCelestialHazard(run, active.id);
     }
   }
 
@@ -3640,11 +6263,74 @@ export function startEndless(run: RunState) {
   resetWeaveCycleRuntime(run);
   run.forgeAt = run.elapsed + 120;
   run.forgeCredits = 0;
-  run.endlessBossAt = run.elapsed + 240;
+  run.endlessBossAt = Number.POSITIVE_INFINITY;
   run.endlessBossCount = 0;
   run.intrusionAt = run.elapsed + 70;
+  run.endlessDirector = {
+    startedAt: run.elapsed,
+    nonBossThreatBudget: 0,
+    bossBudget: 0,
+    totalThreatSpent: 0,
+    commonSpawned: 0,
+    eliteSpawned: 0,
+    bossesSpawned: 0,
+    recentBossIds: [],
+    nextBossId: "troupeMaster",
+    pendingBossSlot: false,
+    lastSample: sampleEndlessDifficulty(0, difficultyFor(run)),
+  };
+  run.endlessDirector.lastSample = getEndlessDifficultySample(run);
+  run.endlessDirector.nextBossId = chooseEndlessBossId(run);
   run.terminalLabel = "器盘开始转动";
   run.terminalLabelLife = 2.2;
+}
+
+/** Safe, non-persistent test jump used by the BAIGONG pause panel. */
+export function jumpEndlessMinutesForTest(
+  run: RunState,
+  minutes: number,
+  events: RunEvent[] = [],
+): boolean {
+  void events;
+  if (run.pendingRareChoice || run.weave?.activeIntrusion?.phase === "defeated") {
+    return false;
+  }
+  run.testModifiers.assisted = true;
+  run.difficultyClearEligible = false;
+  if (!run.endless || !run.endlessDirector || !run.weave) {
+    startEndless(run);
+  }
+  const director = run.endlessDirector;
+  if (!director) return false;
+  const safeMinutes = clamp(Number.isFinite(minutes) ? minutes : 0, 0, 80);
+  run.elapsed = director.startedAt + safeMinutes * 60;
+  director.nonBossThreatBudget = 0;
+  director.bossBudget = 0;
+  director.pendingBossSlot = false;
+  director.lastSample = getEndlessDifficultySample(run);
+  // The jump is a debugger seek, not a simulation step.  Put every modal
+  // schedule in the future so no upgrade/forge/intrusion is silently crossed.
+  run.forgeAt = run.elapsed + 120;
+  run.intrusionAt = run.elapsed + 70;
+  run.spawnClock = Math.max(run.spawnClock, 0.05);
+  run.terminalLabel = `测试：无尽${Math.round(safeMinutes)}分`;
+  run.terminalLabelLife = 2.2;
+  return true;
+}
+
+/** Spawns one authored endless boss through the normal spawn path. */
+export function spawnEndlessBossForTest(
+  run: RunState,
+  bossId: EndlessBossId,
+  events: RunEvent[] = [],
+): boolean {
+  if (!ENDLESS_BOSS_IDS.includes(bossId)) return false;
+  run.testModifiers.assisted = true;
+  run.difficultyClearEligible = false;
+  if (!run.endless || !run.endlessDirector || !run.weave) {
+    startEndless(run);
+  }
+  return spawnEndlessBoss(run, events, bossId);
 }
 
 export function insertEndlessWeapon(
@@ -3831,6 +6517,7 @@ export function stepRun(run: RunState, deltaSeconds: number, moveInput: MoveInpu
   dispatchEndlessPerkEvent(run, { type: "interval" });
 
   updateSpawning(run, delta, events);
+  rebuildEnemyGrid(run);
   updateActiveEffects(run, delta);
   updateOrbits(run, delta);
   updateProjectiles(run, delta);

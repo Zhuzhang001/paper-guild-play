@@ -1,9 +1,13 @@
-import type { EnemySpriteSheets } from "../actors/enemySprites";
+import type {
+  EnemySpriteSheets,
+  EnemyVisualId,
+} from "../actors/enemySprites";
 import type { BossTier, EnemyArchetype } from "../art";
 
 export type EnemyAnimationPose = {
   id: number;
   type: EnemyArchetype;
+  visualId?: EnemyVisualId;
   x: number;
   y: number;
   vx: number;
@@ -191,7 +195,7 @@ export function drawEnemyAnimation(
   sheets: EnemySpriteSheets | null,
   pose: EnemyAnimationPose,
 ) {
-  const image = sheets?.[pose.type];
+  const image = sheets?.[pose.visualId ?? pose.type];
   if (!image?.complete || image.naturalWidth <= 0) {
     drawFallback(ctx, pose);
     return;
@@ -210,13 +214,40 @@ export function drawEnemyAnimation(
   );
   const facing = authoredFacing(sector);
   const stateProgress = Math.max(0, Math.min(1, pose.stateProgress));
+  const usesEndlessBossAtlas =
+    pose.visualId !== undefined && pose.visualId !== pose.type;
   let row: number = facing.row;
   let column =
     speed > 3 && pose.state === "moving"
       ? Math.floor(Math.max(0, pose.travelled) / STRIDE[pose.type]) % 4
       : 0;
+  let spriteMirror = facing.mirror;
+  let spriteRotation = facing.rotation;
 
-  if (pose.state === "attacking") {
+  if (usesEndlessBossAtlas) {
+    // The authored v6 Boss sheets devote complete rows to idle, travel,
+    // attacks, and hurt/death. Keep these figures upright and mirror the
+    // side-facing travel row instead of rotating a painted person as if it
+    // were a top-down token.
+    spriteMirror = Math.cos(motionHeading) < 0;
+    spriteRotation = 0;
+    if (pose.state === "dead") {
+      row = 3;
+      column = Math.min(3, 2 + Math.floor(stateProgress * 2));
+    } else if (pose.state === "hurt") {
+      row = 3;
+      column = Math.min(1, Math.floor(stateProgress * 2));
+    } else if (pose.state === "attacking") {
+      row = 2;
+      column = Math.min(3, Math.floor(stateProgress * 4));
+    } else if (speed > 3) {
+      row = 1;
+      column = Math.floor(Math.max(0, pose.travelled) / STRIDE[pose.type]) % 4;
+    } else {
+      row = 0;
+      column = Math.floor((pose.id + pose.travelled / 24) % 4);
+    }
+  } else if (pose.state === "attacking") {
     row = 3;
     column = Math.min(2, Math.floor(stateProgress * 3));
   } else if (pose.state === "hurt") {
@@ -245,11 +276,11 @@ export function drawEnemyAnimation(
     pose.y + Math.sin(motionHeading) * attackPush + gait.lift + deathDrop,
   );
   ctx.rotate(
-    facing.rotation +
+    spriteRotation +
       gait.rotation +
       (pose.state === "dead" ? stateProgress * 0.08 : 0),
   );
-  if (facing.mirror) ctx.scale(-1, 1);
+  if (spriteMirror) ctx.scale(-1, 1);
   const attackScale =
     pose.state === "attacking" ? 1 + attackCurve * 0.065 : 1;
   ctx.scale(

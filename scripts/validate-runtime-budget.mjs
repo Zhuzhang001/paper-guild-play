@@ -6,7 +6,7 @@ import process from "node:process";
 const require = createRequire(import.meta.url);
 const sharp = (() => {
   try {
-    return require("sharp");
+    return require(process.env.PAPER_GUILD_SHARP_MODULE ?? "sharp");
   } catch {
     return require("../node_modules/.pnpm/node_modules/sharp");
   }
@@ -35,7 +35,7 @@ const files = {
     "public/art/season-autumn-runtime.webp",
     "public/art/season-winter-runtime.webp",
   ],
-  enemies: [
+  standardEnemies: [
     "public/enemies-v3/cup-runtime.webp",
     "public/enemies-v3/shoe-runtime.webp",
     "public/enemies-v3/lantern-runtime.webp",
@@ -44,9 +44,20 @@ const files = {
     "public/enemies-v3/umbrella-runtime.webp",
     "public/enemies-v3/lion-runtime.webp",
     "public/enemies-v3/puppet-runtime.webp",
+  ],
+  standardBosses: [
     "public/enemies-v3/taotie-runtime.webp",
     "public/enemies-v3/nian-runtime.webp",
   ],
+  endlessBosses: [
+    "public/enemies-v6/boss-opera-master-v6.webp",
+    "public/enemies-v6/boss-ledger-clerk-v6.webp",
+    "public/enemies-v6/boss-night-watchman-v6.webp",
+    "public/enemies-v6/boss-kiln-overseer-v6.webp",
+    "public/enemies-v6/boss-siege-cart-v6.webp",
+    "public/enemies-v6/boss-banner-officer-v6.webp",
+  ],
+  bossEffects: ["public/enemies-v6/boss-effects-v6.webp"],
   always: [
     "public/terms-v3/solar-terms-runtime.webp",
     "public/art-v3/hero-directions-v3.webp",
@@ -85,39 +96,50 @@ async function sum(group) {
   ).reduce((total, [, bytes]) => total + bytes, 0);
 }
 
+async function largest(group, count) {
+  return (await Promise.all(group.map(decodedBytes)))
+    .sort((a, b) => b - a)
+    .slice(0, count)
+    .reduce((total, bytes) => total + bytes, 0);
+}
+
 const totals = Object.fromEntries(
   await Promise.all(
     Object.entries(files).map(async ([group, entries]) => [group, await sum(entries)]),
   ),
 );
 
-// All four season plates and every enemy sheet are deliberately included.
-// The visual pack is pruned to at most eight held weapon atlases and four
-// active fusion atlases; this is stricter than a normal standard-mode frame.
-const largestWeaponBytes = (
-  await Promise.all(files.weapons.map(decodedBytes))
-)
-  .sort((a, b) => b - a)
-  .slice(0, 8)
-  .reduce((total, bytes) => total + bytes, 0);
-const largestFusionBytes = (
-  await Promise.all(files.fusions.map(decodedBytes))
-)
-  .sort((a, b) => b - a)
-  .slice(0, 4)
-  .reduce((total, bytes) => total + bytes, 0);
+// Runtime retention mirrors the browser stores: current season plus its two
+// neighbours, all currently active ordinary archetypes, and either one
+// standard Boss or up to three concurrent endless Bosses plus the preselected
+// next Boss. The v6 effect atlas only lives with an endless Boss.
+const retainedSeasonBytes = await largest(files.seasons, 3);
+const retainedStandardEnemyBytes = totals.standardEnemies;
+const standardBossPeakBytes = await largest(files.standardBosses, 1);
+const endlessBossPeakBytes = await largest(files.endlessBosses, 4);
+const standardActorPeakBytes =
+  retainedStandardEnemyBytes + standardBossPeakBytes;
+const endlessActorPeakBytes =
+  retainedStandardEnemyBytes + endlessBossPeakBytes + totals.bossEffects;
+const actorPeakBytes = Math.max(standardActorPeakBytes, endlessActorPeakBytes);
+const largestWeaponBytes = await largest(files.weapons, 8);
+const largestFusionBytes = await largest(files.fusions, 4);
 
 const peakBytes =
-  totals.seasons +
-  totals.enemies +
+  retainedSeasonBytes +
+  actorPeakBytes +
   totals.always +
   largestWeaponBytes +
   largestFusionBytes;
 const limitBytes = 96 * 1024 * 1024;
 const report = {
   assumptions: {
-    seasonSheets: files.seasons.length,
-    enemySheets: files.enemies.length,
+    retainedSeasonSheets: 3,
+    activeOrdinaryEnemySheets: files.standardEnemies.length,
+    activeStandardBossSheets: 1,
+    maxConcurrentEndlessBossSheets: 3,
+    preselectedNextBossSheets: 1,
+    authoredBossEffectSheets: files.bossEffects.length,
     heldWeaponAtlases: 8,
     activeFusionAtlases: 4,
     rgbaBytesPerPixel: 4,
@@ -128,6 +150,13 @@ const report = {
       Number((value / 1024 / 1024).toFixed(2)),
     ]),
   ),
+  lifecyclePeaksMiB: {
+    seasons: Number((retainedSeasonBytes / 1024 / 1024).toFixed(2)),
+    standardActors: Number((standardActorPeakBytes / 1024 / 1024).toFixed(2)),
+    endlessActors: Number((endlessActorPeakBytes / 1024 / 1024).toFixed(2)),
+    retainedWeapons: Number((largestWeaponBytes / 1024 / 1024).toFixed(2)),
+    retainedFusions: Number((largestFusionBytes / 1024 / 1024).toFixed(2)),
+  },
   estimatedPeakMiB: Number((peakBytes / 1024 / 1024).toFixed(2)),
   limitMiB: 96,
   pass: peakBytes <= limitBytes,

@@ -42,6 +42,26 @@ export type AudioCueDefinition = {
   lane?: AudioLane;
 };
 
+export const AUDIO_TONAL_SYSTEM = {
+  bpm: 72,
+  meter: [6, 8] as const,
+  tonic: "D",
+  pentatonicSemitones: [0, 2, 4, 7, 9] as const,
+  loopSeconds: 60,
+  phaseLocked: true,
+} as const;
+
+export const AUDIO_SHARED_COOLDOWNS_MS = {
+  weaponFire: 110,
+  weaponHit: 150,
+  fusion: 260,
+} as const;
+
+export const AUDIO_COMBAT_ACCENT_DUCK = {
+  floor: 0.56,
+  seconds: 0.18,
+} as const;
+
 const music = (url: string, volume = 0.84): AudioCueDefinition => ({
   url,
   bus: "music",
@@ -74,28 +94,38 @@ const weapon = (
   bus: "sfx",
   volume,
   cooldownMs,
-  categoryCooldownMs: kind === "fire" ? 110 : 150,
+  categoryCooldownMs:
+    kind === "fire"
+      ? AUDIO_SHARED_COOLDOWNS_MS.weaponFire
+      : AUDIO_SHARED_COOLDOWNS_MS.weaponHit,
   maxVoices: kind === "fire" ? 1 : 2,
-  playbackRateVariation: kind === "fire" ? 0.004 : 0.006,
+  // Three authored variants provide material variation without detuning the
+  // pitched layer away from the shared D-gong pentatonic system.
+  playbackRateVariation: 0,
   priority: kind === "fire" ? 30 : 25,
   category: kind === "fire" ? "weapon-fire" : "weapon-hit",
   frameLimit: 1,
   lane: "combat-base",
 });
 
-const fusion = (id: FusionId, materialBias: number): AudioCueDefinition => ({
-  url: `/audio/fusion-${id}.wav`,
-  bus: "sfx",
-  volume: 0.42,
-  cooldownMs: 420,
-  categoryCooldownMs: 260,
-  maxVoices: 1,
-  playbackRateVariation: Math.abs(materialBias) * 0.01,
-  priority: 34,
-  category: "fusion",
-  frameLimit: 1,
-  lane: "combat-accent",
-});
+const fusion = (id: FusionId, materialBias: number): AudioCueDefinition => {
+  // Retain the catalog's material-bias argument as authored metadata, but do
+  // not turn it into arbitrary playback-rate detuning at runtime.
+  void materialBias;
+  return {
+    url: `/audio/fusion-${id}.wav`,
+    bus: "sfx",
+    volume: 0.42,
+    cooldownMs: 420,
+    categoryCooldownMs: AUDIO_SHARED_COOLDOWNS_MS.fusion,
+    maxVoices: 1,
+    playbackRateVariation: 0,
+    priority: 34,
+    category: "fusion",
+    frameLimit: 1,
+    lane: "combat-accent",
+  };
+};
 
 const sfx = (
   url: string,
@@ -236,11 +266,13 @@ export const AUDIO_CUES = {
     cooldownMs: 700,
     duckMusicDb: -3.5,
     duckSeconds: 1.2,
+    lane: "combat-accent",
   }),
   "sfx.ultimate": sfx("/audio/sfx-ultimate.wav", 0.86, "milestone", 92, {
     cooldownMs: 1_400,
     duckMusicDb: -4,
     duckSeconds: 1.55,
+    lane: "combat-accent",
   }),
   "sfx.player-hit": sfx("/audio/sfx-player-hit.wav", 0.72, "player", 88, {
     cooldownMs: 240,
@@ -292,7 +324,7 @@ export type AudioSettings = {
   ambient?: number;
 };
 
-type ResolvedAudioSettings = Required<AudioSettings>;
+export type ResolvedAudioSettings = Required<AudioSettings>;
 
 export type PlaySfxOptions = {
   volume?: number;
@@ -313,7 +345,7 @@ export type AudioFramePlanEntry = {
   priority: number;
 };
 
-const DEFAULT_SETTINGS: ResolvedAudioSettings = {
+export const DEFAULT_AUDIO_SETTINGS: Readonly<ResolvedAudioSettings> = {
   muted: false,
   master: 0.68,
   music: 0.5,
@@ -332,10 +364,12 @@ const PREVIOUS_DEFAULT_SETTINGS: ResolvedAudioSettings = {
 export const AUDIO_MIX_LIMITS = {
   mobileSfxVoices: 8,
   desktopSfxVoices: 10,
+  reservedPriorityVoices: 2,
 } as const;
 
 const STORAGE_KEY = "paper-guild.audio.v1";
-const MIX_REVISION = 3;
+export const AUDIO_MIX_REVISION = 3;
+export const BOSS_ATMOSPHERE_QUIET_MS = 5_000;
 const MUSIC_BY_SEASON: Readonly<Record<SeasonId, MusicCueId>> = {
   spring: "music.spring",
   summer: "music.summer",
@@ -393,33 +427,44 @@ function cueUrls(definition: AudioCueDefinition): readonly string[] {
     : definition.url;
 }
 
+export function migrateAudioSettings(savedValue: unknown): ResolvedAudioSettings {
+  const saved =
+    savedValue && typeof savedValue === "object"
+      ? savedValue as Partial<ResolvedAudioSettings> & { mixRevision?: number }
+      : {};
+  const migrateValue = (
+    key: "master" | "music" | "sfx" | "ambient",
+  ) => {
+    const value = saved[key];
+    if (typeof value !== "number") return DEFAULT_AUDIO_SETTINGS[key];
+    if (
+      saved.mixRevision !== AUDIO_MIX_REVISION &&
+      Math.abs(value - PREVIOUS_DEFAULT_SETTINGS[key]) < 0.001
+    ) {
+      return DEFAULT_AUDIO_SETTINGS[key];
+    }
+    return value;
+  };
+  return {
+    muted:
+      typeof saved.muted === "boolean"
+        ? saved.muted
+        : DEFAULT_AUDIO_SETTINGS.muted,
+    master: clampUnit(migrateValue("master")),
+    music: clampUnit(migrateValue("music")),
+    sfx: clampUnit(migrateValue("sfx")),
+    ambient: clampUnit(migrateValue("ambient")),
+  };
+}
+
 function readSettings(): ResolvedAudioSettings {
-  if (typeof window === "undefined") return { ...DEFAULT_SETTINGS };
+  if (typeof window === "undefined") return { ...DEFAULT_AUDIO_SETTINGS };
   try {
-    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as
-      Partial<ResolvedAudioSettings> & { mixRevision?: number };
-    const migrateValue = (
-      key: "master" | "music" | "sfx" | "ambient",
-    ) => {
-      const value = saved[key];
-      if (typeof value !== "number") return DEFAULT_SETTINGS[key];
-      if (
-        saved.mixRevision !== MIX_REVISION &&
-        Math.abs(value - PREVIOUS_DEFAULT_SETTINGS[key]) < 0.001
-      ) {
-        return DEFAULT_SETTINGS[key];
-      }
-      return value;
-    };
-    return {
-      muted: typeof saved.muted === "boolean" ? saved.muted : DEFAULT_SETTINGS.muted,
-      master: clampUnit(migrateValue("master")),
-      music: clampUnit(migrateValue("music")),
-      sfx: clampUnit(migrateValue("sfx")),
-      ambient: clampUnit(migrateValue("ambient")),
-    };
+    return migrateAudioSettings(
+      JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}"),
+    );
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return { ...DEFAULT_AUDIO_SETTINGS };
   }
 }
 
@@ -446,13 +491,13 @@ export function planSfxFrame(
   });
 
   const bossInFrame = [...grouped.keys()].some((cue) => definitionFor(cue).category === "boss");
-  const fusionInFrame = [...grouped.keys()].some(
-    (cue) => definitionFor(cue).category === "fusion",
+  const combatAccentInFrame = [...grouped.keys()].some(
+    (cue) => definitionFor(cue).lane === "combat-accent",
   );
   const candidates = [...grouped.entries()]
     .filter(([cue]) => !(suppressAtmosphere || bossInFrame) || !isAtmosphere(cue))
     .filter(([cue]) => {
-      if (!fusionInFrame) return true;
+      if (!combatAccentInFrame) return true;
       const category = definitionFor(cue).category;
       return category !== "weapon-fire" && category !== "weapon-hit";
     })
@@ -513,6 +558,98 @@ export function getTermAmbienceCue(term: SolarTermCue): SfxCueId {
   return AMBIENCE_BY_TERM[term.ambience];
 }
 
+function definitionUsesReservedVoice(definition: AudioCueDefinition) {
+  return (
+    definition.category === "boss" ||
+    definition.category === "player" ||
+    definition.category === "milestone"
+  );
+}
+
+export function isReservedPriorityCue(cue: SfxCueId) {
+  return definitionUsesReservedVoice(definitionFor(cue));
+}
+
+export function getSfxVoiceBudget(mobile: boolean) {
+  const total = mobile
+    ? AUDIO_MIX_LIMITS.mobileSfxVoices
+    : AUDIO_MIX_LIMITS.desktopSfxVoices;
+  return {
+    total,
+    base: total - AUDIO_MIX_LIMITS.reservedPriorityVoices,
+    reserved: AUDIO_MIX_LIMITS.reservedPriorityVoices,
+  } as const;
+}
+
+export type SfxVoiceSnapshot = {
+  cue: SfxCueId;
+  priority: number;
+  startedAt: number;
+};
+
+export function planSfxVoiceAdmission(options: {
+  cue: SfxCueId;
+  priority: number;
+  force?: boolean;
+  mobile: boolean;
+  live: readonly SfxVoiceSnapshot[];
+  pending?: readonly SfxCueId[];
+}) {
+  const budget = getSfxVoiceBudget(options.mobile);
+  const pending = options.pending ?? [];
+  const reservedRequest = isReservedPriorityCue(options.cue);
+  const liveBaseIndices = options.live
+    .map((voice, index) => ({ voice, index }))
+    .filter(({ voice }) => !isReservedPriorityCue(voice.cue));
+  const pendingBaseCount = pending.filter(
+    (cue) => !isReservedPriorityCue(cue),
+  ).length;
+  const totalCount = options.live.length + pending.length;
+  if (reservedRequest && totalCount < budget.total) {
+    return { admitted: true, preemptIndex: undefined } as const;
+  }
+  if (
+    !reservedRequest &&
+    totalCount < budget.total &&
+    liveBaseIndices.length + pendingBaseCount < budget.base
+  ) {
+    return { admitted: true, preemptIndex: undefined } as const;
+  }
+
+  const candidates = reservedRequest
+    ? options.live.map((voice, index) => ({ voice, index }))
+    : liveBaseIndices;
+  const lowest = [...candidates].sort(
+    (left, right) =>
+      left.voice.priority - right.voice.priority ||
+      left.voice.startedAt - right.voice.startedAt,
+  )[0];
+  if (
+    !lowest ||
+    (!options.force && lowest.voice.priority >= options.priority)
+  ) {
+    return { admitted: false, preemptIndex: undefined } as const;
+  }
+  const remainingTotal = totalCount - 1;
+  const remainingBase =
+    liveBaseIndices.length -
+    (isReservedPriorityCue(lowest.voice.cue) ? 0 : 1) +
+    pendingBaseCount;
+  return {
+    admitted:
+      remainingTotal < budget.total &&
+      (reservedRequest || remainingBase < budget.base),
+    preemptIndex: lowest.index,
+  } as const;
+}
+
+export function resolveLoopPhase(elapsedSeconds: number, loopSeconds: number) {
+  if (!Number.isFinite(elapsedSeconds) || !Number.isFinite(loopSeconds) || loopSeconds <= 0) {
+    return 0;
+  }
+  return ((elapsedSeconds % loopSeconds) + loopSeconds) % loopSeconds;
+}
+
 export class AudioManager {
   private context: AudioContext | null = null;
   private masterGain: GainNode | null = null;
@@ -528,7 +665,7 @@ export class AudioManager {
   private voices = new Set<Voice>();
   private lastPlayed = new Map<AudioCueId, number>();
   private lastCategoryPlayed = new Map<SfxCategory, number>();
-  private pendingByCue = new Map<AudioCueId, number>();
+  private pendingByCue = new Map<SfxCueId, number>();
   private pendingVoiceCount = 0;
   private pendingFrame: QueuedSfxRequest[] = [];
   private frameScheduled = false;
@@ -537,19 +674,18 @@ export class AudioManager {
   private musicVoice: MusicVoice | null = null;
   private requestedMusic: MusicCueId | null = null;
   private musicRequest = 0;
+  private musicTransportEpoch: number | null = null;
   private bossQuietUntil = 0;
   private initialized = false;
   private destroyed = false;
   private pausedByLifecycle = false;
   private settings: ResolvedAudioSettings = readSettings();
-  private readonly sfxVoiceLimit: number;
+  private readonly mobileMix: boolean;
 
   constructor() {
     const coarsePointer = typeof window !== "undefined"
       && (navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches);
-    this.sfxVoiceLimit = coarsePointer
-      ? AUDIO_MIX_LIMITS.mobileSfxVoices
-      : AUDIO_MIX_LIMITS.desktopSfxVoices;
+    this.mobileMix = coarsePointer;
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", this.handleVisibility);
     }
@@ -602,7 +738,7 @@ export class AudioManager {
       try {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
           ...this.settings,
-          mixRevision: MIX_REVISION,
+          mixRevision: AUDIO_MIX_REVISION,
         }));
       } catch {
         // Audio remains usable when storage is unavailable.
@@ -650,6 +786,11 @@ export class AudioManager {
 
     const now = this.context.currentTime;
     const fade = Math.max(0.05, fadeSeconds);
+    if (this.musicTransportEpoch === null) this.musicTransportEpoch = now;
+    const phaseOffset = resolveLoopPhase(
+      now - this.musicTransportEpoch,
+      buffer.duration,
+    );
     const source = this.context.createBufferSource();
     const gain = this.context.createGain();
     source.buffer = buffer;
@@ -667,7 +808,7 @@ export class AudioManager {
       bus: "music",
     }) as MusicVoice;
     this.musicVoice = voice;
-    source.start();
+    source.start(0, phaseOffset);
 
     const previous = [...this.voices]
       .filter((candidate): candidate is MusicVoice =>
@@ -689,6 +830,7 @@ export class AudioManager {
   stopMusic(fadeSeconds = 0.35) {
     this.requestedMusic = null;
     this.musicRequest += 1;
+    this.musicTransportEpoch = null;
     const voice = this.musicVoice;
     if (!voice || !this.context) return;
     this.musicVoice = null;
@@ -705,6 +847,7 @@ export class AudioManager {
     this.destroyed = true;
     this.requestedMusic = null;
     this.musicRequest += 1;
+    this.musicTransportEpoch = null;
     this.cancelFrameFlush();
     this.rejectPendingFrame();
     if (typeof document !== "undefined") {
@@ -823,7 +966,7 @@ export class AudioManager {
       if (matching.length === 0) continue;
       const definition = definitionFor(entry.cue);
       if (definition.category === "boss") {
-        this.bossQuietUntil = nowMilliseconds() + 5_000;
+        this.bossQuietUntil = nowMilliseconds() + BOSS_ATMOSPHERE_QUIET_MS;
       }
       const options = this.combineOptions(matching, entry.count);
       void this.startSfx(entry.cue, entry.count, options)
@@ -886,7 +1029,9 @@ export class AudioManager {
     const liveForCue = [...this.voices].filter((voice) => voice.cue === cue).length;
     const pendingForCue = this.pendingByCue.get(cue) ?? 0;
     if (liveForCue + pendingForCue >= (definition.maxVoices ?? 1)) return false;
-    if (!this.reserveGlobalVoice(definition.priority ?? 0, options.force ?? false)) return false;
+    if (!this.reserveGlobalVoice(cue, definition.priority ?? 0, options.force ?? false)) {
+      return false;
+    }
 
     this.lastPlayed.set(cue, nowMs);
     if (category) this.lastCategoryPlayed.set(category, nowMs);
@@ -967,7 +1112,10 @@ export class AudioManager {
       bus: definition.bus,
     });
     if (definition.lane === "combat-accent") {
-      this.duckCombatBase(0.56, 0.18);
+      this.duckCombatBase(
+        AUDIO_COMBAT_ACCENT_DUCK.floor,
+        AUDIO_COMBAT_ACCENT_DUCK.seconds,
+      );
     }
     if (definition.duckMusicDb && definition.duckSeconds) {
       this.duckFor(definition.duckMusicDb, definition.duckSeconds);
@@ -976,15 +1124,28 @@ export class AudioManager {
     return true;
   }
 
-  private reserveGlobalVoice(priority: number, force: boolean) {
+  private reserveGlobalVoice(cue: SfxCueId, priority: number, force: boolean) {
     const sfxVoices = [...this.voices].filter((voice) => voice.bus !== "music");
-    if (sfxVoices.length + this.pendingVoiceCount < this.sfxVoiceLimit) return true;
-    const lowest = sfxVoices
-      .sort((left, right) => left.priority - right.priority || left.startedAt - right.startedAt)[0];
-    if (!lowest || (!force && lowest.priority >= priority)) return false;
-    this.fadeAndStopVoice(lowest);
-    return [...this.voices].filter((voice) => voice.bus !== "music").length
-      + this.pendingVoiceCount < this.sfxVoiceLimit;
+    const pending = [...this.pendingByCue.entries()].flatMap(
+      ([pendingCue, count]) => Array.from({ length: count }, () => pendingCue),
+    );
+    const admission = planSfxVoiceAdmission({
+      cue,
+      priority,
+      force,
+      mobile: this.mobileMix,
+      live: sfxVoices.map((voice) => ({
+        cue: voice.cue as SfxCueId,
+        priority: voice.priority,
+        startedAt: voice.startedAt,
+      })),
+      pending,
+    });
+    if (!admission.admitted) return false;
+    if (admission.preemptIndex !== undefined) {
+      this.fadeAndStopVoice(sfxVoices[admission.preemptIndex]);
+    }
+    return true;
   }
 
   private registerVoice(
@@ -1104,6 +1265,7 @@ export class AudioManager {
     this.musicDuckGain = null;
     this.ambientDuckGain = null;
     this.musicVoice = null;
+    this.musicTransportEpoch = null;
     this.voices.clear();
     this.buffers.clear();
     this.loading.clear();

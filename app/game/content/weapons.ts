@@ -611,8 +611,8 @@ const lanternRoutes: WeaponDefinition["routes"] = [
     [copy("lantern-c-refine", ["shadow"], { source: "primaryWeapon", damageMultiplier: 0.58, maxCopies: 1, internalCooldown: 1.8 })],
     {
       name: "轮着照样",
-      description: "每次照样时复制前一件武器的一次攻击，连放四份且每份保留66%伤害。",
-      effects: [copy("lantern-c-focus", ["shadow"], { source: "previousWeaveNode", damageMultiplier: 0.66, maxCopies: 4, internalCooldown: 1.4 })],
+      description: "每次照样把当前主武器的一次核心攻击分成四幅影像依次重演，每份保留66%伤害。",
+      effects: [copy("lantern-c-focus", ["shadow"], { source: "primaryWeapon", damageMultiplier: 0.66, maxCopies: 4, internalCooldown: 1.4 })],
     },
     {
       name: "命中留样",

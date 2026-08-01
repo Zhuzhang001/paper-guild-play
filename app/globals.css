@@ -2879,3 +2879,1243 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* v6: readable forge workbench and explicit progression semantics */
+
+.upgrade-card .card-type-row {
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.upgrade-card .card-type-row .card-type {
+  grid-row: auto;
+  flex: none;
+}
+
+.current-weapon-tag {
+  flex-basis: 100%;
+  width: max-content;
+  min-width: 0;
+  overflow: visible;
+  padding: 3px 7px;
+  color: #3f625a;
+  background: rgba(69, 101, 92, 0.1);
+  border: 1px solid rgba(69, 101, 92, 0.24);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.stage-progress {
+  grid-row: 4;
+  align-self: end;
+  display: grid;
+  grid-template-columns: auto minmax(56px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: #71695d;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.stage-progress .level-dots {
+  grid-row: auto;
+  align-self: center;
+  justify-content: center;
+  margin: 0;
+}
+
+.stage-progress .level-dots i.next {
+  background: color-mix(in srgb, var(--accent, var(--cinnabar)) 44%, white);
+  box-shadow: inset 0 0 0 1px var(--accent, var(--cinnabar));
+}
+
+.upgrade-card.is-unavailable {
+  cursor: not-allowed;
+  filter: saturate(0.35);
+  opacity: 0.58;
+}
+
+.upgrade-card.is-unavailable:hover {
+  transform: none;
+}
+
+.synergy-trigger {
+  margin-top: 6px;
+  padding-top: 5px;
+  color: #42645c !important;
+  border-top: 1px dashed rgba(63, 102, 95, 0.26);
+  font-weight: 700;
+}
+
+.forge-panel {
+  width: min(calc(100% - 20px), 1440px);
+  height: min(calc(100dvh - 20px), 850px);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: clamp(10px, 1.25vw, 18px);
+  overflow: hidden;
+}
+
+.forge-panel .forge-heading-row,
+.forge-panel .forge-message,
+.forge-panel .forge-perk-section,
+.forge-view-switch {
+  flex: none;
+}
+
+.forge-perk-section.chosen {
+  padding-block: 5px;
+}
+
+.forge-perk-section.chosen .forge-section-heading {
+  margin: 0;
+}
+
+.forge-perk-section.chosen .forge-perk-row,
+.forge-perk-section.chosen .forge-refresh {
+  display: none;
+}
+
+.forge-view-switch {
+  display: none;
+}
+
+.forge-workbench {
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: minmax(0, 58fr) minmax(360px, 42fr);
+  gap: 12px;
+}
+
+.forge-main-column,
+.forge-preview-rail {
+  min-height: 0;
+}
+
+.forge-zone {
+  padding: 10px;
+}
+
+.forge-zone-title {
+  margin-bottom: 8px;
+}
+
+.forge-zone-title strong,
+.preview-ring-label strong {
+  font-size: 14px;
+}
+
+.forge-zone-title small,
+.preview-ring-label small {
+  font-size: 10px;
+}
+
+.forge-option-list {
+  gap: 7px;
+}
+
+.recipe-card {
+  min-height: 126px;
+  padding: 12px 34px 10px 104px;
+}
+
+.recipe-card > .recipe-fusion-art {
+  top: 30px;
+  left: 10px;
+  width: 82px;
+  border-radius: 4px;
+}
+
+.forge-option-card > span {
+  font-size: 10px;
+}
+
+.forge-option-card > strong {
+  font-size: 15px;
+  white-space: normal;
+}
+
+.forge-option-card > small {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.forge-option-card > em {
+  font-size: 9px;
+}
+
+.forge-add-flow {
+  flex: none;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+}
+
+.forge-weapon-picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+  gap: 5px;
+  max-height: 116px;
+  overflow-y: auto;
+}
+
+.forge-weapon-picks .forge-weapon-pick {
+  min-width: 0;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  color: #403b34;
+  text-align: left;
+  background: rgba(255, 252, 241, 0.78);
+  border: 1px solid rgba(49, 46, 39, 0.2);
+}
+
+.forge-weapon-pick > i {
+  width: 42px;
+  aspect-ratio: 1;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 3px 2px rgba(38, 32, 25, 0.18));
+}
+
+.forge-weapon-pick > span {
+  min-width: 0;
+}
+
+.forge-weapon-pick strong,
+.forge-weapon-pick small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-weapon-pick strong {
+  font-size: 12px;
+}
+
+.forge-weapon-pick small {
+  color: #746b5f;
+  font-size: 9px;
+}
+
+.forge-weapon-pick.active {
+  color: #fff5df;
+  background: #49685f;
+  border-color: #354c45;
+}
+
+.forge-weapon-pick.active small {
+  color: #dbe9e2;
+}
+
+.forge-add-detail {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.42fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px;
+  background: rgba(246, 238, 216, 0.72);
+  border: 1px solid rgba(54, 50, 43, 0.17);
+}
+
+.forge-add-feature {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.forge-add-feature > i {
+  width: 78px;
+  aspect-ratio: 1;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 5px 3px rgba(34, 29, 24, 0.2));
+}
+
+.forge-add-feature > span {
+  min-width: 0;
+}
+
+.forge-add-feature small,
+.forge-add-feature strong {
+  display: block;
+}
+
+.forge-add-feature small {
+  color: #8a4937;
+  font-size: 9px;
+}
+
+.forge-add-feature strong {
+  margin-block: 2px;
+  font-size: 16px;
+}
+
+.forge-add-feature p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: #6b6358;
+  font-size: 10px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.forge-route-picks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.forge-route-picks button {
+  min-width: 0;
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  padding: 5px;
+  color: #403b34;
+  text-align: left;
+  background: rgba(255, 252, 241, 0.86);
+  border: 1px solid rgba(49, 46, 39, 0.2);
+}
+
+.forge-route-picks i {
+  width: 48px;
+  aspect-ratio: 1;
+  background-repeat: no-repeat;
+}
+
+.forge-route-picks span,
+.forge-route-picks strong,
+.forge-route-picks small {
+  min-width: 0;
+  display: block;
+}
+
+.forge-route-picks strong {
+  font-size: 11px;
+}
+
+.forge-route-picks small {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  color: #70685c;
+  font-size: 9px;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.forge-route-picks button.active {
+  background: #e2eee7;
+  border-color: #486b61;
+  box-shadow: inset 3px 0 0 #486b61;
+}
+
+.forge-gap-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.6fr);
+  gap: 6px;
+}
+
+.forge-gap-row label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+}
+
+.forge-gap-row select,
+.forge-gap-row button {
+  min-height: 34px;
+  font-size: 10px;
+}
+
+.temper-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.temper-card {
+  min-height: 100px;
+  padding: 9px 34px 8px 80px;
+}
+
+.temper-card > .temper-card-art {
+  position: absolute;
+  top: 18px;
+  left: 8px;
+  width: 64px;
+  aspect-ratio: 1;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 4px 3px rgba(35, 30, 24, 0.2));
+}
+
+.forge-disabled-card {
+  grid-column: 1 / -1;
+  min-height: 180px;
+  padding: 12px;
+  filter: saturate(0.25);
+}
+
+.forge-progress-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.forge-progress-preview > i {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 5px;
+  color: #504b43;
+  background: rgba(255, 252, 241, 0.78);
+  border: 1px solid rgba(49, 46, 39, 0.15);
+  font-style: normal;
+}
+
+.forge-progress-preview > i > b {
+  width: 46px;
+  aspect-ratio: 1;
+  background-repeat: no-repeat;
+}
+
+.forge-progress-preview > i > span {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-progress-preview > i > small {
+  color: #805040;
+  font-size: 9px;
+}
+
+.forge-selection,
+.celestial-actions {
+  align-content: start;
+}
+
+.forge-selection {
+  grid-template-columns: 1fr;
+  gap: 9px;
+  padding: 14px;
+  background: rgba(247, 240, 221, 0.62);
+  border: 1px solid rgba(50, 47, 41, 0.16);
+}
+
+.forge-selection-summary {
+  min-height: 48px;
+  display: grid;
+  place-items: center;
+  padding: 8px 12px;
+  color: #3e5f57;
+  background: rgba(255, 252, 241, 0.85);
+  border: 1px dashed rgba(62, 95, 87, 0.35);
+  font-size: 14px;
+  text-align: center;
+}
+
+.forge-instruction {
+  margin: 0;
+  color: #6b6358;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.forge-selection-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.forge-selection-actions button,
+.dismantle-button,
+.celestial-button {
+  min-height: 40px;
+  font-size: 11px;
+}
+
+.celestial-actions {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.celestial-capture-card {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) minmax(140px, 0.44fr);
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  background:
+    radial-gradient(circle at 12% 50%, rgba(77, 94, 130, 0.16), transparent 27%),
+    rgba(250, 246, 232, 0.86);
+  border: 1px solid rgba(72, 83, 112, 0.35);
+}
+
+.celestial-capture-seal {
+  display: grid;
+  width: 68px;
+  aspect-ratio: 1;
+  place-items: center;
+  color: #f2e9d4;
+  background: #53627c;
+  border: 5px double rgba(244, 234, 210, 0.72);
+  border-radius: 50%;
+  font-family: "Paper Guild Display", var(--font-ink);
+  font-size: 29px;
+  box-shadow: 0 6px 0 rgba(52, 55, 65, 0.12);
+}
+
+.celestial-capture-card div {
+  min-width: 0;
+}
+
+.celestial-capture-card small,
+.celestial-capture-card strong,
+.celestial-capture-card em {
+  display: block;
+}
+
+.celestial-capture-card small {
+  color: #6d6380;
+  font-size: 10px;
+}
+
+.celestial-capture-card strong {
+  margin: 3px 0;
+  font-size: 18px;
+}
+
+.celestial-capture-card p {
+  margin: 0 0 4px;
+  color: #59544d;
+  font-size: 11px;
+}
+
+.celestial-capture-card em {
+  color: #874737;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.forge-zone-arrange,
+.forge-zone-celestial {
+  overflow-y: auto;
+}
+
+.forge-context-guide {
+  flex: 1;
+  min-height: 150px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  counter-reset: forge-guide;
+}
+
+.forge-context-guide article {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  padding: 18px;
+  overflow: hidden;
+  background:
+    linear-gradient(145deg, rgba(255, 252, 241, 0.7), rgba(231, 221, 198, 0.5));
+  border: 1px solid rgba(49, 46, 39, 0.16);
+  counter-increment: forge-guide;
+}
+
+.forge-context-guide article::after {
+  content: "0" counter(forge-guide);
+  position: absolute;
+  right: 10px;
+  bottom: -15px;
+  color: rgba(71, 91, 83, 0.07);
+  font: 400 76px/1 "Paper Guild Display", var(--font-ink);
+  pointer-events: none;
+}
+
+.forge-context-guide span,
+.forge-context-guide strong {
+  display: block;
+}
+
+.forge-context-guide span {
+  color: #8d4937;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+
+.forge-context-guide strong {
+  color: #35312b;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.forge-context-guide p {
+  margin: 0;
+  color: #675f54;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.forge-preview-rail {
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  gap: 7px;
+  padding: 10px;
+  overflow: hidden;
+}
+
+.weave-ring-preview {
+  position: relative;
+  width: min(100%, 460px);
+  min-height: 0;
+  aspect-ratio: 1.44;
+  margin: auto;
+  overflow: visible;
+  border: 0;
+  box-shadow: none;
+  touch-action: none;
+}
+
+.weave-ring-preview::before,
+.weave-ring-preview::after {
+  display: none;
+}
+
+.weave-ring-path {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  fill: none;
+  stroke: rgba(63, 89, 80, 0.34);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.55;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.weave-ring-path path {
+  stroke: rgba(155, 72, 52, 0.58);
+  stroke-dasharray: none;
+  stroke-width: 0.75;
+}
+
+.weave-ring-preview .weave-node {
+  width: clamp(68px, 6.4vw, 86px);
+  height: clamp(68px, 6.4vw, 86px);
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  place-items: center;
+  padding: 4px;
+  transform: translate(-50%, -50%);
+  border-radius: 13px;
+  box-shadow:
+    0 5px 0 rgba(47, 42, 34, 0.1),
+    0 0 0 3px rgba(255, 250, 236, 0.68);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.weave-ring-preview .weave-node.selected {
+  border-color: #a54f3c;
+  box-shadow:
+    0 0 0 3px rgba(165, 79, 60, 0.24),
+    0 6px 0 rgba(47, 42, 34, 0.11);
+}
+
+.weave-ring-preview .weave-node.move-source {
+  opacity: 0.72;
+  transform: translate(-50%, -50%) scale(0.94);
+}
+
+.weave-ring-preview .weave-node.move-target {
+  border-color: #c05b3f;
+  box-shadow:
+    0 0 0 5px rgba(192, 91, 63, 0.25),
+    0 6px 0 rgba(47, 42, 34, 0.12);
+  transform: translate(-50%, -50%) scale(1.07);
+}
+
+.weave-ring-preview .weave-node:disabled {
+  opacity: 1;
+}
+
+.weave-ring-preview .weave-node b {
+  top: -7px;
+  left: -7px;
+  width: 22px;
+  height: 22px;
+  font-size: 10px;
+}
+
+.weave-node-art {
+  width: 100%;
+  max-width: 58px;
+  aspect-ratio: 1;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 4px 3px rgba(38, 31, 24, 0.23));
+  pointer-events: none;
+}
+
+.celestial-node-art {
+  border: 1px solid rgba(70, 85, 103, 0.72);
+  border-radius: 10%;
+  background-color: rgba(232, 226, 208, 0.72);
+  filter: sepia(0.08) saturate(0.9) drop-shadow(0 4px 3px rgba(38, 31, 24, 0.23));
+}
+
+.weave-ring-preview .weave-node-copy {
+  width: 100%;
+  display: grid;
+  gap: 0;
+  line-height: 1;
+}
+
+.weave-ring-preview .weave-node-copy strong {
+  max-width: 100%;
+  overflow: hidden;
+  color: #34312b;
+  font-size: clamp(9px, 0.86vw, 12px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weave-ring-preview .weave-node-copy small {
+  display: block;
+  color: #776d60;
+  font-size: 8px;
+}
+
+.weave-ring-preview .weave-core {
+  width: clamp(92px, 8vw, 118px);
+  height: clamp(54px, 5vw, 68px);
+  padding: 5px;
+}
+
+.weave-ring-preview .weave-core span {
+  font-size: 9px;
+}
+
+.weave-ring-preview .weave-core strong {
+  font-size: 17px;
+}
+
+.ring-operation-status {
+  min-height: 18px;
+  margin: 0;
+  color: #60594f;
+  font-size: 10px;
+  text-align: center;
+}
+
+.forge-preview-card {
+  min-height: 116px;
+  align-content: start;
+  padding: 10px;
+  font-size: 10px;
+}
+
+.forge-preview-card > strong {
+  font-size: 15px;
+}
+
+.forge-preview-card > p {
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.forge-terminal-change > span {
+  font-size: 12px;
+}
+
+.forge-close {
+  min-height: 40px;
+  font-size: 11px;
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .forge-panel {
+    width: calc(100% - 8px);
+    height: calc(100dvh - 8px);
+    gap: 4px;
+    padding: 5px 7px;
+  }
+
+  .forge-panel .forge-heading-row .upgrade-heading {
+    font-size: 21px;
+  }
+
+  .forge-panel .forge-fire,
+  .forge-panel .capacity,
+  .forge-panel .forge-message {
+    font-size: 10px;
+  }
+
+  .forge-panel .forge-message {
+    min-height: 13px;
+    line-height: 1.25;
+  }
+
+  .forge-perk-section {
+    padding: 4px;
+  }
+
+  .forge-perk-section:not(.chosen) .forge-perk-row {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+  }
+
+  .forge-perk-section:not(.chosen) .forge-perk-card {
+    flex: 0 0 min(210px, 38vw);
+    min-height: 58px;
+    scroll-snap-align: start;
+  }
+
+  .forge-perk-card > span,
+  .forge-perk-card > small,
+  .forge-perk-card > em {
+    font-size: 9px;
+  }
+
+  .forge-perk-card > strong {
+    font-size: 12px;
+  }
+
+  .forge-view-switch {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .forge-view-switch button {
+    min-height: 30px;
+    padding: 4px 8px;
+    color: #534d44;
+    background: rgba(249, 242, 224, 0.82);
+    border: 1px solid rgba(49, 46, 39, 0.24);
+    font-size: 11px;
+  }
+
+  .forge-view-switch button.active {
+    color: #fff3db;
+    background: #49685f;
+    border-color: #354c45;
+  }
+
+  .forge-workbench {
+    display: block;
+    min-height: 0;
+  }
+
+  .forge-workbench.view-actions .forge-preview-rail,
+  .forge-workbench.view-ring .forge-main-column {
+    display: none;
+  }
+
+  .forge-main-column,
+  .forge-preview-rail {
+    width: 100%;
+    height: 100%;
+  }
+
+  .forge-mode-tabs button {
+    min-height: 30px;
+    padding: 4px 5px;
+    font-size: 10px;
+  }
+
+  .forge-zone {
+    padding: 5px;
+  }
+
+  .forge-zone-title strong,
+  .preview-ring-label strong {
+    font-size: 12px;
+  }
+
+  .forge-zone-title small,
+  .preview-ring-label small {
+    font-size: 9px;
+  }
+
+  .forge-option-card {
+    min-height: 68px;
+    padding: 6px 29px 6px 7px;
+  }
+
+  .forge-option-card > span,
+  .forge-option-card > small,
+  .forge-option-card > em,
+  .forge-empty {
+    font-size: 9px;
+  }
+
+  .forge-option-card > strong {
+    font-size: 12px;
+  }
+
+  .recipe-card {
+    min-height: 92px;
+    padding: 7px 29px 6px 76px;
+  }
+
+  .recipe-card > .recipe-fusion-art {
+    top: 15px;
+    left: 6px;
+    width: 62px;
+  }
+
+  .forge-add-flow {
+    gap: 4px;
+    margin-bottom: 5px;
+    padding-bottom: 5px;
+  }
+
+  .forge-weapon-picks {
+    display: flex;
+    max-height: none;
+    overflow-x: auto;
+  }
+
+  .forge-weapon-picks .forge-weapon-pick {
+    flex: 0 0 126px;
+    min-height: 46px;
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .forge-weapon-pick > i {
+    width: 36px;
+  }
+
+  .forge-add-detail {
+    grid-template-columns: 138px minmax(0, 1fr);
+    gap: 5px;
+    padding: 4px;
+  }
+
+  .forge-add-feature {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .forge-add-feature > i {
+    width: 52px;
+  }
+
+  .forge-add-feature strong {
+    font-size: 13px;
+  }
+
+  .forge-add-feature p {
+    font-size: 9px;
+    -webkit-line-clamp: 2;
+  }
+
+  .forge-route-picks {
+    gap: 3px;
+  }
+
+  .forge-route-picks button {
+    min-height: 58px;
+    grid-template-columns: 38px minmax(0, 1fr);
+    padding: 3px;
+  }
+
+  .forge-route-picks i {
+    width: 36px;
+  }
+
+  .forge-route-picks strong {
+    font-size: 10px;
+  }
+
+  .forge-route-picks small {
+    font-size: 8px;
+    -webkit-line-clamp: 2;
+  }
+
+  .forge-gap-row {
+    grid-template-columns: minmax(180px, 1fr) minmax(145px, 0.55fr);
+  }
+
+  .forge-gap-row label,
+  .forge-gap-row select,
+  .forge-gap-row button {
+    font-size: 9px;
+  }
+
+  .forge-gap-row select,
+  .forge-gap-row button {
+    min-height: 30px;
+  }
+
+  .temper-card {
+    min-height: 82px;
+    padding-left: 66px;
+  }
+
+  .temper-card > .temper-card-art {
+    top: 12px;
+    width: 54px;
+  }
+
+  .forge-disabled-card {
+    min-height: 112px;
+  }
+
+  .forge-progress-preview {
+    grid-template-columns: repeat(auto-fit, minmax(94px, 1fr));
+  }
+
+  .forge-progress-preview > i {
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    padding: 3px;
+  }
+
+  .forge-progress-preview > i > b {
+    width: 32px;
+  }
+
+  .forge-selection {
+    gap: 5px;
+    padding: 7px;
+  }
+
+  .forge-selection-summary {
+    min-height: 38px;
+    font-size: 12px;
+  }
+
+  .forge-instruction {
+    font-size: 10px;
+    line-height: 1.35;
+  }
+
+  .celestial-capture-card {
+    grid-template-columns: 58px minmax(0, 1fr) minmax(132px, 0.42fr);
+    padding: 7px;
+  }
+
+  .celestial-capture-seal {
+    width: 52px;
+    font-size: 22px;
+  }
+
+  .celestial-capture-card strong {
+    font-size: 15px;
+  }
+
+  .celestial-capture-card p,
+  .celestial-capture-card em,
+  .celestial-capture-card small {
+    font-size: 9px;
+  }
+
+  .forge-context-guide {
+    min-height: 92px;
+    gap: 4px;
+    margin-top: 5px;
+  }
+
+  .forge-context-guide article {
+    align-content: start;
+    gap: 2px;
+    padding: 7px;
+  }
+
+  .forge-context-guide article::after {
+    right: 4px;
+    bottom: -7px;
+    font-size: 42px;
+  }
+
+  .forge-context-guide span {
+    font-size: 8px;
+  }
+
+  .forge-context-guide strong {
+    font-size: 11px;
+  }
+
+  .forge-context-guide p {
+    font-size: 9px;
+    line-height: 1.3;
+  }
+
+  .forge-preview-rail {
+    display: grid;
+    grid-template-columns: minmax(300px, 1.15fr) minmax(230px, 0.85fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 5px 9px;
+    padding: 6px 8px;
+  }
+
+  .preview-ring-label {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .weave-ring-preview {
+    grid-column: 1;
+    grid-row: 2;
+    width: min(100%, 360px);
+    min-height: 0;
+    aspect-ratio: 1.72;
+  }
+
+  .ring-operation-status {
+    grid-column: 1;
+    grid-row: 3;
+    min-height: 14px;
+    font-size: 9px;
+  }
+
+  .forge-preview-card {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    min-height: 0;
+    overflow-y: auto;
+    font-size: 10px;
+  }
+
+  .forge-close {
+    grid-column: 2;
+    grid-row: 3;
+    min-height: 34px;
+    font-size: 10px;
+  }
+
+  .weave-ring-preview .weave-node {
+    width: clamp(48px, 7.5vw, 60px);
+    height: clamp(48px, 7.5vw, 60px);
+    padding: 3px;
+  }
+
+  .weave-node-art {
+    max-width: 39px;
+  }
+
+  .weave-ring-preview .weave-node-copy strong {
+    font-size: 9px;
+  }
+
+  .weave-ring-preview .weave-node-copy small {
+    display: none;
+  }
+
+  .weave-ring-preview .weave-node b {
+    width: 17px;
+    height: 17px;
+    font-size: 8px;
+  }
+
+  .weave-ring-preview .weave-core {
+    width: 78px;
+    height: 44px;
+  }
+
+  .weave-ring-preview .weave-core span {
+    font-size: 8px;
+  }
+
+  .weave-ring-preview .weave-core strong {
+    font-size: 14px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 500px) and (max-width: 690px) {
+  .forge-preview-rail {
+    grid-template-columns: minmax(270px, 1.08fr) minmax(205px, 0.92fr);
+  }
+
+  .forge-add-detail {
+    grid-template-columns: 116px minmax(0, 1fr);
+  }
+
+  .forge-add-feature {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .forge-add-feature > i {
+    width: 44px;
+  }
+
+  .forge-add-feature p {
+    display: none;
+  }
+
+  .forge-route-picks button {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .forge-route-picks i {
+    width: 30px;
+  }
+}
+
+/* v6 short-landscape floor: the two-page forge never solves space by
+   shrinking prose or touch targets below a usable phone size. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .forge-panel button,
+  .forge-panel select {
+    min-height: 44px !important;
+    font-size: 11px !important;
+  }
+
+  .forge-panel p,
+  .forge-panel small,
+  .forge-panel em,
+  .forge-panel label,
+  .forge-panel .forge-message,
+  .forge-panel .capacity,
+  .forge-panel .forge-fire,
+  .forge-panel .forge-empty,
+  .forge-panel .ring-operation-status,
+  .forge-panel .weave-node-copy strong,
+  .forge-panel .weave-core span,
+  .forge-panel .weave-node b,
+  .forge-panel .forge-option-card > span,
+  .forge-panel .forge-perk-card > span,
+  .forge-panel .forge-context-guide span,
+  .forge-panel .forge-progress-preview > i > span {
+    font-size: 11px !important;
+  }
+
+  .forge-panel p,
+  .forge-panel small,
+  .forge-panel em {
+    line-height: 1.35;
+  }
+}

@@ -1,16 +1,23 @@
 import {
-  ENDLESS_PERK_DEFINITIONS,
+  ALL_ENDLESS_PERK_DEFINITIONS,
   getEndlessPerkDefinition,
   type EndlessPerkAction,
+  type EndlessPerkBranchId,
   type EndlessPerkDefinition,
   type EndlessPerkEvent,
   type EndlessPerkId,
+  type EndlessPerkPageId,
+  type EndlessPerkPairId,
   type WeaponId,
 } from "../content";
 import { nextRandom, type RngState } from "./rng";
 
 export type EndlessPerkState = {
   ranks: Readonly<Partial<Record<EndlessPerkId, number>>>;
+  /** The one locked branch selected for each owned first-layer page. */
+  branches: Readonly<Partial<Record<EndlessPerkPageId, EndlessPerkBranchId>>>;
+  /** Pair pages do not occupy weapon nodes and are capped at six. */
+  activePairIds: readonly EndlessPerkPairId[];
   refreshesRemaining: number;
   cycle: number;
   offeredIds: readonly EndlessPerkId[];
@@ -28,6 +35,11 @@ export type EndlessPerkChoiceContext = {
   ownedWeaponIds?: readonly WeaponId[];
   weaveNodeCount?: number;
   weaveMaxNodes?: number;
+};
+
+export type ApplyEndlessPerkChoiceOptions = {
+  /** Required when a seventh pair is chosen. */
+  replacePairId?: EndlessPerkPairId;
 };
 
 export type EndlessPerkRuntimeEvent = {
@@ -55,6 +67,8 @@ export type EndlessPerkEventResult = {
 export function createEndlessPerkState(refreshes = 1): EndlessPerkState {
   return {
     ranks: {},
+    branches: {},
+    activePairIds: [],
     refreshesRemaining: Math.max(0, Math.floor(refreshes)),
     cycle: 0,
     offeredIds: [],
@@ -63,10 +77,31 @@ export function createEndlessPerkState(refreshes = 1): EndlessPerkState {
   };
 }
 
+function normalizedState(state: EndlessPerkState): EndlessPerkState {
+  const legacy = state as EndlessPerkState & {
+    branches?: EndlessPerkState["branches"];
+    activePairIds?: EndlessPerkState["activePairIds"];
+  };
+  if (legacy.branches && legacy.activePairIds) return state;
+  const branches: Partial<Record<EndlessPerkPageId, EndlessPerkBranchId>> = {};
+  const activePairIds: EndlessPerkPairId[] = [];
+  for (const [id, rank] of Object.entries(state.ranks)) {
+    if (!rank) continue;
+    const definition = getEndlessPerkDefinition(id as EndlessPerkId);
+    if (definition.choiceKind === "branch" && definition.parentPageId) {
+      branches[definition.parentPageId] = definition.id as EndlessPerkBranchId;
+    } else if (definition.choiceKind === "pair") {
+      activePairIds.push(definition.id as EndlessPerkPairId);
+    }
+  }
+  return { ...state, branches, activePairIds: activePairIds.slice(0, 6) };
+}
+
 export function stepEndlessPerkState(
   state: EndlessPerkState,
   deltaSeconds: number,
 ): EndlessPerkState {
+  state = normalizedState(state);
   if (deltaSeconds <= 0) return state;
   const cooldowns: Record<string, number> = {};
   for (const [key, value] of Object.entries(state.cooldowns)) {
@@ -89,10 +124,11 @@ export function consumeEndlessPerkEvent(
   state: EndlessPerkState,
   event: EndlessPerkRuntimeEvent,
 ): EndlessPerkEventResult {
+  state = normalizedState(state);
   const counters = { ...state.counters };
   const cooldowns = { ...state.cooldowns };
   const procs: EndlessPerkProc[] = [];
-  for (const definition of ENDLESS_PERK_DEFINITIONS) {
+  for (const definition of ALL_ENDLESS_PERK_DEFINITIONS) {
     if ((state.ranks[definition.id] ?? 0) <= 0) continue;
     definition.rules.forEach((rule, ruleIndex) => {
       const trigger = rule.trigger;
@@ -183,33 +219,43 @@ export function generateEndlessPerkChoices(
   count = 4,
   context?: EndlessPerkChoiceContext,
 ): EndlessPerkChoiceResult {
-  const available = ENDLESS_PERK_DEFINITIONS.filter(
-    (definition) => {
-      if ((state.ranks[definition.id] ?? 0) >= definition.maxRank) return false;
-      if (
-        definition.id === "emptySlotCharge" &&
-        context?.weaveNodeCount !== undefined &&
-        context.weaveMaxNodes !== undefined &&
-        context.weaveNodeCount >= context.weaveMaxNodes
-      ) {
-        return false;
-      }
-      if (
-        definition.category === "weapon" &&
-        context?.ownedWeaponIds !== undefined
-      ) {
-        const required = definition.rules.flatMap((rule) =>
-          [rule.trigger.weaponId, rule.trigger.requiredWeaponId].filter(
-            (id): id is WeaponId => id !== undefined,
-          ),
-        );
-        return required.some((weaponId) =>
-          context.ownedWeaponIds?.includes(weaponId),
-        );
-      }
-      return true;
-    },
-  );
+  state = normalizedState(state);
+  const ownedPages = (id: EndlessPerkPageId) => (state.ranks[id] ?? 0) > 0;
+  const weaponAvailable = (definition: EndlessPerkDefinition) => {
+    if (definition.category !== "weapon" || !context?.ownedWeaponIds) return true;
+    const required = definition.rules.flatMap((rule) =>
+      [rule.trigger.weaponId, rule.trigger.requiredWeaponId].filter(
+        (id): id is WeaponId => id !== undefined,
+      ),
+    );
+    return required.length === 0 || required.some((weaponId) =>
+      context.ownedWeaponIds?.includes(weaponId),
+    );
+  };
+  const available = ALL_ENDLESS_PERK_DEFINITIONS.filter((definition) => {
+    if ((state.ranks[definition.id] ?? 0) >= definition.maxRank) return false;
+    if (
+      definition.id === "emptySlotCharge" &&
+      context?.weaveNodeCount !== undefined &&
+      context.weaveMaxNodes !== undefined &&
+      context.weaveNodeCount >= context.weaveMaxNodes
+    ) {
+      return false;
+    }
+    if (!weaponAvailable(definition)) return false;
+    if (definition.choiceKind === "branch") {
+      const parent = definition.parentPageId;
+      return Boolean(parent && ownedPages(parent) && !state.branches[parent]);
+    }
+    if (definition.choiceKind === "pair") {
+      const pages = definition.requiredPageIds;
+      // Until the caller presents a replacement picker, a seventh pair is not
+      // a valid card. `applyEndlessPerkChoice` still supports explicit replace.
+      if (state.activePairIds.length >= 6) return false;
+      return Boolean(pages?.every(ownedPages));
+    }
+    return true;
+  });
   const desiredCount = Math.max(1, Math.floor(count));
   const choices: EndlessPerkDefinition[] = [];
   let nextRng = rngState;
@@ -233,13 +279,25 @@ export function generateEndlessPerkChoices(
     if (generated.choices[0]) choices.push(generated.choices[0]);
   };
 
-  // The row remains legible and useful: one held-weapon craft, one board
-  // movement, one seasonal relation, then a free fourth card.
-  for (const category of ["weapon", "weave", "season"] as const) {
-    if (choices.length >= desiredCount) break;
-    takeOne(
-      available.filter((definition) => definition.category === category),
-    );
+  const ownsAnything = Object.values(state.ranks).some((rank) => (rank ?? 0) > 0);
+  if (!ownsAnything) {
+    // Preserve the clear first-cycle teaching row: a held weapon page, a board
+    // page, a seasonal page, and one free context card.
+    for (const category of ["weapon", "weave", "season"] as const) {
+      if (choices.length >= desiredCount) break;
+      takeOne(available.filter((definition) =>
+        definition.choiceKind === "page" && definition.category === category,
+      ));
+    }
+  } else {
+    // Later rows expose the book's relation graph rather than four unrelated
+    // one-off cards: new page -> branch -> pair -> current situation.
+    takeOne(available.filter((definition) => definition.choiceKind === "page"));
+    takeOne(available.filter((definition) => definition.choiceKind === "branch"));
+    takeOne(available.filter((definition) => definition.choiceKind === "pair"));
+    takeOne(available.filter((definition) =>
+      definition.category === "season" || definition.category === "journey",
+    ));
   }
   while (choices.length < Math.min(desiredCount, available.length)) {
     const before = choices.length;
@@ -280,10 +338,47 @@ export function refreshEndlessPerkChoices(
 export function applyEndlessPerkChoice(
   state: EndlessPerkState,
   perkId: EndlessPerkId,
+  options: ApplyEndlessPerkChoiceOptions = {},
 ): EndlessPerkState {
+  state = normalizedState(state);
   const definition = getEndlessPerkDefinition(perkId);
   const current = state.ranks[perkId] ?? 0;
   if (current >= definition.maxRank) return state;
+  if (definition.choiceKind === "branch") {
+    const parent = definition.parentPageId;
+    if (!parent || (state.ranks[parent] ?? 0) <= 0 || state.branches[parent]) {
+      return state;
+    }
+    return {
+      ...state,
+      ranks: { ...state.ranks, [perkId]: current + 1 },
+      branches: {
+        ...state.branches,
+        [parent]: perkId as EndlessPerkBranchId,
+      },
+      offeredIds: [],
+    };
+  }
+  if (definition.choiceKind === "pair") {
+    const pairId = perkId as EndlessPerkPairId;
+    if (!definition.requiredPageIds?.every(
+      (pageId) => (state.ranks[pageId] ?? 0) > 0,
+    )) return state;
+    const activePairIds = [...state.activePairIds];
+    const ranks = { ...state.ranks };
+    if (activePairIds.length >= 6) {
+      const replacePairId = options.replacePairId;
+      const replaceAt = replacePairId
+        ? activePairIds.indexOf(replacePairId)
+        : -1;
+      if (replaceAt < 0) return state;
+      activePairIds.splice(replaceAt, 1);
+      delete ranks[replacePairId!];
+    }
+    activePairIds.push(pairId);
+    ranks[pairId] = current + 1;
+    return { ...state, ranks, activePairIds, offeredIds: [] };
+  }
   return {
     ...state,
     ranks: {
@@ -298,6 +393,7 @@ export function grantEndlessPerkRefresh(
   state: EndlessPerkState,
   amount = 1,
 ): EndlessPerkState {
+  state = normalizedState(state);
   return {
     ...state,
     refreshesRemaining:

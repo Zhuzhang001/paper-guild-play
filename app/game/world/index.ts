@@ -22,10 +22,23 @@ export type {
 
 export {
   AUDIO_CUES,
+  AUDIO_COMBAT_ACCENT_DUCK,
+  AUDIO_MIX_LIMITS,
+  AUDIO_MIX_REVISION,
+  AUDIO_SHARED_COOLDOWNS_MS,
+  AUDIO_TONAL_SYSTEM,
+  BOSS_ATMOSPHERE_QUIET_MS,
+  DEFAULT_AUDIO_SETTINGS,
   AudioManager,
   getFusionSfxCue,
+  getSfxVoiceBudget,
   getTermAmbienceCue,
   getWorldMusicCue,
+  isReservedPriorityCue,
+  migrateAudioSettings,
+  planSfxFrame,
+  planSfxVoiceAdmission,
+  resolveLoopPhase,
 } from "./audio";
 export type {
   AudioBus,
@@ -35,6 +48,8 @@ export type {
   MusicCueId,
   FusionSfxCueId,
   PlaySfxOptions,
+  ResolvedAudioSettings,
+  SfxVoiceSnapshot,
   SfxCueId,
   WorldMusicState,
 } from "./audio";

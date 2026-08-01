@@ -117,13 +117,13 @@ test("rare choices and endless cursor descriptions use the locked plain terms", 
   assert.deepEqual(survivor.RARE_CHOICES, [
     {
       id: "master-now",
-      name: "先做定型",
-      description: "将当前最高阶但尚未定型的本命武器直接推进一阶。",
+      name: "趁热做细",
+      description: "先选一件未定型武器，再推进一阶；改法或定型仍由你亲自选。",
     },
     {
       id: "resonance-slot",
-      name: "多留一手",
-      description: "搭手容量增加一格，并立即启用所有已满足条件的搭手。",
+      name: "搭手续作",
+      description: "仍只启用三项搭手；每累计触发三次，第三次按原动作再做一遍。",
     },
     {
       id: "weapon-soul",
