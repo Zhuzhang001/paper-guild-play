@@ -1,5 +1,5 @@
-/* 纸上百工 v6.1：仅预缓存启动壳，其余美术与声音按需缓存。 */
-const VERSION = "paper-guild-v6.1.0";
+/* 纸上百工 v6.2：仅预缓存启动壳，其余美术与声音按需缓存。 */
+const VERSION = "paper-guild-v6.2.0";
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const SCOPE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, "");

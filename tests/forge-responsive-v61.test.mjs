@@ -17,13 +17,13 @@ test("forge shell has a bounded header, workspace, and persistent footer", () =>
   assert.match(forgeCss, /\.forge-panel \{[\s\S]*?display: flex;[\s\S]*?flex-direction: column;/);
   assert.match(forgeCss, /\.forge-workbench \{[\s\S]*?flex: 1;[\s\S]*?min-height: 0;/);
   assert.match(forgeCss, /\.forge-footer \{[\s\S]*?flex: none;/);
-  assert.match(forgeCss, /env\(safe-area-inset-bottom\)/);
+  assert.match(forgeCss, /height:\s*calc\(100% - 8px\)/);
 });
 
 test("desktop is the only dual-column forge breakpoint", () => {
-  assert.match(forgeCss, /@media \(min-width: 960px\) and \(min-height: 621px\)/);
+  assert.match(forgeCss, /@container game-shell \(min-width: 960px\) and \(min-height: 621px\)/);
   assert.match(forgeCss, /grid-template-columns: minmax\(0, 58fr\) minmax\(360px, 42fr\)/);
-  assert.match(forgeCss, /@media \(max-height: 620px\), \(max-width: 959px\)/);
+  assert.match(forgeCss, /@container game-shell \(max-height: 620px\) or \(max-width: 959px\)/);
   assert.match(forgeCss, /\.forge-view-switch \{[\s\S]*?display: grid;/);
   assert.match(
     forgeCss,
@@ -58,7 +58,10 @@ test("preview actions stay in the footer and preview switches to the ring page",
     game,
     /<div className="forge-footer-actions">[\s\S]*?cancelForgePreview[\s\S]*?confirmForgePreview[\s\S]*?closeForge/,
   );
-  assert.match(game, /disabled=\{!forgePreview \|\| forgeFire < forgePreview\.cost\}/);
+  assert.match(
+    game,
+    /disabled=\{[\s\S]*?forgeConfirming \|\|[\s\S]*?!forgePreview \|\|[\s\S]*?forgeFire < forgePreview\.cost[\s\S]*?\}/,
+  );
 });
 
 test("ring orbit is height-aware and reserves a node-safe track", () => {

@@ -299,16 +299,54 @@ export type WeaponState = {
   masteryId?: MasteryId;
 };
 
-export type RunModifierId =
-  | "paperWard"
+export type TravelNoteCategory = "craft" | "journey" | "protection";
+
+export type TravelNoteId =
   | "keenEdge"
+  | "quickHands"
+  | "longReach"
+  | "lastingWork"
   | "gatheringWind"
+  | "lightStep"
+  | "mergePearls"
+  | "turningMomentum"
+  | "paperWard"
+  | "slowPaper"
+  | "stepBack"
+  | "pickupMend";
+
+export type TravelNoteRequirement =
+  | "durationWeapon"
+  | "notOneLife"
+  | "recoveryEnabled";
+
+/** One of the twelve post-mastery pages offered after all four tools settle. */
+export type TravelNoteDefinition = {
+  id: TravelNoteId;
+  name: string;
+  category: TravelNoteCategory;
+  maxRank: number;
+  description: string;
+  rankEffects: readonly string[];
+  requirements: readonly TravelNoteRequirement[];
+  artKey: string;
+};
+
+/** Ranks are run-local. Missing keys are rank zero for save compatibility. */
+export type TravelNoteRankState = Readonly<
+  Partial<Record<TravelNoteId, number>>
+>;
+
+export type RunModifierId =
+  | TravelNoteId
   | "weaponSoul"
   | "helpingHand";
 
 export type CombatBuild = {
   weapons: readonly WeaponState[];
   modifiers: Readonly<Partial<Record<RunModifierId, number>>>;
+  /** Optional so v6 build snapshots without travel notes still hydrate. */
+  travelNotes?: TravelNoteRankState;
   synergyCapacity: number;
 };
 
@@ -352,6 +390,12 @@ export type UpgradeOption =
       id: string;
       kind: "utility";
       modifierId: RunModifierId;
+      travelNoteId?: TravelNoteId;
+      travelNoteCategory?: TravelNoteCategory;
+      slotCategory?: TravelNoteCategory;
+      currentRank?: number;
+      nextRank?: number;
+      maxRank?: number;
       title: string;
       description: string;
       artKey: string;

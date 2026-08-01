@@ -80,13 +80,18 @@ import {
   createForgeState,
   createRngState,
   deriveWeaveTerminal,
+  dismissDefeatedIntrusion,
   fuseAdjacentNodes,
+  getForgeExitBlocker,
+  getForgeExitState,
   generateEndlessPerkChoices,
   generateForgeOffers,
   insertWeaponNode,
   refreshEndlessPerkChoices,
   removeWeaveNode,
   swapWeaveNodes,
+  type ForgeExitActionId,
+  type ForgeExitBlocker,
   type ForgeOffer,
 } from "./game/runtime";
 import {
@@ -107,6 +112,10 @@ import {
   type AudioSettings,
   type SfxCueId,
 } from "./game/world";
+import {
+  isStandaloneDisplayMode,
+  requestGameFullscreen,
+} from "./ViewportController";
 
 type Mode =
   | "menu"
@@ -359,7 +368,17 @@ function optionKind(option: UpgradeOption) {
   if (option.kind === "route") return "改法 · 三选一";
   if (option.kind === "mastery") return "定型 · 二选一";
   if (option.kind === "acquire") return "新武器";
-  if (option.kind === "utility") return "行旅札记";
+  if (option.kind === "utility") {
+    const category =
+      option.travelNoteCategory === "craft"
+        ? "器用"
+        : option.travelNoteCategory === "journey"
+          ? "行路"
+          : option.travelNoteCategory === "protection"
+            ? "护身"
+            : "行旅";
+    return `${category} · 行旅札记`;
+  }
   return option.kind === "refine" ? "做细" : "再磨";
 }
 
@@ -653,6 +672,7 @@ export function PaperGuildGame() {
   const queuedModalsRef = useRef<QueuedModal[]>([]);
   const forgeFireRef = useRef(0);
   const forgeCycleRef = useRef(0);
+  const forgeConfirmingRef = useRef(false);
   const ringNodeRefs = useRef(new Map<string, HTMLButtonElement>());
   const ringMoveRef = useRef<RingMoveState | null>(null);
   const suppressRingClickRef = useRef(false);
@@ -713,6 +733,9 @@ export function PaperGuildGame() {
   const [forgeMobileView, setForgeMobileView] =
     useState<ForgeMobileView>("actions");
   const [forgePreview, setForgePreview] = useState<ForgePreview | null>(null);
+  const [forgeConfirming, setForgeConfirming] = useState(false);
+  const [forgeExitBlocker, setForgeExitBlocker] =
+    useState<ForgeExitBlocker | null>(null);
   const [ringMove, setRingMove] = useState<RingMoveState | null>(null);
   const [ringFocusId, setRingFocusId] = useState<string | null>(null);
   const [insertWeaponId, setInsertWeaponId] = useState<WeaponId | null>(null);
@@ -940,6 +963,9 @@ export function PaperGuildGame() {
     setForgeFire(run.forgeCredits);
     setSelectedNodeIds([]);
     setForgePreview(null);
+    forgeConfirmingRef.current = false;
+    setForgeConfirming(false);
+    setForgeExitBlocker(null);
     setPendingPairChoice(null);
     ringMoveRef.current = null;
     setRingMove(null);
@@ -1492,6 +1518,15 @@ export function PaperGuildGame() {
 
   const startGame = async () => {
     if (!assetsReady) return;
+    // Audio and fullscreen must both begin inside the original pointer gesture.
+    // Neither capability is allowed to block a run when the browser declines it.
+    const audioInitialization = audioRef.current?.initFromGesture();
+    const fullscreenAttempt =
+      typeof window !== "undefined" &&
+      window.matchMedia("(pointer: coarse)").matches &&
+      !isStandaloneDisplayMode()
+        ? requestGameFullscreen()
+        : undefined;
     setTestPanelUnlocked(false);
     cheatBufferRef.current = "";
     const seed = Date.now();
@@ -1502,7 +1537,8 @@ export function PaperGuildGame() {
       unlockedDifficultyIds,
     });
     const initialWeaponId = run.build.weapons[0]?.id ?? "sword";
-    await audioRef.current?.initFromGesture();
+    await audioInitialization;
+    if (fullscreenAttempt) void fullscreenAttempt;
     if (assetsRef.current.visuals) {
       await preloadWeaponVisuals(assetsRef.current.visuals, [initialWeaponId]);
     }
@@ -1528,6 +1564,9 @@ export function PaperGuildGame() {
     setForgeTab("recipes");
     setForgeMobileView("actions");
     setForgePreview(null);
+    forgeConfirmingRef.current = false;
+    setForgeConfirming(false);
+    setForgeExitBlocker(null);
     ringMoveRef.current = null;
     setRingMove(null);
     setRingFocusId(null);
@@ -1608,6 +1647,9 @@ export function PaperGuildGame() {
     setForgePurpose("cycle");
     setForgeTab("recipes");
     setForgePreview(null);
+    forgeConfirmingRef.current = false;
+    setForgeConfirming(false);
+    setForgeExitBlocker(null);
     setEndlessPerkOptions([]);
     setEndlessPerkChosen(null);
     setPendingPairChoice(null);
@@ -2224,57 +2266,169 @@ export function PaperGuildGame() {
   const confirmForgePreview = async () => {
     const run = runRef.current;
     const preview = forgePreview;
-    if (!run?.weave || !preview) return;
+    if (!run?.weave || !preview || forgeConfirmingRef.current) return;
     if (run.forgeCredits < preview.cost) {
       setForgeMessage(`炉火不足：此操作需要 ${preview.cost} 点。`);
       play("sfx.ui-back");
       return;
     }
-    run.weave = preview.weave;
-    run.forgeCredits -= preview.cost;
-    forgeFireRef.current = run.forgeCredits;
-    setForgeFire(run.forgeCredits);
-    await syncRunVisuals(run);
-    play(
-      preview.kind === "fusion"
-        ? "sfx.fusion"
-        : preview.kind === "celestial"
-          ? "sfx.ultimate"
-          : preview.kind === "swap"
-            ? "sfx.ui-confirm"
-            : "sfx.upgrade",
-    );
-    setForgeMessage(
-      preview.cost === 0
-        ? `${preview.title}已完成，炉火不减。`
-        : `${preview.title}已完成。余 ${run.forgeCredits} 点炉火，可继续操作。`,
-    );
+    forgeConfirmingRef.current = true;
+    setForgeConfirming(true);
+    setForgeExitBlocker(null);
+    try {
+      run.weave = preview.weave;
+      run.forgeCredits -= preview.cost;
+      forgeFireRef.current = run.forgeCredits;
+      setForgeFire(run.forgeCredits);
+      setSelectedNodeIds([]);
+      setForgePreview(null);
+      setInsertWeaponId(null);
+      setInsertRouteId(null);
+      setSnapshot(snapshotRun(run));
+      try {
+        await syncRunVisuals(run);
+      } catch {
+        setForgeMessage("器盘已经写入；个别美工素材将在战斗中继续补载。");
+      }
+      play(
+        preview.kind === "fusion"
+          ? "sfx.fusion"
+          : preview.kind === "celestial"
+            ? "sfx.ultimate"
+            : preview.kind === "swap"
+              ? "sfx.ui-confirm"
+              : "sfx.upgrade",
+      );
+      setForgeMessage(
+        preview.cost === 0
+          ? `${preview.title}已完成，炉火不减。`
+          : `${preview.title}已完成。余 ${run.forgeCredits} 点炉火，可继续操作。`,
+      );
+    } finally {
+      forgeConfirmingRef.current = false;
+      setForgeConfirming(false);
+    }
+  };
+
+  const finishForgeExit = (run: RunState | null) => {
+    setForgeExitBlocker(null);
     setSelectedNodeIds([]);
     setForgePreview(null);
-    setInsertWeaponId(null);
-    setInsertRouteId(null);
+    updateRingMove(null);
+    if (run) openNextQueuedModal(run);
+    else setMode("playing");
+  };
+
+  const dismissCelestialReward = (run: RunState) => {
+    const intrusion = run.weave?.activeIntrusion;
+    if (!run.weave || intrusion?.phase !== "defeated") return false;
+    const intrusionId = intrusion.id;
+    run.enemies = run.enemies.filter(
+      (enemy) =>
+        enemy.id !== run.intrusionAvatarId &&
+        enemy.celestialSourceId !== intrusionId,
+    );
+    run.strikes = run.strikes.filter(
+      (strike) =>
+        !(
+          strike.hostile &&
+          strike.artKey.startsWith(`celestial/${intrusionId}/`)
+        ),
+    );
+    run.fx = run.fx.filter(
+      (effect) => !effect.artKey.startsWith(`celestial/${intrusionId}/`),
+    );
+    run.intrusionAvatarId = undefined;
+    run.celestialHazardClock = 0;
+    run.weave = dismissDefeatedIntrusion(run.weave);
     setSnapshot(snapshotRun(run));
+    return true;
+  };
+
+  const forgeExitContext = () => {
+    const run = runRef.current;
+    const heldWeapons = run?.build.weapons ?? [];
+    const primaryChoices = snapshot.availablePrimaryWeaponIds;
+    return {
+      processing: forgeConfirmingRef.current,
+      perkRequired: forgePurpose === "cycle",
+      perkChosen: Boolean(endlessPerkChosen),
+      pairReplacementPending: Boolean(pendingPairChoice),
+      primaryWeaponRequired:
+        heldWeapons.some((weapon) => weapon.id === "lantern") &&
+        primaryChoices.length > 0,
+      primaryWeaponValid:
+        primaryChoices.length === 0 ||
+        snapshot.primaryWeaponValid,
+      previewPending: Boolean(forgePreview),
+      celestialRewardPending:
+        run?.weave?.activeIntrusion?.phase === "defeated",
+    };
   };
 
   const closeForge = () => {
     const run = runRef.current;
-    if (
-      forgePurpose === "celestial" &&
-      run?.weave?.activeIntrusion?.phase === "defeated"
-    ) {
-      setForgeMessage("先把已伏天变炼入器盘；满盘时可点一格免费替换。");
-      play("sfx.ui-back");
+    const state = getForgeExitState(forgeExitContext());
+    if (state === "ready") {
+      finishForgeExit(run);
       return;
     }
-    if (!endlessPerkChosen) {
-      setForgeMessage("先从四项无尽手艺中取一项，才可定盘续战。");
-      play("sfx.ui-back");
-      return;
+    const blocker = getForgeExitBlocker(state);
+    if (!blocker) return;
+    setForgeExitBlocker(blocker);
+    setForgeMessage(blocker.description);
+    if (!blocker.disablesContinue) play("sfx.ui-back");
+  };
+
+  const focusForgeControl = (selector: string) => {
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(selector)?.focus();
+    });
+  };
+
+  const handleForgeExitAction = (actionId: ForgeExitActionId) => {
+    const run = runRef.current;
+    setForgeExitBlocker(null);
+    switch (actionId) {
+      case "focusPerkChoice":
+        setForgeMobileView("actions");
+        focusForgeControl(".forge-perk-card:not(:disabled)");
+        return;
+      case "focusPairReplacement":
+        setForgeMobileView("actions");
+        focusForgeControl(".forge-context-guide button:not(:disabled)");
+        return;
+      case "focusPrimaryWeapon":
+        setForgeMobileView("actions");
+        focusForgeControl(".forge-primary-picker select");
+        return;
+      case "returnToPreview":
+        setForgeMobileView("ring");
+        focusForgeControl(".forge-confirm:not(:disabled)");
+        return;
+      case "discardPreview":
+        setForgePreview(null);
+        updateRingMove(null);
+        if (run?.weave?.activeIntrusion?.phase === "defeated") {
+          const blocker = getForgeExitBlocker("celestialRewardPending");
+          if (blocker) setForgeExitBlocker(blocker);
+          return;
+        }
+        finishForgeExit(run);
+        return;
+      case "returnToCelestialReward":
+        setForgeTab("celestial");
+        setForgeMobileView("actions");
+        focusForgeControl(".celestial-button:not(:disabled)");
+        return;
+      case "dismissCelestialReward":
+        if (run && dismissCelestialReward(run)) {
+          setForgeMessage("本次天时已舍下，残余天变也已散去。");
+          play("sfx.ui-confirm");
+        }
+        finishForgeExit(run);
+        return;
     }
-    setSelectedNodeIds([]);
-    setForgePreview(null);
-    if (run) openNextQueuedModal(run);
-    else setMode("playing");
   };
 
   const term = getSolarTermState(snapshot.elapsed, snapshot.endless);
@@ -2637,10 +2791,16 @@ export function PaperGuildGame() {
                   ? "选定一种改法"
                   : upgradeOptions[0]?.kind === "mastery"
                     ? "给器物定型"
-                    : "拾取一页百工谱"}
+                    : upgradeOptions[0]?.kind === "utility" &&
+                        upgradeOptions[0].travelNoteId
+                      ? "器物均已定型 · 选一张行旅札记"
+                      : "拾取一页百工谱"}
               </h2>
               <p className="upgrade-note">
-                第三阶固定同时展示三种改法，第五阶固定展示两种定型；选择后本局不可反悔。
+                {upgradeOptions[0]?.kind === "utility" &&
+                upgradeOptions[0].travelNoteId
+                  ? "三张牌依次照顾器用、行路与护身；已满阶或本局不能生效的札记不会出现。"
+                  : "第三阶固定同时展示三种改法，第五阶固定展示两种定型；选择后本局不可反悔。"}
               </p>
               {lanternHeld && (
                 <label className="initial-weapon-select">
@@ -2671,7 +2831,11 @@ export function PaperGuildGame() {
               <div className={`upgrade-grid count-${upgradeOptions.length}`}>
                 {upgradeOptions.map((option, index) => {
                   const color = option.kind === "utility"
-                    ? "#886b42"
+                    ? option.travelNoteCategory === "craft"
+                      ? "#8d5738"
+                      : option.travelNoteCategory === "journey"
+                        ? "#426b62"
+                        : "#76546b"
                     : getWeaponDefinition(option.weaponId).color;
                   const currentWeapon = option.kind === "utility"
                     ? undefined
@@ -2767,6 +2931,21 @@ export function PaperGuildGame() {
                             ))}
                           </span>
                           <span>选择后 {targetLevel}/5</span>
+                        </div>
+                      )}
+                      {option.kind === "utility" && option.travelNoteId && (
+                        <div
+                          className="stage-progress travel-note-progress"
+                          role="img"
+                          aria-label={`当前 ${option.currentRank ?? 0}/${option.maxRank ?? 0} 阶，选择后 ${option.nextRank ?? 1}/${option.maxRank ?? 0} 阶`}
+                        >
+                          <span>
+                            当前 {option.currentRank ?? 0}/{option.maxRank ?? 0}
+                          </span>
+                          <span className="travel-note-arrow" aria-hidden="true">→</span>
+                          <span>
+                            选择后 {option.nextRank ?? 1}/{option.maxRank ?? 0}
+                          </span>
                         </div>
                       )}
                     </button>
@@ -3602,16 +3781,22 @@ export function PaperGuildGame() {
                   <button
                     className="preview-cancel"
                     onClick={cancelForgePreview}
-                    disabled={!forgePreview}
+                    disabled={!forgePreview || forgeConfirming}
                   >
                     取消预览
                   </button>
                   <button
                     className="primary-button compact forge-confirm"
                     onClick={confirmForgePreview}
-                    disabled={!forgePreview || forgeFire < forgePreview.cost}
+                    disabled={
+                      forgeConfirming ||
+                      !forgePreview ||
+                      forgeFire < forgePreview.cost
+                    }
                   >
-                    {!forgePreview
+                    {forgeConfirming
+                      ? "正在落锤"
+                      : !forgePreview
                       ? "等待预览"
                       : forgeFire < forgePreview.cost
                         ? "炉火不足"
@@ -3623,14 +3808,56 @@ export function PaperGuildGame() {
                     className="secondary-button forge-close"
                     data-gamepad-cancel
                     onClick={closeForge}
-                    disabled={!endlessPerkChosen}
+                    disabled={forgeConfirming}
                   >
                     {forgePurpose === "celestial"
-                      ? "炼成后续战"
+                      ? "处置天时后续战"
                       : "定盘续战 · 余火保留"}
                   </button>
                 </div>
               </footer>
+              {forgeExitBlocker && (
+                <div
+                  className="forge-blocker-shade"
+                  role="alertdialog"
+                  aria-modal="true"
+                  aria-labelledby="forge-blocker-title"
+                  aria-describedby="forge-blocker-description"
+                >
+                  <section className="forge-blocker-card">
+                    <span className="forge-blocker-seal" aria-hidden="true">待</span>
+                    <div>
+                      <p className="kicker">续战前还差一步</p>
+                      <h3 id="forge-blocker-title">{forgeExitBlocker.title}</h3>
+                      <p id="forge-blocker-description">
+                        {forgeExitBlocker.description}
+                      </p>
+                    </div>
+                    {forgeExitBlocker.actions.length > 0 ? (
+                      <div className="forge-blocker-actions">
+                        {forgeExitBlocker.actions.map((action) => (
+                          <button
+                            key={action.id}
+                            autoFocus={action.emphasis === "primary"}
+                            className={
+                              action.emphasis === "primary"
+                                ? "primary-button"
+                                : "secondary-button"
+                            }
+                            onClick={() => handleForgeExitAction(action.id)}
+                          >
+                            {action.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="forge-blocker-progress" aria-live="polite">
+                        正在写入器盘……
+                      </div>
+                    )}
+                  </section>
+                </div>
+              )}
             </section>
           </div>
         )}
@@ -3821,10 +4048,16 @@ export function PaperGuildGame() {
               <div className="result-seal">{result.victory ? "成" : "归"}</div>
               <p className="kicker">{result.victory ? "四时已阅" : "纸命已尽"}</p>
               <h2>{result.title}</h2>
-              <div className="stats">
+              <div className={`stats ${(snapshot.surplusPages ?? 0) > 0 ? "has-surplus" : ""}`}>
                 <div><strong>{formatTime(snapshot.elapsed)}</strong><span>行旅时间</span></div>
                 <div><strong>{snapshot.kills}</strong><span>降服</span></div>
                 <div><strong>{snapshot.score}</strong><span>卷分</span></div>
+                {(snapshot.surplusPages ?? 0) > 0 && (
+                  <div>
+                    <strong>{snapshot.surplusPages}</strong>
+                    <span>余页</span>
+                  </div>
+                )}
               </div>
               <div className="button-row centered">
                 <button className="primary-button" onClick={startGame}>再展一卷</button>

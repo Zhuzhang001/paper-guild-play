@@ -526,6 +526,19 @@ export function captureDefeatedIntrusion(
   };
 }
 
+/**
+ * Declines a defeated celestial reward without changing the weave.
+ *
+ * Battlefield-owned actors and hostile strikes are intentionally outside the
+ * runtime weave state; the survivor layer should remove those for the dismissed
+ * intrusion at the same boundary.  Non-defeated intrusions are left untouched
+ * so this helper cannot accidentally cancel an active encounter.
+ */
+export function dismissDefeatedIntrusion(state: WeaveState): WeaveState {
+  if (state.activeIntrusion?.phase !== "defeated") return state;
+  return { ...state, activeIntrusion: undefined };
+}
+
 function stableHash(value: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {

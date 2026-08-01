@@ -44,6 +44,7 @@ import {
   type EffectSpec,
   type EffectTag,
   type EffectTrigger,
+  type TravelNoteId,
   type UpgradeOption,
   type WeaponId,
   type WeaponState,
@@ -54,6 +55,7 @@ import {
 } from "./content";
 import {
   applyUpgradeOption,
+  areAllWeaponsMastered,
   beginCelestialIntrusion,
   captureDefeatedIntrusion,
   chooseCelestialIntrusion,
@@ -66,6 +68,8 @@ import {
   deriveWeaveTerminal,
   fuseAdjacentNodes,
   generateUpgradeOptions,
+  getTravelNoteRank,
+  hasAvailableTravelNotes,
   insertWeaponNode,
   keepNewestAndRecycleInPlace,
   keepNewestInPlace,
@@ -490,6 +494,8 @@ export type RunState = {
   endless: boolean;
   score: number;
   kills: number;
+  /** Experience pages earned after every context-valid travel note is full. */
+  surplusPages: number;
   player: Player;
   build: CombatBuild;
   enemies: Enemy[];
@@ -725,6 +731,7 @@ export type RunSnapshot = {
   endless: boolean;
   score: number;
   kills: number;
+  surplusPages?: number;
   life: number;
   maxLife: number;
   xp: number;
@@ -950,6 +957,7 @@ export function createRun(
     endless: false,
     score: 0,
     kills: 0,
+    surplusPages: 0,
     player: {
       ...createPlayerForm(),
       x: GAME_WIDTH / 2,
@@ -1159,6 +1167,7 @@ export function snapshotRun(run: RunState): RunSnapshot {
     endless: run.endless,
     score: run.score,
     kills: run.kills,
+    surplusPages: run.surplusPages,
     life: run.player.life,
     maxLife: run.player.maxLife,
     xp: run.player.xp,
@@ -1179,13 +1188,28 @@ export function snapshotRun(run: RunState): RunSnapshot {
   };
 }
 
+function travelNoteContext(run: RunState) {
+  return {
+    oneLife: run.difficultyId === "oneLife",
+    recoveryEnabled:
+      run.difficultyId !== "oneLife" && !run.trials.has("noRecovery"),
+  };
+}
+
+function travelNoteRank(run: RunState, id: TravelNoteId) {
+  return getTravelNoteRank(run.build, id);
+}
+
 export function getUpgradeChoices(run: RunState): readonly UpgradeOption[] {
   const generated = generateUpgradeOptions(run.build, run.rng, {
     maxWeapons: 4,
     optionCount: run.difficultyId === "oneLife" ? 4 : 3,
+    travelNoteContext: travelNoteContext(run),
   });
   run.rng = generated.rngState;
-  return run.difficultyId === "oneLife"
+  return generated.milestone === "travelNote" || generated.milestone === "complete"
+    ? generated.options
+    : run.difficultyId === "oneLife"
     ? generated.options.filter(
         (option) =>
           option.kind !== "utility" || option.modifierId !== "paperWard",
@@ -1328,6 +1352,10 @@ export function applyUpgrade(run: RunState, option: UpgradeOption): string | und
       run.build.synergyCapacity,
     ).map((item) => item.definition.id),
   );
+  const previousTravelNoteRank =
+    option.kind === "utility" && option.travelNoteId
+      ? travelNoteRank(run, option.travelNoteId)
+      : 0;
   run.build = applyUpgradeOption(run.build, option);
   if (
     option.kind === "acquire" &&
@@ -1341,9 +1369,33 @@ export function applyUpgrade(run: RunState, option: UpgradeOption): string | und
     };
   }
   if (option.kind === "utility") {
-    if (option.modifierId === "keenEdge") run.player.powerMultiplier *= 1.08;
-    if (option.modifierId === "gatheringWind") run.player.magnetMultiplier *= 1.18;
-    if (option.modifierId === "paperWard" && run.difficultyId !== "oneLife") {
+    if (option.travelNoteId === "keenEdge") {
+      run.player.powerMultiplier *=
+        (1 + (previousTravelNoteRank + 1) * 0.06) /
+        (1 + previousTravelNoteRank * 0.06);
+    } else if (option.travelNoteId === "gatheringWind") {
+      run.player.magnetMultiplier *=
+        (1 + (previousTravelNoteRank + 1) * 0.18) /
+        (1 + previousTravelNoteRank * 0.18);
+    } else if (option.travelNoteId === "lightStep") {
+      run.player.speedMultiplier *=
+        (1 + (previousTravelNoteRank + 1) * 0.05) /
+        (1 + previousTravelNoteRank * 0.05);
+    } else if (
+      option.travelNoteId === "paperWard" &&
+      run.difficultyId !== "oneLife"
+    ) {
+      run.player.maxLife += 1;
+      run.player.life = Math.min(run.player.maxLife, run.player.life + 1);
+    } else if (!option.travelNoteId && option.modifierId === "keenEdge") {
+      run.player.powerMultiplier *= 1.08;
+    } else if (!option.travelNoteId && option.modifierId === "gatheringWind") {
+      run.player.magnetMultiplier *= 1.18;
+    } else if (
+      !option.travelNoteId &&
+      option.modifierId === "paperWard" &&
+      run.difficultyId !== "oneLife"
+    ) {
       run.player.maxLife = Math.min(7, run.player.maxLife + 1);
       run.player.life = Math.min(
         run.player.maxLife,
@@ -1471,6 +1523,18 @@ function ownerColor(owner: ProjectileOwner) {
   return weaponColor[owner as WeaponId] ?? "#302d28";
 }
 
+function travelRangeMultiplier(run: RunState) {
+  return 1 + travelNoteRank(run, "longReach") * 0.1;
+}
+
+function travelDurationMultiplier(run: RunState) {
+  return 1 + travelNoteRank(run, "lastingWork") * 0.15;
+}
+
+function coreAttackIntervalMultiplier(run: RunState) {
+  return 1 - travelNoteRank(run, "quickHands") * 0.05;
+}
+
 function spawnProjectilePattern(
   run: RunState,
   effect: Extract<EffectSpec, { kind: "projectile" }>,
@@ -1508,7 +1572,7 @@ function spawnProjectilePattern(
       vy: Math.sin(angle) * effect.speed,
       radius: effect.radius,
       damage: effect.damage * damageScale * run.player.powerMultiplier,
-      life: effect.lifetime,
+      life: effect.lifetime * travelRangeMultiplier(run),
       pierce: effect.pierce,
       homing: effect.homing ?? 0,
       targetId: target.id,
@@ -1655,6 +1719,7 @@ function fireChain(
   damageScale = 1,
   canProc = true,
 ) {
+  const chainRange = effect.range * travelRangeMultiplier(run);
   const hit = new Set<number>();
   let current = start ?? pickNearest(run);
   const firstTarget = current;
@@ -1677,7 +1742,7 @@ function fireChain(
     const candidates = run.enemies.filter((enemy) =>
       enemy.hp > 0 &&
       !hit.has(enemy.id) &&
-      distanceSquared(previousX, previousY, enemy.x, enemy.y) <= effect.range ** 2
+      distanceSquared(previousX, previousY, enemy.x, enemy.y) <= chainRange ** 2
     );
     current = candidates.sort((a, b) => {
       if (effect.preferMarked) {
@@ -1719,6 +1784,7 @@ function fireBeam(
   canProc = true,
   targetOverride?: Enemy,
 ) {
+  const beamLength = effect.length * travelRangeMultiplier(run);
   const target =
     targetOverride?.hp && targetOverride.hp > 0
       ? targetOverride
@@ -1754,7 +1820,7 @@ function fireBeam(
       const across = Math.abs(relX * direction.y - relY * direction.x);
       if (
         along >= 0 &&
-        along <= effect.length &&
+        along <= beamLength &&
         across <= effect.width / 2 + enemy.radius
       ) {
         hitIds.add(enemy.id);
@@ -1781,8 +1847,8 @@ function fireBeam(
         effect.visualKey ?? `beam/${owner}`,
         {
           owner,
-          x2: run.player.x + direction.x * effect.length,
-          y2: run.player.y + direction.y * effect.length,
+          x2: run.player.x + direction.x * beamLength,
+          y2: run.player.y + direction.y * beamLength,
         },
       );
     }
@@ -1799,8 +1865,8 @@ function fireBeam(
       `wave/${effect.visualKey ?? owner}`,
       {
         owner,
-        x2: run.player.x + Math.cos(baseAngle) * effect.length,
-        y2: run.player.y + Math.sin(baseAngle) * effect.length,
+        x2: run.player.x + Math.cos(baseAngle) * beamLength,
+        y2: run.player.y + Math.sin(baseAngle) * beamLength,
       },
     );
   }
@@ -1821,24 +1887,28 @@ function scheduleLightning(
   canProc = true,
   start?: Enemy,
 ) {
+  const rangeMultiplier = travelRangeMultiplier(run);
+  const chainRange = effect.chainRange
+    ? effect.chainRange * rangeMultiplier
+    : undefined;
   const ignored = new Set<number>();
   let originX = run.player.x;
   let originY = run.player.y;
   for (let index = 0; index < effect.strikes; index += 1) {
     const chained =
-      index > 0 && effect.chainRange
+      index > 0 && chainRange
         ? pickNearest(run, originX, originY, ignored)
         : undefined;
     const target =
       chained &&
       distanceSquared(originX, originY, chained.x, chained.y) <=
-        effect.chainRange! ** 2
+        chainRange! ** 2
         ? chained
         : index === 0
           ? (start?.hp && start.hp > 0 ? start : undefined) ??
             pickNearest(run, run.player.x, run.player.y, ignored) ??
             pickStrongest(run)
-          : effect.chainRange
+          : chainRange
             ? undefined
             : pickNearest(run, run.player.x, run.player.y, ignored);
     if (!target) break;
@@ -1851,7 +1921,7 @@ function scheduleLightning(
       artKey: effect.visualKey ?? "fx/thunder/strike",
       x: target.x,
       y: target.y,
-      radius: effect.radius,
+      radius: effect.radius * rangeMultiplier,
       damage: effect.damage * damageScale * run.player.powerMultiplier,
       delay: effect.delay + index * 0.06,
       maxDelay: effect.delay + index * 0.06,
@@ -1869,6 +1939,7 @@ function spawnZone(
   canProc = false,
   targetOverride?: Enemy,
 ) {
+  const duration = effect.duration * travelDurationMultiplier(run);
   const target = effect.followsOwner
     ? undefined
     : targetOverride?.hp && targetOverride.hp > 0
@@ -1880,10 +1951,10 @@ function spawnZone(
     artKey: effect.visualKey ?? `zone/${owner}`,
     x: target?.x ?? run.player.x,
     y: target?.y ?? run.player.y,
-    radius: effect.radius,
+    radius: effect.radius * travelRangeMultiplier(run),
     damagePerSecond: effect.damagePerSecond * damageScale * run.player.powerMultiplier,
-    life: effect.duration,
-    maxLife: effect.duration,
+    life: duration,
+    maxLife: duration,
     tick: 0,
     tickRate: effect.tickRate,
     followsPlayer: effect.followsOwner ?? false,
@@ -1899,13 +1970,14 @@ function spawnSummons(
   damageScale = 1,
   canProc = true,
 ) {
+  const duration = effect.duration * travelDurationMultiplier(run);
   const same = run.summons.filter(
     (summon) =>
       summon.owner === owner && summon.artKey === effect.summonKey,
   );
   for (let index = 0; index < same.length; index += 1) {
     const summon = same[index];
-    summon.life = Math.max(summon.life, effect.duration);
+    summon.life = Math.max(summon.life, duration);
     summon.attackDamage =
       effect.attackDamage * damageScale * run.player.powerMultiplier;
     summon.attackCooldown = effect.attackCooldown;
@@ -1927,7 +1999,7 @@ function spawnSummons(
       artKey: effect.summonKey,
       angle,
       radius,
-      life: effect.duration,
+      life: duration,
       attackDamage: effect.attackDamage * damageScale * run.player.powerMultiplier,
       attackCooldown: effect.attackCooldown,
       cooldown: index * 0.12,
@@ -2725,12 +2797,13 @@ function fireEffect(
   } else if (effect.kind === "summon") {
     spawnSummons(run, effect, owner, damageScale, canProc);
   } else if (effect.kind === "orbit") {
+    const orbitRadius = effect.radius * travelRangeMultiplier(run);
     addFx(
       run,
       "ring",
       run.player.x,
       run.player.y,
-      effect.radius,
+      orbitRadius,
       0.42,
       ownerColor(owner),
       effect.visualKey ?? `orbit/${owner}`,
@@ -2740,13 +2813,13 @@ function fireEffect(
       run,
       run.player.x,
       run.player.y,
-      effect.radius + 90,
+      orbitRadius + 90,
       "orbit",
     )) {
       if (
         enemy.hp > 0 &&
         distanceSquared(run.player.x, run.player.y, enemy.x, enemy.y) <=
-          (effect.radius + enemy.radius) ** 2
+          (orbitRadius + enemy.radius) ** 2
       ) {
         damageEnemy(
           run,
@@ -2769,7 +2842,7 @@ function fireEffect(
         artKey: effect.visualKey ?? `delayed/${owner}`,
         x: target.x,
         y: target.y,
-        radius: effect.radius,
+        radius: effect.radius * travelRangeMultiplier(run),
         damage: effect.damage * damageScale * run.player.powerMultiplier,
         delay,
         maxDelay: delay,
@@ -2824,16 +2897,21 @@ function dispatchEffectTrigger(
   const key = `trigger:${trigger}:${owner}:${effect.id}`;
   if ((run.cooldowns.get(key) ?? 0) > 0) return false;
   const activeTrigger = trigger === "onAttack" || trigger === "periodic";
+  const sourceWeapon = directWeaponOwner(owner);
   const reactiveCooldown =
     trigger === "onHit" || trigger === "onMarkedHit"
       ? effect.internalCooldown ?? 0.12
       : effect.internalCooldown ?? 0;
-  const cooldown = activeTrigger ? effectCooldown(effect) : reactiveCooldown;
+  const cooldown = activeTrigger
+    ? effectCooldown(effect) *
+      (announceAttack && sourceWeapon
+        ? coreAttackIntervalMultiplier(run)
+        : 1)
+    : reactiveCooldown;
   if (effect.chance !== undefined && random(run) > effect.chance) {
     if (cooldown > 0) run.cooldowns.set(key, cooldown);
     return false;
   }
-  const sourceWeapon = directWeaponOwner(owner);
   let damageScale = 1;
   if (
     activeTrigger &&
@@ -2914,6 +2992,58 @@ function effectCooldown(effect: EffectSpec) {
   return effect.internalCooldown ?? 0.8;
 }
 
+const TURNING_MOMENTUM_ARMED = "travel-note:turning-momentum:armed";
+const TURNING_MOMENTUM_COOLDOWN = "travel-note:turning-momentum:cooldown";
+
+function armTurningMomentum(run: RunState) {
+  const rank = travelNoteRank(run, "turningMomentum");
+  if (
+    rank <= 0 ||
+    (run.cooldowns.get(TURNING_MOMENTUM_COOLDOWN) ?? 0) > 0
+  ) {
+    return;
+  }
+  run.accumulators.set(TURNING_MOMENTUM_ARMED, 1);
+  run.cooldowns.set(TURNING_MOMENTUM_COOLDOWN, rank >= 2 ? 4 : 6);
+}
+
+function releaseTurningMomentumEcho(
+  run: RunState,
+  primary: EffectSpec,
+) {
+  if ((run.accumulators.get(TURNING_MOMENTUM_ARMED) ?? 0) <= 0) return;
+  const echoEffect = replaySafeEffect(primary);
+  if (!echoEffect) return;
+  run.accumulators.delete(TURNING_MOMENTUM_ARMED);
+  const echoTarget = pickNearest(run);
+  const echoEffects = echoEffect.kind === "accumulator"
+    ? echoEffect.procEffects
+        .map(replaySafeEffect)
+        .filter((effect): effect is EffectSpec => effect !== undefined)
+    : [echoEffect];
+  for (const effect of echoEffects) {
+    fireEffect(
+      run,
+      effect,
+      "terminal",
+      echoTarget,
+      0.45,
+      false,
+      1,
+    );
+  }
+  addFx(
+    run,
+    "burst",
+    run.player.x,
+    run.player.y,
+    74,
+    0.32,
+    "#b57b52",
+    "travel-note/turning-momentum",
+  );
+}
+
 function updateActiveEffects(run: RunState, delta: number) {
   for (const [key, value] of run.cooldowns) {
     if (value <= delta) run.cooldowns.delete(key);
@@ -2961,7 +3091,11 @@ function updateActiveEffects(run: RunState, delta: number) {
           pickNearest(run),
           weaponState.id,
         );
-        run.cooldowns.set(attackKey, minimumWeaponCadence[weaponState.id]);
+        run.cooldowns.set(
+          attackKey,
+          minimumWeaponCadence[weaponState.id] *
+            coreAttackIntervalMultiplier(run),
+        );
       }
       continue;
     }
@@ -2980,9 +3114,10 @@ function updateActiveEffects(run: RunState, delta: number) {
       Math.max(
         minimumWeaponCadence[weaponState.id],
         effectCooldown(primary),
-      ),
+      ) * coreAttackIntervalMultiplier(run),
     );
     if (!fired) continue;
+    releaseTurningMomentumEcho(run, primary);
     captureAttackReplay(
       run,
       owner,
@@ -3027,11 +3162,12 @@ function updateOrbits(run: RunState, delta: number) {
         effect.kind !== "orbit" ||
         (effect.trigger !== "periodic" && effect.trigger !== "onAttack")
       ) continue;
+      const orbitRadius = effect.radius * travelRangeMultiplier(run);
       const baseAngle = run.elapsed * effect.angularSpeed + orbitIndex * 0.51;
       for (let index = 0; index < effect.count; index += 1) {
         const angle = baseAngle + (Math.PI * 2 * index) / effect.count;
-        const x = run.player.x + Math.cos(angle) * effect.radius;
-        const y = run.player.y + Math.sin(angle) * effect.radius;
+        const x = run.player.x + Math.cos(angle) * orbitRadius;
+        const y = run.player.y + Math.sin(angle) * orbitRadius;
         for (const enemy of run.enemies) {
           if (enemy.hp <= 0) continue;
           const key = `${effect.id}:${index}:${enemy.id}`;
@@ -5114,6 +5250,38 @@ function executeBossSkill(run: RunState, enemy: Enemy) {
   }
 }
 
+function triggerStepBack(run: RunState) {
+  const rank = travelNoteRank(run, "stepBack");
+  const cooldownKey = "travel-note:step-back";
+  if (rank <= 0 || (run.cooldowns.get(cooldownKey) ?? 0) > 0) return;
+  const radius = rank >= 2 ? 140 : 100;
+  run.cooldowns.set(cooldownKey, rank >= 2 ? 6 : 8);
+  for (const enemy of run.enemies) {
+    if (enemy.hp <= 0 || enemy.boss) continue;
+    const dx = enemy.x - run.player.x;
+    const dy = enemy.y - run.player.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance > radius) continue;
+    const direction = distance > 0.001
+      ? { x: dx / distance, y: dy / distance }
+      : { x: Math.cos(run.player.facing), y: Math.sin(run.player.facing) };
+    const targetDistance = radius + enemy.radius + 12;
+    const push = Math.max(32, targetDistance - distance);
+    enemy.x = clamp(enemy.x + direction.x * push, -80, GAME_WIDTH + 80);
+    enemy.y = clamp(enemy.y + direction.y * push, -80, GAME_HEIGHT + 80);
+  }
+  addFx(
+    run,
+    "ring",
+    run.player.x,
+    run.player.y,
+    radius,
+    0.36,
+    "#7b8d80",
+    "travel-note/step-back",
+  );
+}
+
 function hurtPlayer(run: RunState, incomingDamage = 1) {
   if (run.player.invulnerability > 0) return false;
   if (run.testModifiers.incomingDamageScale === 0) return false;
@@ -5217,8 +5385,10 @@ function hurtPlayer(run: RunState, incomingDamage = 1) {
   );
   if (damage <= 0) return false;
   run.player.life -= damage;
-  run.player.invulnerability = 1.25;
+  run.player.invulnerability =
+    1.25 + travelNoteRank(run, "slowPaper") * 0.15;
   forceHumanForm(run.player);
+  triggerStepBack(run);
   addFx(run, "burst", run.player.x, run.player.y, 76, 0.42, "#a54535", "fx/player-hit");
   dispatchAllOwnersTrigger(run, "onDamageTaken");
   return true;
@@ -5870,11 +6040,19 @@ function addExperiencePickup(
 }
 
 function mergeExperience(run: RunState) {
+  const mergeRank = travelNoteRank(run, "mergePearls");
+  const baseThreshold = mergeRank >= 2 ? 56 : mergeRank === 1 ? 72 : 92;
   const mergeBoost = run.pickups.reduce(
-    (best, pickup) => Math.max(best, pickup.mergeMultiplier ?? 1),
+    (best, pickup) => pickup.kind === "healingLeaf"
+      ? best
+      : Math.max(best, pickup.mergeMultiplier ?? 1),
     1,
   );
-  if (run.pickups.length < Math.ceil(92 / mergeBoost)) return;
+  const experiencePickupCount = run.pickups.reduce(
+    (count, pickup) => count + Number(pickup.kind !== "healingLeaf"),
+    0,
+  );
+  if (experiencePickupCount < Math.ceil(baseThreshold / mergeBoost)) return;
   const low = run.pickups
     .filter(
       (pickup) =>
@@ -5887,7 +6065,13 @@ function mergeExperience(run: RunState) {
   const y = low.reduce((sum, pickup) => sum + pickup.y, 0) / low.length;
   const removed = new Set(low.map((pickup) => pickup.id));
   retainInPlace(run.pickups, (pickup) => !removed.has(pickup.id));
-  addExperiencePickup(run, x, y, total);
+  const merged = addExperiencePickup(run, x, y, total);
+  if (mergeRank > 0) {
+    merged.magnetRadius = Math.max(
+      merged.magnetRadius ?? 0,
+      mergeRank >= 2 ? 340 : 260,
+    );
+  }
 }
 
 function removeDead(run: RunState, events: RunEvent[]) {
@@ -5986,6 +6170,35 @@ function removeDead(run: RunState, events: RunEvent[]) {
   mergeExperience(run);
 }
 
+function recordPickupMend(run: RunState) {
+  const rank = travelNoteRank(run, "pickupMend");
+  if (
+    rank <= 0 ||
+    run.difficultyId === "oneLife" ||
+    run.trials.has("noRecovery")
+  ) {
+    return;
+  }
+  const required = rank >= 2 ? 6 : 8;
+  const counterKey = "travel-note:pickup-mend";
+  const count = (run.accumulators.get(counterKey) ?? 0) + 1;
+  if (count < required) {
+    run.accumulators.set(counterKey, count);
+    return;
+  }
+  run.accumulators.set(counterKey, count - required);
+  const angle = run.player.facing + Math.PI / 2;
+  run.pickups.push({
+    id: nextId(run),
+    x: run.player.x + Math.cos(angle) * 54,
+    y: run.player.y + Math.sin(angle) * 54,
+    value: 1,
+    age: 0,
+    tier: 1,
+    kind: "healingLeaf",
+  });
+}
+
 function updatePickups(run: RunState, delta: number, events: RunEvent[]) {
   for (const pickup of run.pickups) {
     pickup.age += delta;
@@ -5996,7 +6209,8 @@ function updatePickups(run: RunState, delta: number, events: RunEvent[]) {
     );
     if (distance < magnet) {
       const direction = normalized(run.player.x - pickup.x, run.player.y - pickup.y);
-      const pull = 150 + (magnet - distance) * 4.6;
+      const pull =
+        (150 + (magnet - distance) * 4.6) * run.player.magnetMultiplier;
       pickup.x += direction.x * pull * delta;
       pickup.y += direction.y * pull * delta;
     }
@@ -6009,6 +6223,7 @@ function updatePickups(run: RunState, delta: number, events: RunEvent[]) {
         );
       } else {
         run.player.xp += pickup.value;
+        recordPickupMend(run);
       }
       pickup.value = 0;
       events.push({ type: "pickup" });
@@ -6770,6 +6985,7 @@ export function stepRun(run: RunState, deltaSeconds: number, moveInput: MoveInpu
     }
   }
   if (sharpTurn) {
+    armTurningMomentum(run);
     dispatchEndlessPerkEvent(run, {
       type: "sharpTurn",
       form: "human",
@@ -6834,11 +7050,19 @@ export function stepRun(run: RunState, deltaSeconds: number, moveInput: MoveInpu
 
   syncSynergySelection(run, events);
 
-  if (run.player.xp >= run.player.nextXp) {
+  while (run.player.xp >= run.player.nextXp) {
     run.player.xp -= run.player.nextXp;
     run.player.level += 1;
     run.player.nextXp = 7 + run.player.level * 4;
+    const travelNotesComplete =
+      areAllWeaponsMastered(run.build, 4) &&
+      !hasAvailableTravelNotes(run.build, travelNoteContext(run));
+    if (travelNotesComplete) {
+      run.surplusPages += 1;
+      continue;
+    }
     events.push({ type: "upgrade" });
+    break;
   }
   if (run.player.life <= 0) events.push({ type: "defeat" });
   return events;
@@ -6867,7 +7091,7 @@ export function getOrbitVisuals(run: RunState): OrbitVisual[] {
         owner,
         artKey: effect.visualKey ?? `orbit/${owner}`,
         count: effect.count,
-        radius: effect.radius,
+        radius: effect.radius * travelRangeMultiplier(run),
         angularSpeed: effect.angularSpeed,
         phase,
       });

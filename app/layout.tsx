@@ -48,7 +48,7 @@ export const metadata: Metadata = {
   },
   other: {
     "paper-guild-build": BUILD_INFO.version,
-    "paper-guild-test": "non-commercial",
+    "paper-guild-stage": "test",
   },
 };
 

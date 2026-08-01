@@ -13,6 +13,17 @@
     "Kaiti SC",
     "Noto Serif SC",
     serif;
+  --viewport-width: 100vw;
+  --viewport-height: 100dvh;
+  --viewport-offset-left: 0px;
+  --viewport-offset-top: 0px;
+  --viewport-center-x: 50vw;
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  --game-stage-width: min(100vw, calc(100dvh * 16 / 9));
+  --game-stage-height: min(100dvh, calc(100vw * 9 / 16));
 }
 
 * {
@@ -40,8 +51,16 @@ button {
 }
 
 .page {
-  width: 100vw;
-  height: 100dvh;
+  position: fixed;
+  top: var(--viewport-offset-top);
+  left: var(--viewport-offset-left);
+  width: var(--viewport-width);
+  height: var(--viewport-height);
+  padding:
+    var(--safe-area-top)
+    var(--safe-area-right)
+    var(--safe-area-bottom)
+    var(--safe-area-left);
   display: grid;
   place-items: center;
   background:
@@ -51,8 +70,13 @@ button {
 
 .game-shell {
   position: relative;
-  width: min(100vw, calc(100dvh * 16 / 9));
-  height: min(100dvh, calc(100vw * 9 / 16));
+  width: var(--game-stage-width);
+  height: var(--game-stage-height);
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 16 / 9;
+  container-name: game-shell;
+  container-type: size;
   overflow: hidden;
   background: var(--paper);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
@@ -87,7 +111,7 @@ button {
   z-index: 5;
   display: grid;
   place-items: center;
-  padding: clamp(16px, 3vw, 42px);
+  padding: clamp(16px, 3cqw, 42px);
 }
 
 .menu {
@@ -99,7 +123,7 @@ button {
 
 .menu-panel {
   width: 100%;
-  padding: clamp(20px, 4vw, 58px);
+  padding: clamp(20px, 4cqw, 58px);
 }
 
 .kicker {
@@ -108,7 +132,7 @@ button {
   gap: 12px;
   margin: 0 0 10px;
   color: #6b5947;
-  font-size: clamp(10px, 1.1vw, 15px);
+  font-size: clamp(10px, 1.1cqw, 15px);
   letter-spacing: 0.28em;
 }
 
@@ -127,7 +151,7 @@ button {
 .title {
   margin: 0;
   font-family: "Paper Guild Display", "Paper Guild Text", cursive;
-  font-size: clamp(48px, 7.3vw, 104px);
+  font-size: clamp(48px, 7.3cqw, 104px);
   line-height: 1.02;
   letter-spacing: 0.015em;
   font-weight: 400;
@@ -141,7 +165,7 @@ button {
   width: min(100%, 460px);
   margin: 22px 0 24px;
   color: #5f594f;
-  font-size: clamp(13px, 1.45vw, 19px);
+  font-size: clamp(13px, 1.45cqw, 19px);
   line-height: 1.85;
 }
 
@@ -158,7 +182,7 @@ button {
   border: 1px solid rgba(54, 49, 40, 0.22);
   background: rgba(255, 252, 241, 0.55);
   padding: 6px 11px;
-  font-size: clamp(10px, 1vw, 13px);
+  font-size: clamp(10px, 1cqw, 13px);
   letter-spacing: 0.08em;
 }
 
@@ -189,7 +213,7 @@ button {
   padding: 15px 28px;
   background: var(--ink);
   color: #faf2de;
-  font-size: clamp(15px, 1.4vw, 19px);
+  font-size: clamp(15px, 1.4cqw, 19px);
   letter-spacing: 0.18em;
   box-shadow: 8px 8px 0 rgba(165, 69, 53, 0.22);
 }
@@ -278,7 +302,7 @@ button {
   z-index: 4;
   inset: 0;
   pointer-events: none;
-  padding: clamp(10px, 1.6vw, 22px);
+  padding: clamp(10px, 1.6cqw, 22px);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -297,7 +321,7 @@ button {
 }
 
 .status-card {
-  min-width: clamp(150px, 24vw, 310px);
+  min-width: clamp(150px, 24cqw, 310px);
   padding: 10px 12px;
   color: #29251f;
   background: rgba(248, 242, 227, 0.78);
@@ -309,7 +333,7 @@ button {
   display: flex;
   justify-content: space-between;
   gap: 14px;
-  font-size: clamp(11px, 1.2vw, 15px);
+  font-size: clamp(11px, 1.2cqw, 15px);
 }
 
 .hearts {
@@ -353,7 +377,7 @@ button {
 
 .timer {
   font-family: var(--font-ink);
-  font-size: clamp(17px, 2vw, 26px);
+  font-size: clamp(17px, 2cqw, 26px);
   font-weight: 800;
 }
 
@@ -413,10 +437,10 @@ button {
 
 .term-stack {
   position: absolute;
-  top: clamp(10px, 1.6vw, 22px);
+  top: clamp(10px, 1.6cqw, 22px);
   left: 50%;
   display: grid;
-  min-width: clamp(150px, 20vw, 250px);
+  min-width: clamp(150px, 20cqw, 250px);
   padding: 8px 16px 7px;
   color: #312e29;
   text-align: center;
@@ -435,7 +459,7 @@ button {
 
 .season-mark {
   font-family: "Paper Guild Display", "Paper Guild Text", cursive;
-  font-size: clamp(15px, 1.5vw, 20px);
+  font-size: clamp(15px, 1.5cqw, 20px);
   font-weight: 400;
   letter-spacing: 0.16em;
 }
@@ -470,13 +494,13 @@ button {
   padding: 5px 9px;
   background: rgba(165, 69, 53, 0.82);
   color: #fff5df;
-  font-size: clamp(10px, 0.95vw, 13px);
+  font-size: clamp(10px, 0.95cqw, 13px);
   letter-spacing: 0.08em;
 }
 
 .weave-hud {
   position: absolute;
-  top: clamp(66px, 8.8vw, 95px);
+  top: clamp(66px, 8.8cqw, 95px);
   left: 50%;
   display: flex;
   align-items: center;
@@ -579,7 +603,7 @@ button {
 .terminal-callout strong {
   font-family: "Paper Guild Display", "Paper Guild Text", cursive;
   font-weight: 400;
-  font-size: clamp(22px, 3vw, 38px);
+  font-size: clamp(22px, 3cqw, 38px);
   letter-spacing: 0.14em;
 }
 
@@ -598,7 +622,7 @@ button {
   padding: 8px 15px;
   background: rgba(38, 35, 31, 0.78);
   color: #fff5df;
-  font-size: clamp(11px, 1.15vw, 15px);
+  font-size: clamp(11px, 1.15cqw, 15px);
   letter-spacing: 0.06em;
   animation: tutorialFade 8s forwards;
   pointer-events: none;
@@ -636,7 +660,7 @@ button {
     var(--paper);
   border: 1px solid rgba(38, 35, 31, 0.28);
   box-shadow: 18px 18px 0 rgba(27, 26, 22, 0.2);
-  padding: clamp(18px, 3vw, 36px);
+  padding: clamp(18px, 3cqw, 36px);
 }
 
 .upgrade-heading,
@@ -645,7 +669,7 @@ button {
   margin: 0;
   font-family: "Paper Guild Display", "Paper Guild Text", cursive;
   font-weight: 400;
-  font-size: clamp(28px, 4vw, 50px);
+  font-size: clamp(28px, 4cqw, 50px);
   line-height: 1;
 }
 
@@ -657,7 +681,7 @@ button {
 .upgrade-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: clamp(9px, 1.5vw, 18px);
+  gap: clamp(9px, 1.5cqw, 18px);
 }
 
 .upgrade-grid.count-2 {
@@ -670,9 +694,9 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  column-gap: clamp(10px, 1.4vw, 18px);
-  min-height: clamp(150px, 24vw, 245px);
-  padding: clamp(14px, 2vw, 24px);
+  column-gap: clamp(10px, 1.4cqw, 18px);
+  min-height: clamp(150px, 24cqw, 245px);
+  padding: clamp(14px, 2cqw, 24px);
   border: 1px solid rgba(38, 35, 31, 0.25);
   background: rgba(255, 252, 241, 0.66);
   text-align: left;
@@ -682,7 +706,7 @@ button {
 }
 
 .upgrade-card:has(.upgrade-card-art) {
-  grid-template-columns: minmax(0, 1fr) clamp(76px, 10vw, 118px);
+  grid-template-columns: minmax(0, 1fr) clamp(76px, 10cqw, 118px);
 }
 
 .upgrade-card-art {
@@ -692,7 +716,7 @@ button {
   grid-row: 1 / -1;
   align-self: center;
   justify-self: end;
-  width: clamp(76px, 10vw, 118px);
+  width: clamp(76px, 10cqw, 118px);
   aspect-ratio: 1;
   background-repeat: no-repeat;
   filter: drop-shadow(0 7px 5px rgba(32, 28, 23, 0.24));
@@ -733,7 +757,7 @@ button {
 .upgrade-card h3 {
   grid-row: 2;
   margin: 12px 0 8px;
-  font-size: clamp(20px, 2.4vw, 30px);
+  font-size: clamp(20px, 2.4cqw, 30px);
   line-height: 1.18;
   text-wrap: balance;
   word-break: keep-all;
@@ -743,7 +767,7 @@ button {
   grid-row: 3;
   margin: 0;
   color: #665f55;
-  font-size: clamp(11px, 1.15vw, 15px);
+  font-size: clamp(11px, 1.15cqw, 15px);
   line-height: 1.65;
 }
 
@@ -794,6 +818,10 @@ button {
   background: rgba(38, 35, 31, 0.16);
 }
 
+.stats.has-surplus {
+  grid-template-columns: repeat(4, 1fr);
+}
+
 .stats div {
   padding: 15px 8px;
   background: var(--paper-light);
@@ -801,7 +829,7 @@ button {
 
 .stats strong {
   display: block;
-  font-size: clamp(20px, 3vw, 32px);
+  font-size: clamp(20px, 3cqw, 32px);
 }
 
 .stats span {
@@ -821,7 +849,7 @@ button {
   margin: -7px 0 20px;
   padding-left: 12px;
   color: #675f55;
-  font-size: clamp(10px, 1vw, 13px);
+  font-size: clamp(10px, 1cqw, 13px);
   line-height: 1.6;
   border-left: 2px solid #5a7194;
 }
@@ -845,7 +873,7 @@ button {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  max-height: min(52vh, 430px);
+  max-height: min(52cqh, 430px);
   padding: 2px;
   overflow-y: auto;
   scrollbar-color: rgba(63, 102, 95, 0.65) rgba(38, 35, 31, 0.08);
@@ -898,13 +926,13 @@ button {
 
 .synergy-choice-card strong {
   margin: 10px 0 5px;
-  font-size: clamp(18px, 2vw, 25px);
+  font-size: clamp(18px, 2cqw, 25px);
   line-height: 1.1;
 }
 
 .synergy-choice-card small {
   color: #625c53;
-  font-size: clamp(10px, 1vw, 13px);
+  font-size: clamp(10px, 1cqw, 13px);
   line-height: 1.5;
 }
 
@@ -1111,7 +1139,16 @@ button {
   }
 }
 
-@media (max-width: 760px) {
+@container game-shell (max-width: 760px) {
+  .menu {
+    grid-template-columns: minmax(0, 1fr);
+    background: linear-gradient(
+      90deg,
+      rgba(242, 234, 216, 0.96),
+      rgba(242, 234, 216, 0.84)
+    );
+  }
+
   .menu-panel {
     padding: 20px 26px;
   }
@@ -1179,7 +1216,7 @@ button {
 
 }
 
-@media (orientation: landscape) and (max-height: 500px) {
+@container game-shell (orientation: landscape) and (max-height: 500px) {
   .menu {
     align-items: stretch;
   }
@@ -1204,7 +1241,7 @@ button {
   }
 
   .menu-panel .title {
-    font-size: clamp(34px, 12vh, 50px);
+    font-size: clamp(34px, 12cqh, 50px);
   }
 
   .menu-panel .subtitle {
@@ -1299,7 +1336,7 @@ button {
   .upgrade-heading,
   .result-panel h2,
   .pause-panel h2 {
-    font-size: clamp(22px, 5.8vh, 30px);
+    font-size: clamp(22px, 5.8cqh, 30px);
   }
 
   .upgrade-note {
@@ -1323,7 +1360,7 @@ button {
 
   .upgrade-card h3 {
     margin: 6px 0 4px;
-    font-size: clamp(17px, 4.6vh, 22px);
+    font-size: clamp(17px, 4.6cqh, 22px);
   }
 
   .upgrade-card p {
@@ -1561,17 +1598,18 @@ button {
 }
 
 .forge-panel {
+  position: relative;
   width: calc(100% - 8px);
-  height: calc(100dvh - 8px);
+  height: calc(100% - 8px);
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding:
-    max(7px, env(safe-area-inset-top))
-    max(8px, env(safe-area-inset-right))
-    max(7px, env(safe-area-inset-bottom))
-    max(8px, env(safe-area-inset-left));
+    max(7px, 1.2cqh)
+    max(8px, 1.2cqw)
+    max(7px, 1.2cqh)
+    max(8px, 1.2cqw);
   overflow: hidden;
   color: #282621;
   background:
@@ -1612,7 +1650,7 @@ button {
 }
 
 .forge-heading-row .upgrade-heading {
-  font-size: clamp(22px, 5.5vh, 31px);
+  font-size: clamp(22px, 5.5cqh, 31px);
 }
 
 .forge-ledger {
@@ -1768,7 +1806,7 @@ button {
 
 .forge-perk-card {
   position: relative;
-  flex: 0 0 min(220px, 42vw);
+  flex: 0 0 min(220px, 42cqw);
   min-width: 0;
   min-height: 74px;
   display: grid;
@@ -2162,7 +2200,7 @@ button {
 }
 
 .forge-route-picks button {
-  flex: 0 0 min(238px, 42vw);
+  flex: 0 0 min(238px, 42cqw);
   min-width: 0;
   min-height: 76px;
   display: grid;
@@ -2736,7 +2774,7 @@ button {
   align-items: stretch;
   gap: 7px;
   padding-top: 6px;
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: 0;
   border-top: 1px solid rgba(50, 47, 41, 0.2);
 }
 
@@ -2802,20 +2840,92 @@ button {
   border: 1px solid rgba(75, 64, 50, 0.28);
 }
 
-@media (min-width: 960px) and (min-height: 621px) {
+.forge-blocker-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: max(16px, 4cqh) max(16px, 4cqw);
+  background: rgba(25, 23, 19, 0.52);
+  backdrop-filter: blur(3px);
+}
+
+.forge-blocker-card {
+  width: min(520px, 100%);
+  max-height: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: clamp(16px, 3cqh, 28px);
+  overflow: auto;
+  color: #28251f;
+  background: #f8f0dc;
+  border: 1px solid rgba(47, 43, 35, 0.45);
+  box-shadow: 10px 10px 0 rgba(24, 22, 18, 0.28);
+}
+
+.forge-blocker-card h3,
+.forge-blocker-card p {
+  margin: 0;
+}
+
+.forge-blocker-card h3 {
+  margin-bottom: 6px;
+  font-family: var(--font-brush);
+  font-size: clamp(24px, 5cqh, 38px);
+  font-weight: 400;
+}
+
+.forge-blocker-card p:not(.kicker) {
+  font-size: max(12px, 1.7cqh);
+  line-height: 1.55;
+}
+
+.forge-blocker-seal {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  color: #fff4df;
+  background: #97422f;
+  border-radius: 50%;
+  font-family: var(--font-brush);
+  font-size: 27px;
+}
+
+.forge-blocker-actions,
+.forge-blocker-progress {
+  grid-column: 1 / -1;
+}
+
+.forge-blocker-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.forge-blocker-progress {
+  padding: 12px;
+  text-align: center;
+  color: #5b625c;
+  border: 1px dashed rgba(50, 72, 65, 0.42);
+}
+
+@container game-shell (min-width: 960px) and (min-height: 621px) {
   .modal-shade:has(> .forge-panel) {
     padding: 10px;
   }
 
   .forge-panel {
     width: min(calc(100% - 20px), 1440px);
-    height: min(calc(100dvh - 20px), 900px);
+    height: min(calc(100% - 20px), 900px);
     gap: 7px;
     padding:
-      max(10px, env(safe-area-inset-top))
-      max(12px, env(safe-area-inset-right))
-      max(10px, env(safe-area-inset-bottom))
-      max(12px, env(safe-area-inset-left));
+      max(10px, 1.2cqh)
+      max(12px, 1.2cqw)
+      max(10px, 1.2cqh)
+      max(12px, 1.2cqw);
     box-shadow: 14px 14px 0 rgba(27, 26, 22, 0.2);
   }
 
@@ -2825,7 +2935,7 @@ button {
   }
 
   .forge-heading-row .upgrade-heading {
-    font-size: clamp(27px, 3.2vw, 42px);
+    font-size: clamp(27px, 3.2cqw, 42px);
   }
 
   .forge-view-switch {
@@ -2919,7 +3029,7 @@ button {
 
 }
 
-@media (max-height: 620px), (max-width: 959px) {
+@container game-shell (max-height: 620px) or (max-width: 959px) {
   .forge-shell-header {
     gap: 3px;
   }
@@ -2930,7 +3040,7 @@ button {
   }
 
   .forge-perk-section:not(.chosen) .forge-perk-card {
-    flex-basis: min(220px, 44vw);
+    flex-basis: min(220px, 44cqw);
   }
 
   .forge-add-detail {
@@ -2946,7 +3056,7 @@ button {
   }
 }
 
-@media (max-width: 690px) {
+@container game-shell (max-width: 690px) {
   .forge-primary-rule {
     grid-template-columns: minmax(0, 1fr) minmax(158px, 0.48fr);
   }
@@ -3012,37 +3122,163 @@ button {
   }
 }
 
+@container game-shell (max-height: 620px) {
+  .game-shell.game-shell.game-shell :is(button, select, input[type="range"]) {
+    min-height: 44px;
+  }
+
+  .menu,
+  .modal-shade {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .menu-panel {
+    justify-content: flex-start;
+  }
+
+  .upgrade-panel,
+  .result-panel,
+  .pause-panel {
+    max-height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@container game-shell (max-height: 300px) {
+  .overlay {
+    padding: 4px;
+  }
+
+  .menu-panel {
+    padding: 6px 10px;
+  }
+
+  .menu-panel .subtitle,
+  .menu-panel .feature-row,
+  .menu-panel .tao-note {
+    display: none;
+  }
+
+  .menu-panel .initial-weapon-select,
+  .menu-panel .trial-area {
+    margin-block: 3px;
+  }
+
+  .hud {
+    padding: 6px;
+  }
+
+  .weave-hud,
+  .hud-bottom {
+    display: none;
+  }
+
+  .status-card {
+    min-width: 140px;
+    padding: 7px 8px;
+  }
+
+  .time-card {
+    padding: 4px 6px;
+  }
+
+  .time-card > span:first-child {
+    display: none;
+  }
+
+  .term-stack {
+    top: 6px;
+    min-width: 110px;
+  }
+}
+
 .test-build-badge {
   position: fixed;
   z-index: 48;
-  right: max(8px, env(safe-area-inset-right));
-  bottom: max(6px, env(safe-area-inset-bottom));
+  top: calc(
+    var(--viewport-offset-top) + var(--viewport-height) -
+      var(--safe-area-bottom) - 6px
+  );
+  left: calc(
+    var(--viewport-offset-left) + var(--viewport-width) -
+      var(--safe-area-right) - 8px
+  );
   padding: 4px 8px;
   border: 1px solid rgba(50, 54, 45, 0.28);
   background: rgba(244, 237, 216, 0.84);
   color: rgba(45, 48, 40, 0.78);
   font: 11px/1.2 "Paper Guild Text", serif;
   letter-spacing: 0.08em;
+  transform: translate(-100%, -100%);
   pointer-events: none;
   backdrop-filter: blur(3px);
+}
+
+.pwa-install {
+  position: fixed;
+  z-index: 88;
+  top: calc(
+    var(--viewport-offset-top) + var(--safe-area-top) + 10px
+  );
+  left: calc(
+    var(--viewport-offset-left) + var(--safe-area-left) + 10px
+  );
+  max-width: min(330px, calc(var(--viewport-width) - 20px));
+  color: #f8edda;
+  background: rgba(35, 42, 37, 0.9);
+  border: 1px solid rgba(237, 220, 184, 0.36);
+  box-shadow: 0 8px 24px rgba(20, 22, 19, 0.2);
+  font-size: 12px;
+}
+
+.pwa-install span {
+  display: block;
+  padding: 10px 12px;
+}
+
+.pwa-install button {
+  min-height: 44px;
+  padding: 8px 13px;
+  color: #fff7e8;
+  background: #496c61;
+  border: 0;
+  cursor: pointer;
 }
 
 .pwa-update {
   position: fixed;
   z-index: 90;
-  left: 50%;
-  bottom: max(12px, env(safe-area-inset-bottom));
+  top: calc(
+    var(--viewport-offset-top) + var(--viewport-height) -
+      var(--safe-area-bottom) - 12px
+  );
+  left: var(--viewport-center-x);
   display: flex;
   align-items: center;
   gap: 10px;
-  width: min(620px, calc(100vw - 24px));
+  width: min(
+    620px,
+    calc(
+      var(--viewport-width) - var(--safe-area-left) -
+        var(--safe-area-right) - 24px
+    )
+  );
   min-height: 48px;
   padding: 8px 10px 8px 14px;
   border: 1px solid rgba(53, 65, 55, 0.42);
   background: rgba(247, 240, 219, 0.97);
   box-shadow: 0 10px 30px rgba(39, 37, 30, 0.2);
   color: #2d322d;
-  transform: translateX(-50%);
+  transform: translate(-50%, -100%);
 }
 
 .pwa-update span {
@@ -3052,7 +3288,7 @@ button {
 }
 
 .pwa-update button {
-  min-height: 38px;
+  min-height: 44px;
   padding: 0 14px;
   border: 1px solid rgba(53, 65, 55, 0.42);
   background: #496c61;
@@ -3066,7 +3302,98 @@ button {
   color: #37433d;
 }
 
+[data-viewport-compact="true"] .test-build-badge {
+  font-size: 9px;
+  opacity: 0.72;
+}
+
+[data-viewport-compact="true"] .pwa-update {
+  gap: 6px;
+  min-height: 44px;
+  padding: 6px 7px 6px 10px;
+}
+
+[data-viewport-compact="true"] .pwa-update span {
+  font-size: 11px;
+}
+
+[data-viewport-compact="true"] .pwa-update button {
+  min-height: 44px;
+  padding-inline: 10px;
+  font-size: 11px;
+}
+
+.viewport-too-short {
+  position: fixed;
+  z-index: 200;
+  top: var(--viewport-offset-top);
+  left: var(--viewport-offset-left);
+  width: var(--viewport-width);
+  height: var(--viewport-height);
+  display: grid;
+  place-items: center;
+  padding:
+    max(8px, var(--safe-area-top))
+    max(8px, var(--safe-area-right))
+    max(8px, var(--safe-area-bottom))
+    max(8px, var(--safe-area-left));
+  color: #f8edd8;
+  background: rgba(24, 28, 25, 0.97);
+  text-align: center;
+  touch-action: manipulation;
+}
+
+.viewport-too-short > div {
+  width: min(560px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.viewport-too-short p,
+.viewport-too-short h2,
+.viewport-too-short span,
+.viewport-too-short small {
+  grid-column: 1;
+  margin: 0;
+}
+
+.viewport-too-short p {
+  color: #cf9b5d;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+}
+
+.viewport-too-short h2 {
+  font: 400 clamp(20px, 8vh, 28px)/1.15 "Paper Guild Display", var(--font-ink);
+}
+
+.viewport-too-short span,
+.viewport-too-short small {
+  color: #cfc5b2;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.viewport-too-short button {
+  grid-column: 2;
+  grid-row: 1 / 4;
+  min-width: 132px;
+  min-height: 44px;
+  padding: 8px 14px;
+  color: #fff8e9;
+  background: #a54b38;
+  border: 1px solid #d49b67;
+  cursor: pointer;
+}
+
+.viewport-too-short small {
+  color: #efc994;
+}
+
 @media (max-width: 690px), (max-height: 430px) {
+  /* Fallback before the first VisualViewport measurement. */
   .test-build-badge {
     font-size: 9px;
     opacity: 0.72;
@@ -3083,7 +3410,7 @@ button {
   }
 
   .pwa-update button {
-    min-height: 36px;
+    min-height: 44px;
     padding-inline: 10px;
     font-size: 11px;
   }

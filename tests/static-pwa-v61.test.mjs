@@ -44,6 +44,7 @@ test("PWA remains landscape, installs locally, and defers activation to an expli
     text("app/layout.tsx"),
   ]);
   const manifest = JSON.parse(manifestRaw);
+  assert.deepEqual(manifest.display_override, ["fullscreen", "standalone"]);
   assert.equal(manifest.display, "standalone");
   assert.equal(manifest.orientation, "landscape");
   assert.equal(manifest.start_url, "./");
@@ -69,7 +70,7 @@ test("build identity is shared by both mirrors", async () => {
     text("app/publicAsset.ts"),
   ]);
   const version = JSON.parse(versionRaw);
-  assert.equal(version.version, "6.1.0");
-  assert.match(helper, /version:\s*"6\.1\.0"/);
+  assert.equal(version.version, "6.2.0");
+  assert.match(helper, /version:\s*"6\.2\.0"/);
   assert.equal(version.contentVersion, 6);
 });

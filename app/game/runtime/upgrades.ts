@@ -4,6 +4,10 @@ import type {
   EffectSpec,
   ResolvedWeaponKit,
   RunModifierId,
+  TravelNoteCategory,
+  TravelNoteDefinition,
+  TravelNoteId,
+  TravelNoteRankState,
   UpgradeOption,
   WeaponId,
   WeaponLevel,
@@ -21,14 +25,170 @@ export type UpgradeGenerationConfig = {
   maxWeapons?: number;
   optionCount?: number;
   unlockedWeaponIds?: readonly WeaponId[];
+  travelNoteContext?: TravelNoteContext;
+};
+
+export type TravelNoteContext = {
+  oneLife?: boolean;
+  recoveryEnabled?: boolean;
 };
 
 export type UpgradeGenerationResult = {
   options: readonly UpgradeOption[];
   rngState: RngState;
-  milestone: "route" | "mastery" | "normal";
+  milestone: "route" | "mastery" | "normal" | "travelNote" | "complete";
   weaponId?: WeaponId;
 };
+
+export const TRAVEL_NOTE_CATEGORIES: readonly TravelNoteCategory[] = [
+  "craft",
+  "journey",
+  "protection",
+] as const;
+
+export const TRAVEL_NOTE_DEFINITIONS: readonly TravelNoteDefinition[] = [
+  {
+    id: "keenEdge",
+    name: "砺锋",
+    category: "craft",
+    maxRank: 4,
+    description: "逐阶打磨器锋，提高所有基础伤害。",
+    rankEffects: ["基础伤害 +6%", "基础伤害 +12%", "基础伤害 +18%", "基础伤害 +24%"],
+    requirements: [],
+    artKey: "upgrade/travel-note-keen-edge",
+  },
+  {
+    id: "quickHands",
+    name: "顺手",
+    category: "craft",
+    maxRank: 3,
+    description: "收紧现有核心攻击的节拍，不另开攻击计时。",
+    rankEffects: ["核心攻击间隔 -5%", "核心攻击间隔 -10%", "核心攻击间隔 -15%"],
+    requirements: [],
+    artKey: "upgrade/travel-note-quick-hands",
+  },
+  {
+    id: "longReach",
+    name: "放远",
+    category: "craft",
+    maxRank: 2,
+    description: "延伸弹体、扫击、光束与区域的作用距离。",
+    rankEffects: ["作用距离 +10%", "作用距离 +20%"],
+    requirements: [],
+    artKey: "upgrade/travel-note-long-reach",
+  },
+  {
+    id: "lastingWork",
+    name: "久留",
+    category: "craft",
+    maxRank: 2,
+    description: "让召唤物与驻留区域在场上维持更久。",
+    rankEffects: ["召唤物与驻留区域时间 +15%", "召唤物与驻留区域时间 +30%"],
+    requirements: ["durationWeapon"],
+    artKey: "upgrade/travel-note-lasting-work",
+  },
+  {
+    id: "gatheringWind",
+    name: "聚风",
+    category: "journey",
+    maxRank: 3,
+    description: "扩大纸结感应范围，并加快吸附。",
+    rankEffects: ["经验吸附范围与速度 +18%", "经验吸附范围与速度 +36%", "经验吸附范围与速度 +54%"],
+    requirements: [],
+    artKey: "upgrade/travel-note-gathering-wind",
+  },
+  {
+    id: "lightStep",
+    name: "轻脚",
+    category: "journey",
+    maxRank: 2,
+    description: "让行路脚步更轻快。",
+    rankEffects: ["移动速度 +5%", "移动速度 +10%"],
+    requirements: [],
+    artKey: "upgrade/travel-note-light-step",
+  },
+  {
+    id: "mergePearls",
+    name: "并珠",
+    category: "journey",
+    maxRank: 2,
+    description: "更早归并散落纸结，并加强合并纸结的吸附。",
+    rankEffects: ["归并阈值 92 → 72，合并纸结吸附增强", "归并阈值 72 → 56，合并纸结吸附再次增强"],
+    requirements: [],
+    artKey: "upgrade/travel-note-merge-pearls",
+  },
+  {
+    id: "turningMomentum",
+    name: "转身借力",
+    category: "journey",
+    maxRank: 2,
+    description: "急转后令下一次核心攻击重新索敌并补发45%回响。",
+    rankEffects: ["回响冷却 6 秒", "回响冷却 6 → 4 秒"],
+    requirements: [],
+    artKey: "upgrade/travel-note-turning-momentum",
+  },
+  {
+    id: "paperWard",
+    name: "护纸",
+    category: "protection",
+    maxRank: 2,
+    description: "增加一命并立即恢复一命。",
+    rankEffects: ["生命上限 +1，并恢复 1 命", "生命上限再 +1，并恢复 1 命"],
+    requirements: ["notOneLife"],
+    artKey: "upgrade/travel-note-paper-ward",
+  },
+  {
+    id: "slowPaper",
+    name: "缓纸",
+    category: "protection",
+    maxRank: 2,
+    description: "延长受击后的安全间隙。",
+    rankEffects: ["受击无敌时间 +0.15 秒", "受击无敌时间 +0.30 秒"],
+    requirements: [],
+    artKey: "upgrade/travel-note-slow-paper",
+  },
+  {
+    id: "stepBack",
+    name: "退一步",
+    category: "protection",
+    maxRank: 2,
+    description: "受击时推开身边的非Boss敌人。",
+    rankEffects: ["推开 100px 内敌人，冷却 8 秒", "推开 140px 内敌人，冷却 6 秒"],
+    requirements: [],
+    artKey: "upgrade/travel-note-step-back",
+  },
+  {
+    id: "pickupMend",
+    name: "拾补",
+    category: "protection",
+    maxRank: 2,
+    description: "拾取足够多的朱砂纸结后生成恢复叶。",
+    rankEffects: ["每拾取 8 枚朱砂纸结生成恢复叶", "每拾取 6 枚朱砂纸结生成恢复叶"],
+    requirements: ["notOneLife", "recoveryEnabled"],
+    artKey: "upgrade/travel-note-pickup-mend",
+  },
+] as const;
+
+const TRAVEL_NOTE_BY_ID = new Map(
+  TRAVEL_NOTE_DEFINITIONS.map((definition) => [definition.id, definition]),
+);
+
+export function getTravelNoteDefinition(id: TravelNoteId): TravelNoteDefinition {
+  const definition = TRAVEL_NOTE_BY_ID.get(id);
+  if (!definition) throw new Error(`Unknown travel note ${id}`);
+  return definition;
+}
+
+export function getTravelNoteRank(
+  buildOrRanks: CombatBuild | TravelNoteRankState | undefined,
+  id: TravelNoteId,
+): number {
+  if (!buildOrRanks) return 0;
+  const ranks = "weapons" in buildOrRanks
+    ? buildOrRanks.travelNotes
+    : buildOrRanks;
+  return Math.max(0, Math.floor(ranks?.[id] ?? 0));
+}
 
 const UTILITY_OPTIONS: readonly UpgradeOption[] = [
   {
@@ -61,6 +221,7 @@ export function createCombatBuild(initialWeaponId: WeaponId = "sword"): CombatBu
   return {
     weapons: [{ id: initialWeaponId, level: 1 }],
     modifiers: {},
+    travelNotes: {},
     synergyCapacity: 3,
   };
 }
@@ -157,6 +318,113 @@ function takeOne<T>(
   return { value: values[picked.value], rngState: picked.state };
 }
 
+export function areAllWeaponsMastered(
+  build: CombatBuild,
+  maxWeapons = 4,
+): boolean {
+  return (
+    build.weapons.length >= maxWeapons &&
+    build.weapons.every((weapon) => weapon.level === 5)
+  );
+}
+
+function hasDurationWeapon(build: CombatBuild): boolean {
+  return build.weapons.some((weapon) =>
+    resolveWeaponEffects(weapon).some(
+      (effect) => effect.kind === "summon" || effect.kind === "zone",
+    )
+  );
+}
+
+export function availableTravelNotes(
+  build: CombatBuild,
+  context: TravelNoteContext = {},
+): readonly TravelNoteDefinition[] {
+  const durationWeapon = hasDurationWeapon(build);
+  return TRAVEL_NOTE_DEFINITIONS.filter((definition) => {
+    if (getTravelNoteRank(build, definition.id) >= definition.maxRank) {
+      return false;
+    }
+    if (
+      definition.requirements.includes("durationWeapon") &&
+      !durationWeapon
+    ) {
+      return false;
+    }
+    if (definition.requirements.includes("notOneLife") && context.oneLife) {
+      return false;
+    }
+    if (
+      definition.requirements.includes("recoveryEnabled") &&
+      context.recoveryEnabled === false
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+export function hasAvailableTravelNotes(
+  build: CombatBuild,
+  context: TravelNoteContext = {},
+): boolean {
+  return availableTravelNotes(build, context).length > 0;
+}
+
+function travelNoteOption(
+  build: CombatBuild,
+  definition: TravelNoteDefinition,
+  slotCategory: TravelNoteCategory,
+): UpgradeOption {
+  const currentRank = getTravelNoteRank(build, definition.id);
+  const nextRank = currentRank + 1;
+  return {
+    id: `travel-note-${definition.id}-${nextRank}`,
+    kind: "utility",
+    modifierId: definition.id,
+    travelNoteId: definition.id,
+    travelNoteCategory: definition.category,
+    slotCategory,
+    currentRank,
+    nextRank,
+    maxRank: definition.maxRank,
+    title: definition.name,
+    description: `当前 ${currentRank}/${definition.maxRank} 阶；选择后：${definition.rankEffects[nextRank - 1]}`,
+    artKey: definition.artKey,
+  };
+}
+
+export function generateTravelNoteOptions(
+  build: CombatBuild,
+  rngState: RngState,
+  context: TravelNoteContext = {},
+): UpgradeGenerationResult {
+  const available = [...availableTravelNotes(build, context)];
+  if (available.length === 0) {
+    return { options: [], rngState, milestone: "complete" };
+  }
+
+  const chosen: TravelNoteDefinition[] = [];
+  const options: UpgradeOption[] = [];
+  let currentState = rngState;
+  for (const slotCategory of TRAVEL_NOTE_CATEGORIES) {
+    const unused = available.filter(
+      (definition) => !chosen.some((item) => item.id === definition.id),
+    );
+    if (unused.length === 0) break;
+    const matching = unused.filter(
+      (definition) => definition.category === slotCategory,
+    );
+    const picked = takeOne(matching.length > 0 ? matching : unused, currentState);
+    currentState = picked.rngState;
+    if (!picked.value) continue;
+    chosen.push(picked.value);
+    options.push(travelNoteOption(build, picked.value, slotCategory));
+  }
+
+  return { options, rngState: currentState, milestone: "travelNote" };
+}
+
 export function generateUpgradeOptions(
   build: CombatBuild,
   rngState: RngState,
@@ -188,6 +456,13 @@ export function generateUpgradeOptions(
 
   const maxWeapons = config.maxWeapons ?? 4;
   const optionCount = Math.max(1, config.optionCount ?? 3);
+  if (areAllWeaponsMastered(build, maxWeapons)) {
+    return generateTravelNoteOptions(
+      build,
+      routeMilestone.rngState,
+      config.travelNoteContext,
+    );
+  }
   const unlocked = config.unlockedWeaponIds ?? WEAPON_IDS;
   const heldIds = new Set(build.weapons.map((state) => state.id));
   const progressCandidates = build.weapons
@@ -246,6 +521,20 @@ export function applyUpgradeOption(
   option: UpgradeOption,
 ): CombatBuild {
   if (option.kind === "utility") {
+    if (option.travelNoteId) {
+      const definition = getTravelNoteDefinition(option.travelNoteId);
+      const currentRank = getTravelNoteRank(build, option.travelNoteId);
+      if (currentRank >= definition.maxRank) {
+        throw new Error(`Travel note ${option.travelNoteId} is already complete`);
+      }
+      return {
+        ...build,
+        travelNotes: {
+          ...build.travelNotes,
+          [option.travelNoteId]: currentRank + 1,
+        },
+      };
+    }
     const modifiers = { ...build.modifiers };
     modifiers[option.modifierId] = (modifiers[option.modifierId] ?? 0) + 1;
     return { ...build, modifiers };
