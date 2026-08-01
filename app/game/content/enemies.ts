@@ -1,4 +1,5 @@
 import type { EnemyArchetype } from "../art";
+import type { MovementTargetSpec } from "./movement";
 
 export type EnemyRank = "common" | "elite";
 
@@ -28,7 +29,7 @@ export type EnemySkillDefinition = {
   telegraph: number;
   active: number;
   recovery: number;
-  travelDistance?: number;
+  movement?: MovementTargetSpec;
   radius: number;
   strikeCount?: number;
   strikeDelay?: number;
@@ -72,7 +73,13 @@ export const ENEMY_DEFINITIONS: Readonly<
       telegraph: 0.24,
       active: 0.34,
       recovery: 0.28,
-      travelDistance: 145,
+      movement: {
+        kind: "landShort",
+        maxTravel: 110,
+        minTravel: 64,
+        clearance: 8,
+        closeFallback: { kind: "stomp" },
+      },
       radius: 64,
       artKey: "enemy/cup/hop",
     },
@@ -85,12 +92,18 @@ export const ENEMY_DEFINITIONS: Readonly<
       id: "shoe-dash",
       mode: "dash",
       behavior: "pairedShoeCross",
-      triggerRange: 330,
+      triggerRange: 270,
       cooldown: 2.15,
       telegraph: 0.3,
       active: 0.32,
       recovery: 0.3,
-      travelDistance: 250,
+      movement: {
+        kind: "crossTarget",
+        maxTravel: 360,
+        overshoot: 88,
+        clearance: 8,
+        sweptDamage: true,
+      },
       radius: 48,
       artKey: "enemy/shoe/dash",
     },
@@ -127,7 +140,12 @@ export const ENEMY_DEFINITIONS: Readonly<
       telegraph: 0.2,
       active: 0.42,
       recovery: 0.22,
-      travelDistance: 215,
+      movement: {
+        kind: "flyby",
+        exitMargin: 64,
+        arcHeight: 44,
+        sweptDamage: true,
+      },
       radius: 45,
       artKey: "enemy/fish/arc",
     },
@@ -164,7 +182,13 @@ export const ENEMY_DEFINITIONS: Readonly<
       telegraph: 0.38,
       active: 0.38,
       recovery: 0.34,
-      travelDistance: 190,
+      movement: {
+        kind: "landShort",
+        maxTravel: 145,
+        minTravel: 64,
+        clearance: 8,
+        closeFallback: { kind: "sideHop", distance: 64 },
+      },
       radius: 74,
       artKey: "enemy/rib/pounce",
     },
@@ -182,7 +206,13 @@ export const ENEMY_DEFINITIONS: Readonly<
       telegraph: 0.58,
       active: 0.46,
       recovery: 0.58,
-      travelDistance: 390,
+      movement: {
+        kind: "crossTarget",
+        maxTravel: 390,
+        overshoot: 78,
+        clearance: 8,
+        sweptDamage: true,
+      },
       radius: 96,
       artKey: "enemy/lion/charge",
     },

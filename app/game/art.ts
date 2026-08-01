@@ -1,4 +1,5 @@
 import type { PlayerFormState } from "./form";
+import { publicAsset } from "../publicAsset";
 
 export type BossTier = "mid" | "final" | null;
 
@@ -84,7 +85,7 @@ function loadSeasonPlate(art: LoadedArt, index: number) {
       art.seasonLoads.delete(normalized);
       resolve(null);
     };
-    image.src = ART_MANIFEST.seasons[normalized].image;
+    image.src = publicAsset(ART_MANIFEST.seasons[normalized].image);
   });
   art.seasonLoads.set(normalized, request);
   return request;

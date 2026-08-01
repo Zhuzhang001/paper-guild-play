@@ -1,5 +1,6 @@
 import type { BossTier } from "../art";
 import type { FusionId } from "../content";
+import { publicAsset } from "../../publicAsset";
 import type { SeasonId, SolarTermCue, TermAmbienceCue } from "./solarTerms";
 
 export type AudioBus = "music" | "ambient" | "sfx";
@@ -1229,7 +1230,7 @@ export class AudioManager {
     if (!this.context) return Promise.resolve(null);
 
     const context = this.context;
-    const promise = fetch(url)
+    const promise = fetch(publicAsset(url))
       .then((response) => {
         if (!response.ok) throw new Error(`Unable to load audio cue ${cue}: ${response.status}`);
         return response.arrayBuffer();

@@ -26,11 +26,11 @@ test("enemy sheets retain active actors and one preselected Boss", () => {
   assert.match(game, /run\.endlessDirector\.nextBossId/);
 });
 
-test("short-landscape forge keeps readable text and touch floors", () => {
-  const floor = css.slice(css.indexOf("v6 short-landscape floor"));
-  assert.match(floor, /max-height: 500px/);
-  assert.match(floor, /min-height: 44px !important/);
-  assert.match(floor, /font-size: 11px !important/);
+test("compact forge keeps readable text and touch floors", () => {
+  const floor = css.slice(css.indexOf("v6.1: one forge layout system"));
+  assert.match(floor, /max-height: 620px/);
+  assert.match(floor, /min-height: 44px/);
+  assert.match(floor, /font-size: 11px/);
   assert.match(css, /forge-workbench\.view-actions/);
   assert.match(css, /forge-workbench\.view-ring/);
 });

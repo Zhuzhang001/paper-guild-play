@@ -8,6 +8,10 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "build:static": "node scripts/build-static.mjs",
+    "build:static:github": "node scripts/build-static.mjs --target github-pages --base paper-guild-play",
+    "build:static:offline": "node scripts/build-static.mjs --target offline",
+    "package:offline": "node scripts/prepare-offline.mjs",
     "start": "vinext start",
     "test": "vinext build && node --test tests/*.test.mjs",
     "typecheck:game": "tsc -p tsconfig.game.json --noEmit",

@@ -1,5 +1,6 @@
 import type { EnemyArchetype } from "../art";
 import type { EndlessBossId } from "../content/bosses";
+import { publicAsset } from "../../publicAsset";
 
 export type EnemyVisualId = EnemyArchetype | EndlessBossId | "bossEffects";
 
@@ -110,7 +111,7 @@ function loadSheet(sheets: EnemySpriteSheets, type: EnemyVisualId) {
       loads?.delete(type);
       resolve();
     };
-    image.src = SPRITE_URLS[type];
+    image.src = publicAsset(SPRITE_URLS[type]);
   });
   loads.set(type, request);
   return request;

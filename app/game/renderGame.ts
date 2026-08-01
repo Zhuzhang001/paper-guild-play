@@ -4,6 +4,7 @@ import {
   drawSeasonScene,
   type LoadedArt,
 } from "./art";
+import { publicAsset } from "../publicAsset";
 import {
   type EnemySpriteSheets,
 } from "./actors/enemySprites";
@@ -25,10 +26,13 @@ import {
   GAME_WIDTH,
   getOrbitVisuals,
   STANDARD_SECONDS,
+  type Enemy,
   type ProjectileOwner,
   type RunState,
   type VisualFx,
 } from "./survivor";
+import { getEndlessBoss } from "./content/bosses";
+import { getEnemyDefinition } from "./content/enemies";
 import { getSolarTermState } from "./world";
 import {
   FUSION_DEFINITIONS,
@@ -64,7 +68,7 @@ export async function loadSolarTermAtlas(): Promise<HTMLImageElement | null> {
     image.decoding = "async";
     image.onload = () => resolve(image);
     image.onerror = () => resolve(null);
-    image.src = "/terms-v3/solar-terms-runtime.webp";
+    image.src = publicAsset("/terms-v3/solar-terms-runtime.webp");
   });
 }
 
@@ -917,6 +921,178 @@ function drawActiveWeaveNode(
   }
 }
 
+function hostileActionPhaseProgress(enemy: Enemy) {
+  const action = enemy.action;
+  if (!action) return undefined;
+  let telegraph = 0.5;
+  let active = 0.4;
+  let impact = 0.12;
+  let recovery = 0.4;
+  if (action.kind === "enemySkill") {
+    const skill = getEnemyDefinition(enemy.type)?.skill;
+    if (skill?.id === action.skillId) {
+      telegraph = skill.telegraph;
+      active = skill.active;
+      recovery = skill.recovery;
+    }
+  } else if (action.kind === "endlessBossSkill" && enemy.endlessBossId) {
+    const boss = getEndlessBoss(enemy.endlessBossId);
+    const skill = boss.skills.find((candidate) => candidate.id === action.skillId);
+    if (skill) {
+      const authored =
+        skill.telegraph *
+        (action.bossPhase === 2 ? boss.halfHealth.telegraphScale : 1);
+      telegraph = skill.mode === "dash" ? Math.max(0.48, authored) : authored;
+      active = skill.active;
+      recovery = skill.recovery;
+    }
+  } else if (action.kind === "nianLeap") {
+    telegraph = 0.5;
+    active = 0.32;
+    impact = 0.12;
+    recovery = 0.35;
+  } else if (action.kind === "taotieCharge") {
+    telegraph = 0.58;
+    active = 0.46;
+    impact = 0.12;
+    recovery = 0.45;
+  }
+  const duration =
+    action.phase === "telegraph"
+      ? telegraph
+      : action.phase === "active"
+        ? active
+        : action.phase === "impact"
+          ? impact
+          : recovery;
+  const phaseProgress = clamp(action.elapsed / Math.max(0.001, duration), 0, 1);
+  if (action.phase === "telegraph") return phaseProgress * 0.34;
+  if (action.phase === "active") return 0.34 + phaseProgress * 0.44;
+  if (action.phase === "impact") return 0.78 + phaseProgress * 0.12;
+  return 0.9 + phaseProgress * 0.1;
+}
+
+function hostilePath(
+  ctx: CanvasRenderingContext2D,
+  startX: number,
+  startY: number,
+  targetX: number,
+  targetY: number,
+  arcHeight = 0,
+) {
+  const dx = targetX - startX;
+  const dy = targetY - startY;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 1) {
+    ctx.moveTo(startX, startY);
+    return;
+  }
+  ctx.moveTo(startX, startY);
+  if (Math.abs(arcHeight) < 0.1) {
+    ctx.lineTo(targetX, targetY);
+    return;
+  }
+  const normalX = -dy / distance;
+  const normalY = dx / distance;
+  ctx.quadraticCurveTo(
+    (startX + targetX) / 2 + normalX * arcHeight * 2,
+    (startY + targetY) / 2 + normalY * arcHeight * 2,
+    targetX,
+    targetY,
+  );
+}
+
+function drawHostileTelegraphs(
+  ctx: CanvasRenderingContext2D,
+  run: RunState,
+) {
+  for (const enemy of run.enemies) {
+    const action = enemy.action;
+    const telegraph = action?.hostileTelegraph;
+    if (!action || !telegraph?.locked || action.phase === "recovery") continue;
+    const dx = telegraph.targetX - telegraph.startX;
+    const dy = telegraph.targetY - telegraph.startY;
+    const distance = Math.hypot(dx, dy);
+    const phaseAlpha =
+      action.phase === "telegraph"
+        ? 1
+        : action.phase === "active"
+          ? 0.58
+          : 0.34;
+    const color = enemy.boss ? "#8f3f34" : enemy.elite ? "#815042" : "#6f584c";
+
+    ctx.save();
+    if (distance > 4 && telegraph.movementKind !== "stationary") {
+      if (telegraph.kind === "swept") {
+        ctx.globalAlpha = 0.065 * phaseAlpha;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = Math.max(18, telegraph.radius * 2);
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        hostilePath(
+          ctx,
+          telegraph.startX,
+          telegraph.startY,
+          telegraph.targetX,
+          telegraph.targetY,
+          telegraph.arcHeight,
+        );
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 0.48 * phaseAlpha;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = telegraph.kind === "swept" ? 4 : 3;
+      ctx.setLineDash(telegraph.kind === "swept" ? [20, 9] : [10, 12]);
+      ctx.beginPath();
+      hostilePath(
+        ctx,
+        telegraph.startX,
+        telegraph.startY,
+        telegraph.targetX,
+        telegraph.targetY,
+        telegraph.arcHeight,
+      );
+      ctx.stroke();
+
+      const angle = Math.atan2(dy, dx);
+      const arrowSize = clamp(distance * 0.055, 11, 22);
+      ctx.setLineDash([]);
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.55 * phaseAlpha;
+      ctx.beginPath();
+      ctx.moveTo(telegraph.targetX, telegraph.targetY);
+      ctx.lineTo(
+        telegraph.targetX - Math.cos(angle - 0.55) * arrowSize,
+        telegraph.targetY - Math.sin(angle - 0.55) * arrowSize,
+      );
+      ctx.lineTo(
+        telegraph.targetX - Math.cos(angle + 0.55) * arrowSize,
+        telegraph.targetY - Math.sin(angle + 0.55) * arrowSize,
+      );
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.globalAlpha = 0.09 * phaseAlpha;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(
+      telegraph.targetX,
+      telegraph.targetY,
+      telegraph.radius,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+    ctx.globalAlpha = 0.52 * phaseAlpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = clamp(telegraph.radius * 0.035, 3, 7);
+    ctx.setLineDash([15, 9]);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 function drawEnemies(
   ctx: CanvasRenderingContext2D,
   run: RunState,
@@ -961,7 +1137,8 @@ function drawEnemies(
       travelled: enemy.travelled,
       state: enemy.motion,
       stateProgress: enemy.motion === "attacking"
-        ? clamp(enemy.motionTime / (enemy.boss ? 1.32 : 0.58), 0, 1)
+        ? hostileActionPhaseProgress(enemy) ??
+          clamp(enemy.motionTime / (enemy.boss ? 1.32 : 0.58), 0, 1)
         : enemy.motion === "hurt"
           ? clamp(enemy.motionTime / 0.12, 0, 1)
           : 0,
@@ -1243,13 +1420,15 @@ function drawFx(
   pack: VisualPack | null,
   enemySheets: EnemySpriteSheets | null,
   time: number,
-  layer: "friendly" | "overlay",
+  layer: "friendly" | "hostileTelegraph" | "overlay",
 ) {
   for (const fx of run.fx) {
     const friendly = fx.owner !== undefined;
+    const hostileTelegraph = !friendly && fx.kind === "warning";
     if (
       (layer === "friendly" && !friendly) ||
-      (layer === "overlay" && friendly)
+      (layer === "hostileTelegraph" && !hostileTelegraph) ||
+      (layer === "overlay" && (friendly || hostileTelegraph))
     ) {
       continue;
     }
@@ -1272,8 +1451,13 @@ function drawFx(
     } else if (fx.kind === "chain") {
       drawChainVisual(ctx, pack, source, fx);
     } else {
-      let drawn = !friendly
-        ? drawEndlessBossEffect(
+      // Route warnings use the locked path and range geometry below. Reusing
+      // a Boss attack frame here makes the destination look like an impact
+      // that has already happened (and generic fallback art can become a
+      // whole weapon), so warnings deliberately carry no subject sprite.
+      let drawn = fx.kind === "warning";
+      if (!drawn && !friendly) {
+        drawn = drawEndlessBossEffect(
             ctx,
             enemySheets,
             fx.artKey,
@@ -1281,9 +1465,9 @@ function drawFx(
             fx.y,
             fx.radius,
             progress,
-            fx.kind === "warning" ? 0.42 : 0.82,
-          )
-        : false;
+            0.82,
+          );
+      }
       if (pack && source.fusionId) {
         const phase =
           fx.kind === "warning"
@@ -1512,6 +1696,8 @@ export function drawRun(
   drawStrikes(ctx, run, assets.visuals, assets.enemies, time);
   drawProjectiles(ctx, run, assets.visuals, time);
   drawFx(ctx, run, assets.visuals, assets.enemies, time, "friendly");
+  drawHostileTelegraphs(ctx, run);
+  drawFx(ctx, run, assets.visuals, assets.enemies, time, "hostileTelegraph");
   drawEnemies(ctx, run, assets.enemies);
   drawPickups(ctx, run, assets.visuals, time);
   drawSummons(ctx, run, assets.visuals, time);

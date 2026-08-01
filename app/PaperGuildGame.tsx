@@ -2412,7 +2412,7 @@ export function PaperGuildGame() {
   );
 
   return (
-    <main className="page">
+    <main className="page" data-game-phase={mode}>
       <section className="game-shell" aria-label="纸上百工游戏">
         <canvas
           ref={canvasRef}
@@ -2957,6 +2957,7 @@ export function PaperGuildGame() {
         {mode === "forge" && snapshot.weave && (
           <div className="overlay modal-shade">
             <section className="forge-panel">
+              <header className="forge-shell-header">
               <div className="forge-heading-row">
                 <div>
                   <p className="kicker">
@@ -2980,10 +2981,12 @@ export function PaperGuildGame() {
               </div>
               <p className="forge-message">{forgeMessage}</p>
               {lanternHeld && (
-                <div className="forge-context-guide" aria-label="走马灯照样规则">
-                  <strong>走马灯照样：{primaryWeaponName}</strong>
-                  <span>{snapshot.primaryWeaponRule}</span>
-                  <label>
+                <section className="forge-primary-rule" aria-label="走马灯照样规则">
+                  <div className="forge-primary-copy">
+                    <strong>走马灯照样：{primaryWeaponName}</strong>
+                    <span>{snapshot.primaryWeaponRule}</span>
+                  </div>
+                  <label className="forge-primary-picker">
                     <span>免费改选</span>
                     <select
                       value={snapshot.primaryWeaponValid ? snapshot.primaryWeaponId : ""}
@@ -3005,7 +3008,7 @@ export function PaperGuildGame() {
                       ))}
                     </select>
                   </label>
-                </div>
+                </section>
               )}
 
               {forgePurpose === "cycle" && (
@@ -3075,6 +3078,7 @@ export function PaperGuildGame() {
                 )}
               </section>
               )}
+              </header>
 
               <nav className="forge-view-switch" aria-label="窄屏铸器视图">
                 <button
@@ -3161,6 +3165,7 @@ export function PaperGuildGame() {
                       <strong>添器 / 做细</strong>
                       <small>先定改法和插入缝隙，再看收势预览</small>
                     </div>
+                    <div className="forge-zone-scroll forge-temper-scroll">
                     {availableNodes.length > 0 && (
                       <div className="forge-add-flow">
                         <div className="forge-weapon-picks">
@@ -3291,29 +3296,12 @@ export function PaperGuildGame() {
                         );
                       })}
                       {temperOffers.length === 0 && (
-                        <button
-                          className="forge-option-card forge-disabled-card"
-                          disabled
-                        >
-                          <span>当前器盘</span>
+                        <div className="forge-temper-empty" role="status">
                           <strong>没有可继续做细的武器</strong>
-                          <small>本命器已定型，或已合成独立合器；可改去添器、调位或拆器。</small>
-                          <span className="forge-progress-preview" aria-hidden="true">
-                            {snapshot.weave.nodes
-                              .filter((node) => node.kind === "weapon")
-                              .map((node) => (
-                                <i key={node.instanceId}>
-                                  <b
-                                    style={weaveNodeThumbStyle(node)}
-                                  />
-                                  <span>{node.name}</span>
-                                  <small>{node.weaponState?.level ?? 0}/5</small>
-                                </i>
-                              ))}
-                          </span>
-                          <em>不可推进</em>
-                        </button>
+                          <span>当前器物均已定型；可继续添器、调位、合器或拆器。</span>
+                        </div>
                       )}
+                    </div>
                     </div>
                   </section>
 
@@ -3322,6 +3310,7 @@ export function PaperGuildGame() {
                       <strong>调位</strong>
                       <small>拖动可直接预览；也可点选两格后使用下方按钮</small>
                     </div>
+                    <div className="forge-zone-scroll">
                     <div className="forge-selection">
                       <div className="forge-selection-summary">
                         {selectedNodeIds.length === 0
@@ -3386,6 +3375,7 @@ export function PaperGuildGame() {
                         </p>
                       </article>
                     </div>
+                    </div>
                   </section>
 
                   <section className="forge-zone forge-zone-celestial">
@@ -3393,6 +3383,7 @@ export function PaperGuildGame() {
                       <strong>天时 / 拆器</strong>
                       <small>天时随器盘游标触发；炼化免费，拆器耗一火</small>
                     </div>
+                    <div className="forge-zone-scroll">
                     <div className="celestial-actions">
                       {activeCelestial ? (
                         <article className="celestial-capture-card">
@@ -3465,6 +3456,7 @@ export function PaperGuildGame() {
                         </p>
                       </article>
                     </div>
+                    </div>
                   </section>
                 </div>
                 </div>
@@ -3478,10 +3470,12 @@ export function PaperGuildGame() {
                         : "可拖动调位；点击用于合器、拆器或替换"}
                     </small>
                   </div>
-                  <div
-                    className={`weave-ring-large weave-ring-preview ${ringMove?.dragging ? "is-moving" : ""}`}
-                    aria-label="器盘，节点按顺时针排列"
-                  >
+                  <div className="forge-ring-stage">
+                    <div
+                      className={`weave-ring-large weave-ring-preview ${ringMove?.dragging ? "is-moving" : ""}`}
+                      aria-label="器盘，节点按顺时针排列"
+                    >
+                      <div className="weave-ring-track">
                     <svg
                       className="weave-ring-path"
                       aria-hidden="true"
@@ -3552,9 +3546,11 @@ export function PaperGuildGame() {
                         </span>
                       </button>
                     ))}
-                    <div className="weave-core">
-                      <span>器盘游标</span>
-                      <strong>{Math.round((previewWeave?.pulse.nodeProgress ?? 0) * 100)}%</strong>
+                        <div className="weave-core">
+                          <span>器盘游标</span>
+                          <strong>{Math.round((previewWeave?.pulse.nodeProgress ?? 0) * 100)}%</strong>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   <p className="ring-operation-status" aria-live="polite">
@@ -3580,23 +3576,6 @@ export function PaperGuildGame() {
                           <b>→</b>
                           <span><small>新收势</small>{forgePreview.after}</span>
                         </div>
-                        <button
-                          className="primary-button compact"
-                          onClick={confirmForgePreview}
-                          disabled={forgeFire < forgePreview.cost}
-                        >
-                          {forgeFire < forgePreview.cost
-                            ? "炉火不足"
-                            : forgePreview.cost === 0
-                              ? "确认炼成"
-                              : "确认落锤"}
-                        </button>
-                        <button
-                          className="preview-cancel"
-                          onClick={cancelForgePreview}
-                        >
-                          取消预览
-                        </button>
                       </>
                     ) : (
                       <>
@@ -3605,6 +3584,41 @@ export function PaperGuildGame() {
                       </>
                     )}
                   </div>
+                </aside>
+              </div>
+              <footer className="forge-footer">
+                <div className={`forge-footer-preview ${forgePreview ? "ready" : ""}`} aria-live="polite">
+                  <span>{forgePreview ? "预览已排好" : "尚未预览"}</span>
+                  <strong>{forgePreview?.title ?? "从操作页选择一项变化"}</strong>
+                  <small>
+                    {forgePreview
+                      ? forgePreview.cost === 0
+                        ? "本次不耗炉火；确认后写入器盘。"
+                        : `需要 ${forgePreview.cost} 火；确认后写入器盘。`
+                      : "所有变化都先预览，确认后才扣炉火。"}
+                  </small>
+                </div>
+                <div className="forge-footer-actions">
+                  <button
+                    className="preview-cancel"
+                    onClick={cancelForgePreview}
+                    disabled={!forgePreview}
+                  >
+                    取消预览
+                  </button>
+                  <button
+                    className="primary-button compact forge-confirm"
+                    onClick={confirmForgePreview}
+                    disabled={!forgePreview || forgeFire < forgePreview.cost}
+                  >
+                    {!forgePreview
+                      ? "等待预览"
+                      : forgeFire < forgePreview.cost
+                        ? "炉火不足"
+                        : forgePreview.cost === 0
+                          ? "确认炼成"
+                          : "确认落锤"}
+                  </button>
                   <button
                     className="secondary-button forge-close"
                     data-gamepad-cancel
@@ -3615,8 +3629,8 @@ export function PaperGuildGame() {
                       ? "炼成后续战"
                       : "定盘续战 · 余火保留"}
                   </button>
-                </aside>
-              </div>
+                </div>
+              </footer>
             </section>
           </div>
         )}

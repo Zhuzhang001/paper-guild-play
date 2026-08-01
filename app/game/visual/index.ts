@@ -1,4 +1,5 @@
 import type { FusionId, WeaponId } from "../content/types";
+import { publicAsset } from "../../publicAsset";
 import {
   ALL_VISUAL_ASSETS,
   CORE_VISUAL_ASSETS,
@@ -196,7 +197,7 @@ export async function ensureCanvasFontsReady() {
 async function loadImage(src: string): Promise<VisualImage> {
   if (typeof createImageBitmap === "function" && typeof fetch === "function") {
     try {
-      const response = await fetch(src, { cache: "force-cache" });
+      const response = await fetch(publicAsset(src), { cache: "force-cache" });
       if (!response.ok) {
         throw new Error(`Unable to load ${src}: ${response.status}`);
       }
@@ -215,7 +216,7 @@ async function loadImage(src: string): Promise<VisualImage> {
     image.decoding = "async";
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error(`Unable to load ${src}`));
-    image.src = src;
+    image.src = publicAsset(src);
   });
 }
 

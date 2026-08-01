@@ -234,7 +234,7 @@ test("Nian leap is phased, bounded, and survives taking damage", () => {
 
   for (let frame = 0; frame < 120; frame += 1) {
     const phaseBefore = nian.action?.phase;
-    if (phaseBefore === "travel" && !damagedDuringLeap) {
+    if (phaseBefore === "active" && !damagedDuringLeap) {
       const hpBefore = nian.hp;
       run.projectiles.push({
         id: run.serial++,
@@ -276,7 +276,7 @@ test("Nian leap is phased, bounded, and survives taking damage", () => {
 
   assert.deepEqual(
     [...phases],
-    ["telegraph", "travel", "land", "recovery"],
+    ["telegraph", "active", "impact", "recovery"],
   );
   assert.ok(damagedDuringLeap, "the injected projectile should damage Nian");
   assert.ok(

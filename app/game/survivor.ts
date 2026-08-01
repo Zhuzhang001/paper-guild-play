@@ -27,6 +27,12 @@ import {
   type EnemySkillDefinition,
 } from "./content/enemies";
 import {
+  PLAYER_HIT_RADIUS,
+  type EnemyActionPhase,
+  type HostileTelegraph,
+  type MovementTargetSpec,
+} from "./content/movement";
+import {
   chooseActiveSynergies as resolveChosenSynergies,
   getSynergyChoices as getEligibleSynergies,
   getWeaponDefinition,
@@ -89,6 +95,12 @@ import { getSolarTermState } from "./world";
 export const GAME_WIDTH = 1280;
 export const GAME_HEIGHT = 720;
 export const STANDARD_SECONDS = 480;
+
+export type {
+  EnemyActionPhase,
+  HostileTelegraph,
+  MovementTargetSpec,
+} from "./content/movement";
 
 export type TrialId =
   | "swift"
@@ -181,12 +193,6 @@ export type Player = PlayerFormModel & {
 
 export type EnemyMotion = "moving" | "attacking" | "hurt" | "dead";
 
-export type EnemyActionPhase =
-  | "telegraph"
-  | "travel"
-  | "land"
-  | "recovery";
-
 export type NianLeapActionState = {
   kind: "nianLeap";
   phase: EnemyActionPhase;
@@ -196,18 +202,34 @@ export type NianLeapActionState = {
   targetX: number;
   targetY: number;
   warningFxId?: number;
+  hostileTelegraph: HostileTelegraph;
 };
 
-export type EnemySkillActionState = {
-  kind: "enemySkill";
-  skillId: string;
-  phase: "telegraph" | "active" | "recovery";
+export type TaotieChargeActionState = {
+  kind: "taotieCharge";
+  phase: EnemyActionPhase;
   elapsed: number;
   startX: number;
   startY: number;
   targetX: number;
   targetY: number;
   committed: boolean;
+  playerHitCommitted?: boolean;
+  warningFxId?: number;
+  hostileTelegraph: HostileTelegraph;
+};
+
+export type EnemySkillActionState = {
+  kind: "enemySkill";
+  skillId: string;
+  phase: EnemyActionPhase;
+  elapsed: number;
+  startX: number;
+  startY: number;
+  targetX: number;
+  targetY: number;
+  committed: boolean;
+  playerHitCommitted?: boolean;
   warningFxId?: number;
   partnerId?: number;
   lineX1?: number;
@@ -216,24 +238,28 @@ export type EnemySkillActionState = {
   lineY2?: number;
   previousPlayerSide?: number;
   followupCommitted?: boolean;
+  hostileTelegraph: HostileTelegraph;
 };
 
 export type EndlessBossActionState = {
   kind: "endlessBossSkill";
   skillId: string;
-  phase: "telegraph" | "active" | "recovery";
+  phase: EnemyActionPhase;
   elapsed: number;
   startX: number;
   startY: number;
   targetX: number;
   targetY: number;
   committed: boolean;
+  playerHitCommitted?: boolean;
   warningFxId?: number;
   bossPhase: 1 | 2;
+  hostileTelegraph: HostileTelegraph;
 };
 
 export type EnemyActionState =
   | NianLeapActionState
+  | TaotieChargeActionState
   | EnemySkillActionState
   | EndlessBossActionState;
 
@@ -3406,31 +3432,122 @@ function applySeparation(run: RunState, enemy: Enemy) {
   return { x: pushX, y: pushY };
 }
 
+type MovementTargetResult = {
+  x: number;
+  y: number;
+  movementKind: HostileTelegraph["movementKind"];
+  dangerKind: HostileTelegraph["kind"];
+  arcHeight?: number;
+};
+
+function clampedActorPoint(enemy: Enemy, x: number, y: number) {
+  return {
+    x: clamp(x, enemy.radius, GAME_WIDTH - enemy.radius),
+    y: clamp(y, enemy.radius, GAME_HEIGHT - enemy.radius),
+  };
+}
+
 function actionTarget(
   run: RunState,
   enemy: Enemy,
-  travelDistance = 0,
-) {
-  const direction = normalized(
+  movement: MovementTargetSpec,
+): MovementTargetResult {
+  const toPlayer = normalized(
     run.player.x - enemy.x,
     run.player.y - enemy.y,
   );
+  const direction =
+    Math.hypot(toPlayer.x, toPlayer.y) > 0.01
+      ? toPlayer
+      : { x: Math.cos(enemy.heading), y: Math.sin(enemy.heading) };
   const distance = Math.hypot(
     run.player.x - enemy.x,
     run.player.y - enemy.y,
   );
-  const travel = Math.min(travelDistance, Math.max(0, distance - 46));
-  return {
-    x: clamp(
+  if (movement.kind === "flyby") {
+    const candidates: number[] = [];
+    if (direction.x > 0.0001) {
+      candidates.push((GAME_WIDTH + movement.exitMargin - enemy.x) / direction.x);
+    } else if (direction.x < -0.0001) {
+      candidates.push((-movement.exitMargin - enemy.x) / direction.x);
+    }
+    if (direction.y > 0.0001) {
+      candidates.push((GAME_HEIGHT + movement.exitMargin - enemy.y) / direction.y);
+    } else if (direction.y < -0.0001) {
+      candidates.push((-movement.exitMargin - enemy.y) / direction.y);
+    }
+    const travel = Math.min(...candidates.filter((candidate) => candidate > 0));
+    return {
+      x: enemy.x + direction.x * travel,
+      y: enemy.y + direction.y * travel,
+      movementKind: movement.kind,
+      dangerKind: "swept",
+      arcHeight: movement.arcHeight,
+    };
+  }
+
+  const safeDistance =
+    enemy.radius + PLAYER_HIT_RADIUS + movement.clearance;
+  if (movement.kind === "landShort") {
+    const desiredTravel = Math.max(0, distance - safeDistance);
+    if (desiredTravel < movement.minTravel) {
+      if (movement.closeFallback.kind === "stomp") {
+        return {
+          x: enemy.x,
+          y: enemy.y,
+          movementKind: movement.kind,
+          dangerKind: "landing",
+        };
+      }
+      const perpendicular = { x: -direction.y, y: direction.x };
+      const sideHopDistance = movement.closeFallback.distance;
+      const alternatives = [-1, 1].map((side) => {
+        const point = clampedActorPoint(
+          enemy,
+          enemy.x + perpendicular.x * sideHopDistance * side,
+          enemy.y + perpendicular.y * sideHopDistance * side,
+        );
+        return {
+          ...point,
+          score: Math.hypot(point.x - run.player.x, point.y - run.player.y),
+        };
+      });
+      const target = alternatives.sort((left, right) => right.score - left.score)[0];
+      return {
+        x: target.x,
+        y: target.y,
+        movementKind: movement.kind,
+        dangerKind: "landing",
+      };
+    }
+    const travel = Math.min(movement.maxTravel, desiredTravel);
+    const target = clampedActorPoint(
+      enemy,
       enemy.x + direction.x * travel,
-      enemy.radius,
-      GAME_WIDTH - enemy.radius,
-    ),
-    y: clamp(
       enemy.y + direction.y * travel,
-      enemy.radius,
-      GAME_HEIGHT - enemy.radius,
-    ),
+    );
+    return {
+      ...target,
+      movementKind: movement.kind,
+      dangerKind: "landing",
+    };
+  }
+
+  const crossGap = Math.max(movement.overshoot, safeDistance);
+  const fullCrossTravel = distance + crossGap;
+  const travel =
+    fullCrossTravel <= movement.maxTravel
+      ? fullCrossTravel
+      : Math.max(0, Math.min(movement.maxTravel, distance - safeDistance));
+  const target = clampedActorPoint(
+    enemy,
+    enemy.x + direction.x * travel,
+    enemy.y + direction.y * travel,
+  );
+  return {
+    ...target,
+    movementKind: movement.kind,
+    dangerKind: "swept",
   };
 }
 
@@ -3547,15 +3664,14 @@ function assignEnemySkillAction(
   run: RunState,
   enemy: Enemy,
   skill: EnemySkillDefinition,
-  targetX: number,
-  targetY: number,
+  target: MovementTargetResult,
   partnerId?: number,
 ) {
   const warningFxId = addFx(
     run,
     "warning",
-    targetX,
-    targetY,
+    target.x,
+    target.y,
     skill.radius,
     skill.telegraph + 0.18,
     enemy.elite ? "#8b573e" : "#73584a",
@@ -3568,11 +3684,23 @@ function assignEnemySkillAction(
     elapsed: 0,
     startX: enemy.x,
     startY: enemy.y,
-    targetX,
-    targetY,
+    targetX: target.x,
+    targetY: target.y,
     committed: false,
     warningFxId,
     partnerId,
+    hostileTelegraph: {
+      kind: target.dangerKind,
+      locked: true,
+      startX: enemy.x,
+      startY: enemy.y,
+      targetX: target.x,
+      targetY: target.y,
+      radius: skill.radius,
+      artKey: `${skill.artKey}/warning`,
+      movementKind: target.movementKind,
+      arcHeight: target.arcHeight,
+    },
   };
   enemy.motion = "attacking";
   enemy.motionTime = 0;
@@ -3630,16 +3758,12 @@ function beginEnemySkill(
 ) {
   if (skill.behavior === "pairedShoeCross") {
     const partner = ensureShoePartner(run, enemy);
-    const direction = normalized(
-      run.player.x - enemy.x,
-      run.player.y - enemy.y,
-    );
+    if (!skill.movement) return;
     assignEnemySkillAction(
       run,
       enemy,
       skill,
-      clamp(run.player.x + direction.x * 126, 30, GAME_WIDTH - 30),
-      clamp(run.player.y + direction.y * 126, 30, GAME_HEIGHT - 30),
+      actionTarget(run, enemy, skill.movement),
       partner?.id,
     );
     if (partner) {
@@ -3647,8 +3771,7 @@ function beginEnemySkill(
         run,
         partner,
         skill,
-        clamp(run.player.x - direction.x * 126, 30, GAME_WIDTH - 30),
-        clamp(run.player.y - direction.y * 126, 30, GAME_HEIGHT - 30),
+        actionTarget(run, partner, skill.movement),
         enemy.id,
       );
     }
@@ -3656,24 +3779,15 @@ function beginEnemySkill(
     return;
   }
 
-  let target =
-    skill.mode === "dash" ||
-    skill.mode === "hop" ||
-    skill.mode === "pounce"
-      ? actionTarget(run, enemy, skill.travelDistance)
-      : { x: run.player.x, y: run.player.y };
-  if (skill.behavior === "fishFlyby") {
-    const direction = normalized(
-      run.player.x - enemy.x,
-      run.player.y - enemy.y,
-    );
-    const travel = Math.hypot(GAME_WIDTH, GAME_HEIGHT) + 180;
-    target = {
-      x: enemy.x + direction.x * travel,
-      y: enemy.y + direction.y * travel,
-    };
-  }
-  assignEnemySkillAction(run, enemy, skill, target.x, target.y);
+  const target = skill.movement
+    ? actionTarget(run, enemy, skill.movement)
+    : {
+        x: run.player.x,
+        y: run.player.y,
+        movementKind: "stationary" as const,
+        dangerKind: "landing" as const,
+      };
+  assignEnemySkillAction(run, enemy, skill, target);
   enemy.patternCycle = (enemy.patternCycle ?? 0) + 1;
 
   if (skill.behavior === "puppetTripwire" && enemy.action?.kind === "enemySkill") {
@@ -3781,15 +3895,19 @@ function stepEnemySkill(
         action.startX + (action.targetX - action.startX) * eased;
       let y =
         action.startY + (action.targetY - action.startY) * eased;
-      if (skill.id === "fish-arc") {
+      if (
+        action.hostileTelegraph.movementKind === "flyby" &&
+        action.hostileTelegraph.arcHeight !== undefined
+      ) {
         const dx = action.targetX - action.startX;
         const dy = action.targetY - action.startY;
         const distance = Math.hypot(dx, dy) || 1;
-        const arc = Math.sin(ratio * Math.PI) * 58;
+        const arc =
+          Math.sin(ratio * Math.PI) * action.hostileTelegraph.arcHeight;
         x += (-dy / distance) * arc;
         y += (dx / distance) * arc;
       }
-      if (skill.behavior === "fishFlyby") {
+      if (action.hostileTelegraph.movementKind === "flyby") {
         enemy.x = x;
         enemy.y = y;
       } else {
@@ -3801,20 +3919,19 @@ function stepEnemySkill(
         enemy.y - previousY,
       );
       const contactDuringTravel =
-        skill.behavior === "pairedShoeCross" ||
-        skill.behavior === "fishFlyby";
+        action.hostileTelegraph.kind === "swept";
       if (
         contactDuringTravel &&
-        !action.committed &&
+        !action.playerHitCommitted &&
         distanceSquared(
           enemy.x,
           enemy.y,
           run.player.x,
           run.player.y,
         ) <=
-          (skill.radius + 18) ** 2
+          (skill.radius + PLAYER_HIT_RADIUS) ** 2
       ) {
-        action.committed = true;
+        action.playerHitCommitted = true;
         if (hurtPlayer(run, enemy.damage)) {
           events.push({ type: "playerHit" });
         }
@@ -3833,15 +3950,17 @@ function stepEnemySkill(
         );
         if (
           !contactDuringTravel &&
+          !action.playerHitCommitted &&
           distanceSquared(
             enemy.x,
             enemy.y,
             run.player.x,
             run.player.y,
           ) <=
-            (skill.radius + 18) ** 2 &&
+            (skill.radius + PLAYER_HIT_RADIUS) ** 2 &&
           hurtPlayer(run, enemy.damage)
         ) {
+          action.playerHitCommitted = true;
           events.push({ type: "playerHit" });
         }
       }
@@ -3991,9 +4110,8 @@ function stepEnemySkill(
 
   if (action.elapsed >= skill.recovery) {
     if (skill.behavior === "fishFlyby") {
-      const margin = enemy.radius + 26;
-      enemy.x = clamp(action.targetX, -margin, GAME_WIDTH + margin);
-      enemy.y = clamp(action.targetY, -margin, GAME_HEIGHT + margin);
+      enemy.x = action.targetX;
+      enemy.y = action.targetY;
       const returnDirection = normalized(
         run.player.x - enemy.x,
         run.player.y - enemy.y,
@@ -4461,20 +4579,28 @@ function beginEndlessBossSkill(run: RunState, enemy: Enemy) {
   const skill =
     definition.skills[enemy.skillIndex % definition.skills.length];
   enemy.skillIndex += 1;
-  const target =
-    skill.mode === "dash"
-      ? actionTarget(run, enemy, skill.travelDistance)
-      : { x: run.player.x, y: run.player.y };
+  const target = skill.movement
+    ? actionTarget(run, enemy, skill.movement)
+    : {
+        x: run.player.x,
+        y: run.player.y,
+        movementKind: "stationary" as const,
+        dangerKind: "landing" as const,
+      };
   const bossPhase = enemy.bossPhase ?? 1;
   const telegraphScale =
     bossPhase === 2 ? definition.halfHealth.telegraphScale : 1;
+  const telegraphDuration =
+    skill.mode === "dash"
+      ? Math.max(0.48, skill.telegraph * telegraphScale)
+      : skill.telegraph * telegraphScale;
   const warningFxId = addFx(
     run,
     "warning",
     target.x,
     target.y,
     skill.radius,
-    skill.telegraph * telegraphScale + 0.24,
+    telegraphDuration + 0.24,
     "#8e4336",
     `${skill.artKey}/warning`,
   );
@@ -4490,6 +4616,18 @@ function beginEndlessBossSkill(run: RunState, enemy: Enemy) {
     committed: false,
     warningFxId,
     bossPhase,
+    hostileTelegraph: {
+      kind: target.dangerKind,
+      locked: true,
+      startX: enemy.x,
+      startY: enemy.y,
+      targetX: target.x,
+      targetY: target.y,
+      radius: skill.radius,
+      artKey: `${skill.artKey}/warning`,
+      movementKind: target.movementKind,
+      arcHeight: target.arcHeight,
+    },
   };
   enemy.motion = "attacking";
   enemy.motionTime = 0;
@@ -4521,7 +4659,10 @@ function stepEndlessBossSkill(
     return false;
   }
   const scaledDelta = delta * (enemy.actionSpeed ?? 1);
-  action.elapsed += scaledDelta;
+  action.elapsed +=
+    action.phase === "telegraph" && skill.mode === "dash"
+      ? delta
+      : scaledDelta;
   enemy.vx = 0;
   enemy.vy = 0;
 
@@ -4530,11 +4671,15 @@ function stepEndlessBossSkill(
       action.targetY - enemy.y,
       action.targetX - enemy.x,
     );
-    const telegraph =
+    const authoredTelegraph =
       skill.telegraph *
       (action.bossPhase === 2
         ? definition.halfHealth.telegraphScale
         : 1);
+    const telegraph =
+      skill.mode === "dash"
+        ? Math.max(0.48, authoredTelegraph)
+        : authoredTelegraph;
     if (action.elapsed >= telegraph) {
       action.phase = "active";
       action.elapsed = 0;
@@ -4556,18 +4701,37 @@ function stepEndlessBossSkill(
         enemy.x - previousX,
         enemy.y - previousY,
       );
+      if (
+        action.hostileTelegraph.kind === "swept" &&
+        !action.playerHitCommitted &&
+        distanceSquared(
+          enemy.x,
+          enemy.y,
+          run.player.x,
+          run.player.y,
+        ) <=
+          (skill.radius + PLAYER_HIT_RADIUS) ** 2
+      ) {
+        action.playerHitCommitted = true;
+        if (hurtPlayer(run, enemy.damage)) {
+          events.push({ type: "playerHit" });
+        }
+      }
       if (ratio >= 1 && !action.committed) {
         action.committed = true;
         if (
+          action.hostileTelegraph.kind === "landing" &&
+          !action.playerHitCommitted &&
           distanceSquared(
             enemy.x,
             enemy.y,
             run.player.x,
             run.player.y,
           ) <=
-            (skill.radius + 18) ** 2 &&
+            (skill.radius + PLAYER_HIT_RADIUS) ** 2 &&
           hurtPlayer(run, enemy.damage)
         ) {
+          action.playerHitCommitted = true;
           events.push({ type: "playerHit" });
         }
         executeEndlessBossBehavior(
@@ -4641,11 +4805,18 @@ function stepEndlessBossSkill(
 }
 
 function beginNianLeap(run: RunState, enemy: Enemy) {
+  const target = actionTarget(run, enemy, {
+    kind: "landShort",
+    maxTravel: 520,
+    minTravel: 110,
+    clearance: 8,
+    closeFallback: { kind: "stomp" },
+  });
   const warningFxId = addFx(
     run,
     "warning",
-    run.player.x,
-    run.player.y,
+    target.x,
+    target.y,
     150,
     0.68,
     "#a94838",
@@ -4657,9 +4828,20 @@ function beginNianLeap(run: RunState, enemy: Enemy) {
     elapsed: 0,
     startX: enemy.x,
     startY: enemy.y,
-    targetX: run.player.x,
-    targetY: run.player.y,
+    targetX: target.x,
+    targetY: target.y,
     warningFxId,
+    hostileTelegraph: {
+      kind: "landing",
+      locked: true,
+      startX: enemy.x,
+      startY: enemy.y,
+      targetX: target.x,
+      targetY: target.y,
+      radius: 150,
+      artKey: "boss/nian/leap-warning",
+      movementKind: target.movementKind,
+    },
   };
   enemy.motion = "attacking";
   enemy.motionTime = 0;
@@ -4682,43 +4864,20 @@ function stepNianLeap(
   enemy.vy = 0;
 
   if (action.phase === "telegraph") {
-    const warning = run.fx.find((fx) => fx.id === action.warningFxId);
-    if (warning) {
-      warning.x = run.player.x;
-      warning.y = run.player.y;
-    }
     enemy.heading = Math.atan2(
-      run.player.y - enemy.y,
-      run.player.x - enemy.x,
+      action.targetY - enemy.y,
+      action.targetX - enemy.x,
     );
     if (action.elapsed >= 0.5) {
-      const direction = normalized(
-        run.player.x - enemy.x,
-        run.player.y - enemy.y,
-      );
       action.startX = enemy.x;
       action.startY = enemy.y;
-      action.targetX = clamp(
-        run.player.x - direction.x * 120,
-        enemy.radius,
-        GAME_WIDTH - enemy.radius,
-      );
-      action.targetY = clamp(
-        run.player.y - direction.y * 120,
-        enemy.radius,
-        GAME_HEIGHT - enemy.radius,
-      );
-      if (warning) {
-        warning.x = action.targetX;
-        warning.y = action.targetY;
-      }
-      action.phase = "travel";
+      action.phase = "active";
       action.elapsed = 0;
     }
     return true;
   }
 
-  if (action.phase === "travel") {
+  if (action.phase === "active") {
     const ratio = clamp(action.elapsed / 0.32, 0, 1);
     const eased = ratio * ratio * (3 - 2 * ratio);
     const previousX = enemy.x;
@@ -4734,7 +4893,7 @@ function stepNianLeap(
       enemy.y - previousY,
     );
     if (ratio >= 1) {
-      action.phase = "land";
+      action.phase = "impact";
       action.elapsed = 0;
       addFx(
         run,
@@ -4762,7 +4921,7 @@ function stepNianLeap(
     return true;
   }
 
-  if (action.phase === "land") {
+  if (action.phase === "impact") {
     if (action.elapsed >= 0.12) {
       action.phase = "recovery";
       action.elapsed = 0;
@@ -4779,14 +4938,148 @@ function stepNianLeap(
   return true;
 }
 
+function beginTaotieCharge(run: RunState, enemy: Enemy) {
+  const target = actionTarget(run, enemy, {
+    kind: "crossTarget",
+    maxTravel: 420,
+    overshoot: 84,
+    clearance: 8,
+    sweptDamage: true,
+  });
+  const warningFxId = addFx(
+    run,
+    "warning",
+    target.x,
+    target.y,
+    120,
+    0.82,
+    "#55776e",
+    "boss/taotie/charge-warning",
+  );
+  enemy.action = {
+    kind: "taotieCharge",
+    phase: "telegraph",
+    elapsed: 0,
+    startX: enemy.x,
+    startY: enemy.y,
+    targetX: target.x,
+    targetY: target.y,
+    committed: false,
+    warningFxId,
+    hostileTelegraph: {
+      kind: "swept",
+      locked: true,
+      startX: enemy.x,
+      startY: enemy.y,
+      targetX: target.x,
+      targetY: target.y,
+      radius: 120,
+      artKey: "boss/taotie/charge-warning",
+      movementKind: "crossTarget",
+    },
+  };
+  enemy.motion = "attacking";
+  enemy.motionTime = 0;
+  enemy.attackCommitted = true;
+  enemy.vx = 0;
+  enemy.vy = 0;
+  enemy.skillIndex += 1;
+}
+
+function stepTaotieCharge(
+  run: RunState,
+  enemy: Enemy,
+  delta: number,
+  events: RunEvent[],
+) {
+  const action = enemy.action;
+  if (!action || action.kind !== "taotieCharge") return false;
+  action.elapsed += delta;
+  enemy.vx = 0;
+  enemy.vy = 0;
+  enemy.heading = Math.atan2(
+    action.targetY - enemy.y,
+    action.targetX - enemy.x,
+  );
+
+  if (action.phase === "telegraph") {
+    if (action.elapsed >= 0.58) {
+      action.phase = "active";
+      action.elapsed = 0;
+    }
+    return true;
+  }
+
+  if (action.phase === "active") {
+    const ratio = clamp(action.elapsed / 0.46, 0, 1);
+    const eased = ratio * ratio * (3 - 2 * ratio);
+    const previousX = enemy.x;
+    const previousY = enemy.y;
+    enemy.x =
+      action.startX + (action.targetX - action.startX) * eased;
+    enemy.y =
+      action.startY + (action.targetY - action.startY) * eased;
+    enemy.travelled += Math.hypot(
+      enemy.x - previousX,
+      enemy.y - previousY,
+    );
+    if (
+      !action.playerHitCommitted &&
+      distanceSquared(
+        enemy.x,
+        enemy.y,
+        run.player.x,
+        run.player.y,
+      ) <=
+        (120 + PLAYER_HIT_RADIUS) ** 2
+    ) {
+      action.playerHitCommitted = true;
+      if (hurtPlayer(run, enemy.damage)) {
+        events.push({ type: "playerHit" });
+      }
+    }
+    if (ratio >= 1) {
+      action.phase = "impact";
+      action.elapsed = 0;
+      if (!action.committed) {
+        action.committed = true;
+        addFx(
+          run,
+          "ink",
+          enemy.x,
+          enemy.y,
+          120,
+          0.55,
+          "#55776e",
+          "boss/taotie/charge",
+        );
+      }
+    }
+    return true;
+  }
+
+  if (action.phase === "impact") {
+    if (action.elapsed >= 0.12) {
+      action.phase = "recovery";
+      action.elapsed = 0;
+    }
+    return true;
+  }
+
+  if (action.elapsed >= 0.45) {
+    enemy.action = undefined;
+    enemy.motion = "moving";
+    enemy.motionTime = 0;
+    enemy.attackCooldown = 3.5;
+  }
+  return true;
+}
+
 function executeBossSkill(run: RunState, enemy: Enemy) {
   const ability = enemy.skillIndex % 3;
-  const direction = normalized(run.player.x - enemy.x, run.player.y - enemy.y);
   if (enemy.type === "taotie") {
     if (ability === 0) {
-      enemy.vx = direction.x * 390;
-      enemy.vy = direction.y * 390;
-      addFx(run, "ink", enemy.x, enemy.y, 120, 0.55, "#55776e", "boss/taotie/charge");
+      if (!enemy.action) beginTaotieCharge(run, enemy);
     } else if (ability === 1) {
       addFx(run, "ring", enemy.x, enemy.y, 205, 0.55, "#708c83", "boss/taotie/shock");
       if (distanceSquared(enemy.x, enemy.y, run.player.x, run.player.y) < 205 ** 2) hurtPlayer(run, enemy.damage);
@@ -4965,6 +5258,7 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
     }
 
     if (
+      stepTaotieCharge(run, enemy, delta, events) ||
       stepNianLeap(run, enemy, delta, events) ||
       stepEnemySkill(run, enemy, delta, events) ||
       stepEndlessBossSkill(run, enemy, delta, events)
@@ -5015,6 +5309,14 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
       distanceToPlayer < attackRange + 18;
     if (enemy.motion !== "attacking" && (isBossSkill || isContactAttack)) {
       if (
+        enemy.type === "taotie" &&
+        isBossSkill &&
+        enemy.skillIndex % 3 === 0
+      ) {
+        beginTaotieCharge(run, enemy);
+        continue;
+      }
+      if (
         enemy.type === "nian" &&
         isBossSkill &&
         enemy.skillIndex % 3 === 0
@@ -5036,7 +5338,7 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
         enemy.attackCommitted = true;
         if (enemy.boss) {
           executeBossSkill(run, enemy);
-          enemy.skillIndex += 1;
+          if (!enemy.action) enemy.skillIndex += 1;
         } else if (distanceToPlayer < attackRange + 24 && hurtPlayer(run, enemy.damage)) {
           events.push({ type: "playerHit" });
         }

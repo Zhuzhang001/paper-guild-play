@@ -1,4 +1,5 @@
 import type { EnemyArchetype } from "../art";
+import type { MovementTargetSpec } from "./movement";
 
 export type EndlessBossId =
   | "troupeMaster"
@@ -46,7 +47,7 @@ export type BossSkillDefinition = {
   active: number;
   recovery: number;
   radius: number;
-  travelDistance?: number;
+  movement?: MovementTargetSpec;
   count?: number;
   delay?: number;
   artKey: `boss/${string}`;
@@ -124,7 +125,8 @@ export const ENDLESS_BOSSES: Readonly<
     halfHealth: { cooldownScale: 0.84, telegraphScale: 0.88, patternBonus: 1 },
     skills: [
       skill("troupe-master-crossing", "dash", "maskCrossing", {
-        triggerRange: 620, cooldown: 4.2, telegraph: 0.58, active: 0.5, recovery: 0.54, radius: 96, travelDistance: 420,
+        triggerRange: 620, cooldown: 4.2, telegraph: 0.58, active: 0.5, recovery: 0.54, radius: 96,
+        movement: { kind: "crossTarget", maxTravel: 420, overshoot: 72, clearance: 8, sweptDamage: true },
       }),
       skill("troupe-master-curtain", "volley", "fanCurtain", {
         triggerRange: 700, cooldown: 4.6, telegraph: 0.64, active: 0.16, recovery: 0.62, radius: 74, count: 7, delay: 0.2,
@@ -173,7 +175,8 @@ export const ENDLESS_BOSSES: Readonly<
         triggerRange: 560, cooldown: 4, telegraph: 0.66, active: 0.12, recovery: 0.58, radius: 285,
       }),
       skill("night-watch-patrol", "dash", "lanternPatrol", {
-        triggerRange: 650, cooldown: 4.5, telegraph: 0.5, active: 0.58, recovery: 0.5, radius: 104, travelDistance: 380,
+        triggerRange: 650, cooldown: 4.5, telegraph: 0.5, active: 0.58, recovery: 0.5, radius: 104,
+        movement: { kind: "crossTarget", maxTravel: 380, overshoot: 68, clearance: 8, sweptDamage: true },
       }),
       skill("night-watch-third-call", "volley", "thirdWatchCone", {
         triggerRange: 740, cooldown: 4.9, telegraph: 0.76, active: 0.18, recovery: 0.68, radius: 84, count: 3, delay: 0.48,
@@ -199,7 +202,8 @@ export const ENDLESS_BOSSES: Readonly<
         triggerRange: 500, cooldown: 4.6, telegraph: 0.72, active: 0.14, recovery: 0.68, radius: 275,
       }),
       skill("kiln-foreman-hammer", "dash", "furnaceBlast", {
-        triggerRange: 610, cooldown: 4.8, telegraph: 0.64, active: 0.42, recovery: 0.7, radius: 118, travelDistance: 320,
+        triggerRange: 610, cooldown: 4.8, telegraph: 0.64, active: 0.42, recovery: 0.7, radius: 118,
+        movement: { kind: "landShort", maxTravel: 320, minTravel: 96, clearance: 8, closeFallback: { kind: "stomp" } },
       }),
     ],
   },
@@ -222,7 +226,8 @@ export const ENDLESS_BOSSES: Readonly<
         triggerRange: 740, cooldown: 5.2, telegraph: 0.76, active: 0.16, recovery: 0.7, radius: 100, count: 4,
       }),
       skill("siege-tower-ram", "dash", "sweepingArm", {
-        triggerRange: 580, cooldown: 5, telegraph: 0.72, active: 0.62, recovery: 0.78, radius: 132, travelDistance: 285,
+        triggerRange: 580, cooldown: 5, telegraph: 0.72, active: 0.62, recovery: 0.78, radius: 132,
+        movement: { kind: "crossTarget", maxTravel: 285, overshoot: 76, clearance: 8, sweptDamage: true },
       }),
     ],
   },
@@ -239,7 +244,8 @@ export const ENDLESS_BOSSES: Readonly<
     halfHealth: { cooldownScale: 0.8, telegraphScale: 0.84, patternBonus: 2 },
     skills: [
       skill("banner-captain-spear", "dash", "spearPass", {
-        triggerRange: 700, cooldown: 3.8, telegraph: 0.48, active: 0.46, recovery: 0.46, radius: 96, travelDistance: 440,
+        triggerRange: 700, cooldown: 3.8, telegraph: 0.48, active: 0.46, recovery: 0.46, radius: 96,
+        movement: { kind: "crossTarget", maxTravel: 440, overshoot: 88, clearance: 8, sweptDamage: true },
       }),
       skill("banner-captain-rally", "summon", "plantFlags", {
         triggerRange: 760, cooldown: 5, telegraph: 0.68, active: 0.14, recovery: 0.62, radius: 90, count: 5,
