@@ -89,10 +89,15 @@ export type AssetRequestClass = "large" | "small";
 
 type QueuedAssetRequest = {
   readonly requestClass: AssetRequestClass;
-  readonly run: () => Promise<unknown>;
+  readonly run: (signal: AbortSignal) => Promise<unknown>;
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason?: unknown) => void;
   readonly signal?: AbortSignal;
+  readonly controller: AbortController;
+  readonly timeoutMs: number;
+  started: boolean;
+  settled: boolean;
+  timer?: ReturnType<typeof setTimeout>;
   abort?: () => void;
 };
 
@@ -106,6 +111,7 @@ export class AssetRequestGate {
   private activeLarge = 0;
   private activeSmall = 0;
   private readonly queue: QueuedAssetRequest[] = [];
+  private readonly inflightByKey = new Map<string, Promise<unknown>>();
 
   configure(profile: ConnectionProfile) {
     this.constrained = profile.constrained;
@@ -114,8 +120,9 @@ export class AssetRequestGate {
 
   schedule<T>(
     requestClass: AssetRequestClass,
-    run: () => Promise<T>,
+    run: (signal: AbortSignal) => Promise<T>,
     signal?: AbortSignal,
+    timeoutMs = 10_000,
   ) {
     return new Promise<T>((resolve, reject) => {
       if (signal?.aborted) {
@@ -128,19 +135,42 @@ export class AssetRequestGate {
         resolve: (value) => resolve(value as T),
         reject,
         signal,
+        controller: new AbortController(),
+        timeoutMs: Math.max(1, timeoutMs),
+        started: false,
+        settled: false,
       };
       if (signal) {
         request.abort = () => {
-          const index = this.queue.indexOf(request);
-          if (index < 0) return;
-          this.queue.splice(index, 1);
-          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+          request.controller.abort(signal.reason);
+          this.settleRequest(
+            request,
+            false,
+            signal.reason ?? new DOMException("Aborted", "AbortError"),
+          );
         };
         signal.addEventListener("abort", request.abort, { once: true });
       }
       this.queue.push(request);
       this.pump();
     });
+  }
+
+  scheduleShared<T>(
+    key: string,
+    requestClass: AssetRequestClass,
+    run: (signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+    timeoutMs = 10_000,
+  ) {
+    const existing = this.inflightByKey.get(key) as Promise<T> | undefined;
+    if (existing) return existing;
+    const request = this.schedule(requestClass, run, signal, timeoutMs);
+    this.inflightByKey.set(key, request);
+    void request.finally(() => {
+      if (this.inflightByKey.get(key) === request) this.inflightByKey.delete(key);
+    }).catch(() => undefined);
+    return request;
   }
 
   snapshot() {
@@ -169,30 +199,47 @@ export class AssetRequestGate {
         continue;
       }
       this.queue.splice(index, 1);
-      if (request.signal && request.abort) {
-        request.signal.removeEventListener("abort", request.abort);
-      }
+      request.started = true;
       if (request.requestClass === "large") this.activeLarge += 1;
       else this.activeSmall += 1;
+      request.timer = setTimeout(() => {
+        const error = new DOMException("Asset request timed out", "TimeoutError");
+        request.controller.abort(error);
+        this.settleRequest(request, false, error);
+      }, request.timeoutMs);
       let running: Promise<unknown>;
       try {
-        running = Promise.resolve(request.run());
+        running = Promise.resolve(request.run(request.controller.signal));
       } catch (error) {
         running = Promise.reject(error);
       }
       void running.then(
-        (value) => {
-          this.releaseRequestSlot(request.requestClass);
-          request.resolve(value);
-          this.pump();
-        },
-        (error) => {
-          this.releaseRequestSlot(request.requestClass);
-          request.reject(error);
-          this.pump();
-        },
+        (value) => this.settleRequest(request, true, value),
+        (error) => this.settleRequest(request, false, error),
       );
     }
+  }
+
+  private settleRequest(
+    request: QueuedAssetRequest,
+    succeeded: boolean,
+    result: unknown,
+  ) {
+    if (request.settled) return;
+    request.settled = true;
+    if (request.timer) clearTimeout(request.timer);
+    if (request.signal && request.abort) {
+      request.signal.removeEventListener("abort", request.abort);
+    }
+    if (request.started) {
+      this.releaseRequestSlot(request.requestClass);
+    } else {
+      const index = this.queue.indexOf(request);
+      if (index >= 0) this.queue.splice(index, 1);
+    }
+    if (succeeded) request.resolve(result);
+    else request.reject(result);
+    this.pump();
   }
 
   private releaseRequestSlot(requestClass: AssetRequestClass) {

@@ -125,7 +125,7 @@ function loadSheet(sheets: EnemySpriteSheets, type: EnemyVisualId) {
   }
   const pending = loads.get(type);
   if (pending) return pending;
-  const request = assetRequestGate.schedule("large", () => new Promise<void>((resolve) => {
+  const request = assetRequestGate.scheduleShared(publicAsset(ENEMY_VISUAL_SOURCES[type]), "large", () => new Promise<void>((resolve) => {
     const image = new Image();
     const timeout = window.setTimeout(() => {
       loads?.delete(type);

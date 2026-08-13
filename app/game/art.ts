@@ -70,7 +70,7 @@ function loadSeasonPlate(art: LoadedArt, index: number) {
   }
   const pending = art.seasonLoads.get(normalized);
   if (pending) return pending;
-  const request = assetRequestGate.schedule("large", () => new Promise<HTMLImageElement | null>((resolve) => {
+  const request = assetRequestGate.scheduleShared(publicAsset(ART_MANIFEST.seasons[normalized].image), "large", () => new Promise<HTMLImageElement | null>((resolve) => {
     const image = new Image();
     const timeout = window.setTimeout(() => {
       art.seasonLoads.delete(normalized);

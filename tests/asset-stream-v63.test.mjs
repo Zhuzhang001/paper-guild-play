@@ -103,6 +103,24 @@ test("request gate limits actual resource factories, including constrained mode"
   assert.equal(constrainedMax, 1);
 });
 
+test("request gate deduplicates concurrent requests by resolved URL", async () => {
+  const stream = await loadDirectorModule();
+  const gate = new stream.AssetRequestGate();
+  let factories = 0;
+  let release;
+  const load = () => gate.scheduleShared("/art/shared.webp", "large", async () => {
+    factories += 1;
+    await new Promise((resolve) => { release = resolve; });
+    return "loaded";
+  });
+  const first = load();
+  const second = load();
+  assert.equal(first, second);
+  assert.equal(factories, 1);
+  release();
+  assert.deepEqual(await Promise.all([first, second]), ["loaded", "loaded"]);
+});
+
 test("request gate releases slots after rejection, synchronous throw and queued cancellation", async () => {
   const stream = await loadDirectorModule();
   const gate = new stream.AssetRequestGate();
@@ -143,6 +161,19 @@ test("request gate releases slots after rejection, synchronous throw and queued 
   assert.deepEqual(calls, ["reject", "throw", "blocker", "after"]);
   assert.equal(gate.snapshot().activeLarge, 0);
   assert.equal(gate.snapshot().activeSmall, 0);
+
+  const timeoutGate = new stream.AssetRequestGate();
+  timeoutGate.configure({ constrained: true });
+  let observedAbort = false;
+  const hung = timeoutGate.schedule("large", (signal) =>
+    new Promise(() => {
+      signal.addEventListener("abort", () => { observedAbort = true; });
+    }), undefined, 5);
+  await assert.rejects(hung, /timed out/);
+  assert.equal(observedAbort, true);
+  await timeoutGate.schedule("small", async () => undefined);
+  assert.equal(timeoutGate.snapshot().activeLarge, 0);
+  assert.equal(timeoutGate.snapshot().activeSmall, 0);
 });
 
 test("art, enemy and visual loaders expose separate minimum and background APIs", async () => {

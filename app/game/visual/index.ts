@@ -210,7 +210,11 @@ export async function ensureCanvasFontsReady() {
 }
 
 async function loadImage(src: string): Promise<VisualImage> {
-  return assetRequestGate.schedule("large", () => loadImageDirect(src));
+  return assetRequestGate.scheduleShared(
+    publicAsset(src),
+    "large",
+    () => loadImageDirect(src),
+  );
 }
 
 async function loadImageDirect(src: string): Promise<VisualImage> {
