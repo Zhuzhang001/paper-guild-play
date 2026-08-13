@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -16,12 +16,16 @@ const baseName = valueAfter(
 );
 const basePath = baseName ? `/${baseName.replace(/^\/+|\/+$/g, "")}` : "";
 const githubOwner =
-  process.env.GITHUB_OWNER || process.env.GITHUB_REPOSITORY?.split("/")[0];
+  process.env.GITHUB_OWNER ||
+  process.env.GITHUB_REPOSITORY?.split("/")[0] ||
+  "Zhuzhang001";
 const siteOrigin =
   process.env.PAPER_GUILD_SITE_ORIGIN ||
-  (target === "github-pages" && githubOwner
-    ? `https://${githubOwner}.github.io${basePath}`
-    : "https://paper-guild-zh.akonya635.chatgpt.site");
+  (target === "github-pages"
+    ? `https://${githubOwner}.github.io`
+    : target === "offline"
+      ? "http://127.0.0.1:4173"
+      : "https://paper-guild-zh.akonya635.chatgpt.site");
 const nextBin = path.join(root, "node_modules", "next", "dist", "bin", "next");
 
 const child = spawn(process.execPath, [nextBin, "build"], {
@@ -50,4 +54,26 @@ if (result.code !== 0) {
 } else if (target === "github-pages") {
   // GitHub Pages otherwise lets Jekyll discard Next's `_next` directory.
   await writeFile(path.join(root, "out", ".nojekyll"), "", "utf8");
+}
+
+if (result.code === 0) {
+  const version = JSON.parse(
+    await readFile(path.join(root, "out", "version.json"), "utf8"),
+  );
+  if (version.version !== "6.3.0" || version.contentVersion !== 6) {
+    throw new Error("Static output contains an unexpected build identity.");
+  }
+
+  const html = await readFile(path.join(root, "out", "index.html"), "utf8");
+  const localReferences = [...html.matchAll(/(?:src|href)="([^"]+)"/g)]
+    .map((match) => match[1])
+    .filter((url) => url.startsWith("/"));
+  const unexpected = basePath
+    ? localReferences.filter((url) => !url.startsWith(`${basePath}/`))
+    : [];
+  if (unexpected.length > 0) {
+    throw new Error(
+      `Static output contains paths outside ${basePath}: ${unexpected.join(", ")}`,
+    );
+  }
 }

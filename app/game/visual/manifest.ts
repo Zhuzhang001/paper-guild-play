@@ -37,6 +37,14 @@ export const HERO_ATLASES = {
   ),
 } as const;
 
+export const BOOT_SUBJECT_ATLAS = atlas(
+  "boot.subjects.v63",
+  "/art-v6/boot-subjects-v63.webp",
+  5,
+  4,
+  0,
+);
+
 const weaponAtlas = (id: string, src: string) =>
   atlas(id, src, 7, 2, 2);
 
@@ -378,12 +386,35 @@ export const EFFECT_ATLASES = {
   ),
 } as const;
 
-export const CORE_VISUAL_ASSETS: readonly AtlasSpec[] = [
+export const BASE_VISUAL_ASSETS: readonly AtlasSpec[] = [
+  BOOT_SUBJECT_ATLAS,
   HERO_ATLASES.directions,
   HERO_ATLASES.fold,
-  WEAPON_ATLASES.sword,
   ...Object.values(EFFECT_ATLASES),
 ];
+
+/**
+ * The playable visual gate is independent of the selected starting weapon.
+ * Dedupe by manifest id so future shared atlases remain safe to compose.
+ */
+export function minimumVisualAssets(
+  initialWeaponId: WeaponId = "sword",
+): readonly AtlasSpec[] {
+  return [
+    ...new Map(
+      [
+        HERO_ATLASES.directions,
+        HERO_ATLASES.fold,
+        BOOT_SUBJECT_ATLAS,
+        WEAPON_ATLASES[initialWeaponId],
+      ].map((spec) => [spec.id, spec] as const),
+    ).values(),
+  ];
+}
+
+/** Compatibility export for callers that still default to the bamboo sword. */
+export const CORE_VISUAL_ASSETS: readonly AtlasSpec[] =
+  minimumVisualAssets("sword");
 
 export const STANDARD_DEFERRED_ASSETS: readonly AtlasSpec[] =
   Object.values(WEAPON_ATLASES).filter((spec) => spec.id !== WEAPON_ATLASES.sword.id);

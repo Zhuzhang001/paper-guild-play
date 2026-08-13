@@ -99,10 +99,10 @@ function makeEnemy(run, type) {
 
 test("four difficulty definitions and createRun runtime fields use authored values", () => {
   const expected = {
-    normal: [5, 1, 1, 1, 1, 1, 1, 0.15, 0],
-    hard: [4, 0.94, 0.75, 1.22, 1.06, 1.15, 1.2, 0.35, 0],
-    extreme: [3, 0.88, 0.5, 1.48, 1.12, 1.32, 1.45, 0.6, 0.25],
-    oneLife: [1, 0.82, 0, 1.7, 1.16, 1.5, 1.7, 0.75, 0.45],
+    normal: [5, 1, 1, 1, 1, 0.75, 1, 0.15, 0],
+    hard: [4, 0.94, 0.75, 1.22, 1.06, 0.9, 1.2, 0.35, 0],
+    extreme: [3, 0.88, 0.5, 1.48, 1.12, 1, 1.45, 0.6, 0.25],
+    oneLife: [1, 0.82, 0, 1.7, 1.16, 1.1, 1.7, 0.75, 0.45],
   };
   for (const [id, values] of Object.entries(expected)) {
     const definition = difficulty.getDifficultyDefinition(id);
@@ -177,7 +177,8 @@ test("non-Boss threat integrates per second and actor count is hard-capped at 15
     run.endlessDirector.totalThreatSpent +
     run.endlessDirector.nonBossThreatBudget;
   const expected =
-    12 * (10 + (0.0125 * 10 * 10) / (2 * 60));
+    12 * (10 + (0.0125 * 10 * 10) / (2 * 60)) *
+    difficulty.getDifficultyDefinition("normal").threatMultiplier;
   assert.ok(
     Math.abs(accounted - expected) < 0.04,
     `threat integration drifted: ${accounted} vs ${expected}`,

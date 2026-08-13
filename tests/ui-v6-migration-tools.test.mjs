@@ -24,7 +24,7 @@ test("lantern UI names its replay source and rare advancement is explicit", () =
   assert.match(source, /rareAdvanceOptionId/);
 });
 
-test("BAIGONG panel exposes safe director seeks and all authored bosses", () => {
+test("hidden test panel exposes safe director seeks and all authored bosses", () => {
   assert.match(source, /jumpEndlessMinutesForTest/);
   assert.match(source, /spawnEndlessBossForTest/);
   assert.match(source, /\[15, 35, 45, 80\]/);
@@ -40,7 +40,9 @@ test("boss sprite preloading follows the actual endless boss id", () => {
 });
 
 test("forge celestial nodes use authored atlas art instead of a text seal", () => {
-  assert.match(source, /const celestialArtWeapon/);
+  assert.match(source, /celestial-nodes-v63\.webp/);
+  assert.match(source, /const celestialFrame/);
+  assert.match(source, /publicAsset\("\/art-v6\/celestial-nodes-v63\.webp"\)/);
   assert.match(source, /style=\{weaveNodeThumbStyle\(node\)\}/);
   assert.doesNotMatch(
     source,

@@ -6,33 +6,15 @@ import { PUBLIC_BASE_PATH, publicAsset } from "./publicAsset";
 import {
   getFullscreenCapability,
   isStandaloneDisplayMode,
-  requestGameFullscreen,
+  requestLandscapePresentation,
   type FullscreenCapability,
 } from "./ViewportController";
 
 const SAFE_PHASES = new Set(["menu", "paused", "result"]);
 
-type InstallChoice = {
-  outcome: "accepted" | "dismissed";
-  platform: string;
-};
-
-interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<InstallChoice>;
-}
-
 function currentPhase() {
   return document.querySelector<HTMLElement>("[data-game-phase]")?.dataset
     .gamePhase;
-}
-
-function isIosBrowser() {
-  if (typeof navigator === "undefined") return false;
-  return (
-    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-  );
 }
 
 function useGamePhase() {
@@ -68,7 +50,9 @@ function FullscreenRecovery({ phase }: { phase: string }) {
             )
           : null,
       );
-      setCapability(getFullscreenCapability());
+      setCapability(
+        isStandaloneDisplayMode() ? "active" : getFullscreenCapability(),
+      );
     };
     sync();
     document.addEventListener("fullscreenchange", sync);
@@ -84,7 +68,7 @@ function FullscreenRecovery({ phase }: { phase: string }) {
     <button
       className="secondary-button fullscreen-retry"
       type="button"
-      onClick={() => void requestGameFullscreen()}
+      onClick={() => void requestLandscapePresentation()}
     >
       重新进入全屏
     </button>,
@@ -96,32 +80,7 @@ export function PwaBootstrap() {
   const phase = useGamePhase();
   const [waiting, setWaiting] = useState<ServiceWorker | null>(null);
   const [showUpdate, setShowUpdate] = useState(false);
-  const [installPrompt, setInstallPrompt] =
-    useState<BeforeInstallPromptEvent | null>(null);
-  const [standalone, setStandalone] = useState(() =>
-    typeof window === "undefined" ? false : isStandaloneDisplayMode(),
-  );
-  const [ios] = useState(() =>
-    typeof navigator === "undefined" ? false : isIosBrowser(),
-  );
   const waitingRef = useRef<ServiceWorker | null>(null);
-
-  useEffect(() => {
-    const onBeforeInstall = (event: Event) => {
-      event.preventDefault();
-      setInstallPrompt(event as BeforeInstallPromptEvent);
-    };
-    const onInstalled = () => {
-      setStandalone(true);
-      setInstallPrompt(null);
-    };
-    window.addEventListener("beforeinstallprompt", onBeforeInstall);
-    window.addEventListener("appinstalled", onInstalled);
-    return () => {
-      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
-  }, []);
 
   useEffect(() => {
     if (waitingRef.current && SAFE_PHASES.has(phase)) setShowUpdate(true);
@@ -164,7 +123,7 @@ export function PwaBootstrap() {
           });
         });
       } catch {
-        // Installation is optional; the browser layout remains fully playable.
+        // Offline support is optional; the browser layout remains playable.
       }
     };
 
@@ -188,31 +147,11 @@ export function PwaBootstrap() {
     waiting.postMessage({ type: "SKIP_WAITING" });
   };
 
-  const install = async () => {
-    if (!installPrompt) return;
-    await installPrompt.prompt();
-    await installPrompt.userChoice;
-    setInstallPrompt(null);
-  };
-
-  const showInstall = phase === "menu" && !standalone && (installPrompt || ios);
-
   return (
     <>
       <div className="test-build-badge" aria-label="测试版">
         测试版
       </div>
-      {showInstall ? (
-        <aside className="pwa-install" aria-label="安装到主屏幕">
-          {installPrompt ? (
-            <button type="button" onClick={() => void install()}>
-              安装到主屏幕
-            </button>
-          ) : (
-            <span>Safari：点“分享”，再选“添加到主屏幕”</span>
-          )}
-        </aside>
-      ) : null}
       {showUpdate ? (
         <aside className="pwa-update" role="status">
           <span>新卷已备好，可在此处安全更新。</span>

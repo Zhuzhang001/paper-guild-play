@@ -19,8 +19,24 @@ test("v6.1 has a conditional static export and base-path aware public assets", a
   assert.match(helper, /NEXT_PUBLIC_BASE_PATH/);
   assert.match(script, /paper-guild-play/);
   assert.match(script, /GITHUB_REPOSITORY/);
+  assert.match(script, /Zhuzhang001/);
+  assert.match(script, /https:\/\/\$\{githubOwner\}\.github\.io/);
+  assert.match(script, /target === "offline"/);
+  assert.match(script, /http:\/\/127\.0\.0\.1:4173/);
   assert.match(script, /NEXT_PUBLIC_BUILD_TARGET/);
   assert.match(script, /\.nojekyll/);
+  assert.match(script, /unexpected build identity/);
+  assert.match(script, /paths outside/);
+});
+
+test("GitHub Pages workflow configures the base URL before rendering metadata", async () => {
+  const workflow = await text(".github/workflows/pages.yml");
+  const configureAt = workflow.indexOf("actions/configure-pages@v5");
+  const buildAt = workflow.indexOf("npm run build:static:github");
+  assert.ok(configureAt >= 0);
+  assert.ok(buildAt > configureAt);
+  assert.match(workflow, /PAPER_GUILD_SITE_ORIGIN/);
+  assert.match(workflow, /path:\s*out/);
 });
 
 test("all runtime asset loaders resolve public paths through the shared helper", async () => {
@@ -70,7 +86,7 @@ test("build identity is shared by both mirrors", async () => {
     text("app/publicAsset.ts"),
   ]);
   const version = JSON.parse(versionRaw);
-  assert.equal(version.version, "6.2.0");
-  assert.match(helper, /version:\s*"6\.2\.0"/);
+  assert.equal(version.version, "6.3.0");
+  assert.match(helper, /version:\s*"6\.3\.0"/);
   assert.equal(version.contentVersion, 6);
 });

@@ -8,9 +8,12 @@
   --jade: #50766a;
   --gold: #c18b45;
   --font-ink:
-    "Paper Guild Text",
-    "LXGW WenKai Screen",
     "Kaiti SC",
+    "Noto Serif SC",
+    serif;
+  --font-brush:
+    "Kaiti SC",
+    "STKaiti",
     "Noto Serif SC",
     serif;
   --viewport-width: 100vw;
@@ -24,6 +27,33 @@
   --safe-area-left: env(safe-area-inset-left, 0px);
   --game-stage-width: min(100vw, calc(100dvh * 16 / 9));
   --game-stage-height: min(100dvh, calc(100vw * 9 / 16));
+  --game-presentation-origin-left: 0px;
+  --game-presentation-origin-top: 0px;
+  --game-presentation-width: 100vw;
+  --game-presentation-height: 100dvh;
+  --game-presentation-translate-x: 0px;
+  --game-presentation-translate-y: 0px;
+  --game-presentation-rotation: 0deg;
+  --game-presentation-safe-top: var(--safe-area-top);
+  --game-presentation-safe-right: var(--safe-area-right);
+  --game-presentation-safe-bottom: var(--safe-area-bottom);
+  --game-presentation-safe-left: var(--safe-area-left);
+  --game-presentation-stage-width: var(--game-stage-width);
+  --game-presentation-stage-height: var(--game-stage-height);
+}
+
+html[data-game-fonts-ready="true"] {
+  --font-ink:
+    "Paper Guild Text",
+    "LXGW WenKai Screen",
+    "Kaiti SC",
+    "Noto Serif SC",
+    serif;
+  --font-brush:
+    "Paper Guild Display",
+    "Ma Shan Zheng",
+    "Kaiti SC",
+    cursive;
 }
 
 * {
@@ -52,26 +82,72 @@ button {
 
 .page {
   position: fixed;
-  top: var(--viewport-offset-top);
-  left: var(--viewport-offset-left);
-  width: var(--viewport-width);
-  height: var(--viewport-height);
+  top: var(--game-presentation-origin-top);
+  left: var(--game-presentation-origin-left);
+  width: var(--game-presentation-width);
+  height: var(--game-presentation-height);
   padding:
-    var(--safe-area-top)
-    var(--safe-area-right)
-    var(--safe-area-bottom)
-    var(--safe-area-left);
+    var(--game-presentation-safe-top)
+    var(--game-presentation-safe-right)
+    var(--game-presentation-safe-bottom)
+    var(--game-presentation-safe-left);
   display: grid;
   place-items: center;
+  transform:
+    translate(
+      var(--game-presentation-translate-x),
+      var(--game-presentation-translate-y)
+    )
+    rotate(var(--game-presentation-rotation));
+  transform-origin: 0 0;
   background:
-    radial-gradient(circle at 50% 35%, rgba(112, 105, 79, 0.23), transparent 40%),
-    #171916;
+    radial-gradient(circle at 50% 35%, rgba(112, 105, 79, 0.18), transparent 42%),
+    #dcd4bd;
+}
+
+.page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.58;
+  background:
+    linear-gradient(90deg, rgba(38, 35, 29, 0.08), transparent 18% 82%, rgba(38, 35, 29, 0.08)),
+    repeating-linear-gradient(8deg, rgba(77, 66, 45, 0.045) 0 1px, transparent 1px 9px);
+}
+
+.page[data-season="spring"] {
+  background-color: #d8ddc5;
+  background-image:
+    radial-gradient(ellipse at 8% 78%, rgba(199, 113, 111, 0.22), transparent 24%),
+    radial-gradient(ellipse at 92% 20%, rgba(85, 122, 104, 0.18), transparent 27%);
+}
+
+.page[data-season="summer"] {
+  background-color: #cbd8c7;
+  background-image:
+    radial-gradient(circle at 8% 35%, rgba(72, 118, 102, 0.2), transparent 28%),
+    repeating-linear-gradient(104deg, transparent 0 18px, rgba(70, 106, 111, 0.08) 19px 20px);
+}
+
+.page[data-season="autumn"] {
+  background-color: #ddd0ad;
+  background-image:
+    radial-gradient(ellipse at 8% 66%, rgba(151, 91, 55, 0.2), transparent 24%),
+    radial-gradient(ellipse at 92% 30%, rgba(181, 131, 55, 0.17), transparent 28%);
+}
+
+.page[data-season="winter"] {
+  background-color: #cfd5d1;
+  background-image:
+    radial-gradient(circle at 8% 72%, rgba(162, 55, 42, 0.2), transparent 17%),
+    repeating-linear-gradient(0deg, transparent 0 26px, rgba(83, 98, 103, 0.07) 27px 28px);
 }
 
 .game-shell {
   position: relative;
-  width: var(--game-stage-width);
-  height: var(--game-stage-height);
+  width: var(--game-presentation-stage-width);
+  height: var(--game-presentation-stage-height);
   max-width: 100%;
   max-height: 100%;
   aspect-ratio: 16 / 9;
@@ -150,7 +226,7 @@ button {
 
 .title {
   margin: 0;
-  font-family: "Paper Guild Display", "Paper Guild Text", cursive;
+  font-family: var(--font-brush);
   font-size: clamp(48px, 7.3cqw, 104px);
   line-height: 1.02;
   letter-spacing: 0.015em;
@@ -458,7 +534,7 @@ button {
 }
 
 .season-mark {
-  font-family: "Paper Guild Display", "Paper Guild Text", cursive;
+  font-family: var(--font-brush);
   font-size: clamp(15px, 1.5cqw, 20px);
   font-weight: 400;
   letter-spacing: 0.16em;
@@ -601,7 +677,7 @@ button {
 }
 
 .terminal-callout strong {
-  font-family: "Paper Guild Display", "Paper Guild Text", cursive;
+  font-family: var(--font-brush);
   font-weight: 400;
   font-size: clamp(22px, 3cqw, 38px);
   letter-spacing: 0.14em;
@@ -667,7 +743,7 @@ button {
 .result-panel h2,
 .pause-panel h2 {
   margin: 0;
-  font-family: "Paper Guild Display", "Paper Guild Text", cursive;
+  font-family: var(--font-brush);
   font-weight: 400;
   font-size: clamp(28px, 4cqw, 50px);
   line-height: 1;
@@ -1026,6 +1102,14 @@ button {
   letter-spacing: 0.06em;
 }
 
+.pause-secret-trigger {
+  width: fit-content;
+  cursor: default;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .test-code-hint kbd {
   padding: 2px 5px;
   color: #724439;
@@ -1101,6 +1185,17 @@ button {
   opacity: 0.42;
 }
 
+.test-experience-button {
+  touch-action: none;
+}
+
+.test-experience-status {
+  display: block;
+  color: #655d52;
+  font-size: 10px;
+  text-align: left;
+}
+
 .primary-button.compact {
   min-width: 0;
   padding: 11px 15px;
@@ -1135,7 +1230,7 @@ button {
 
 @media (orientation: portrait) and (max-width: 720px) {
   .rotate-hint {
-    display: grid;
+    display: none;
   }
 }
 
@@ -2275,6 +2370,21 @@ button {
   border: 1px solid rgba(49, 45, 38, 0.2);
 }
 
+.forge-gap-row .forge-insert-preview:not(:disabled) {
+  color: #fff7df;
+  background: #416d63;
+  border-color: #294e47;
+  box-shadow:
+    inset 0 0 0 1px rgba(233, 215, 153, 0.35),
+    0 3px 0 rgba(42, 67, 60, 0.16);
+  font-weight: 700;
+}
+
+.forge-gap-row .forge-insert-preview:focus-visible {
+  outline: 3px solid #d3a84e;
+  outline-offset: 2px;
+}
+
 .temper-list {
   overflow: visible;
 }
@@ -2386,7 +2496,7 @@ button {
   background: #53627c;
   border: 5px double rgba(244, 234, 210, 0.72);
   border-radius: 50%;
-  font-family: "Paper Guild Display", var(--font-ink);
+  font-family: var(--font-brush);
   font-size: 27px;
   box-shadow: 0 6px 0 rgba(52, 55, 65, 0.12);
 }
@@ -2459,7 +2569,7 @@ button {
   right: 7px;
   bottom: -10px;
   color: rgba(71, 91, 83, 0.07);
-  font: 400 54px/1 "Paper Guild Display", var(--font-ink);
+  font: 400 54px/1 var(--font-brush);
   pointer-events: none;
 }
 
@@ -2517,7 +2627,8 @@ button {
 }
 
 .weave-ring-preview {
-  --ring-node-size: clamp(48px, 13cqh, 62px);
+  --ring-node-size-base: 72px;
+  --ring-node-size: clamp(52px, 14cqh, var(--ring-node-size-base));
   position: relative;
   width: min(100cqw, calc(100cqh * 1.44), 420px);
   max-width: 100%;
@@ -2631,8 +2742,10 @@ button {
 }
 
 .weave-node-art {
-  width: 100%;
+  width: auto;
+  height: 100%;
   max-width: calc(var(--ring-node-size) - 19px);
+  max-height: 100%;
   aspect-ratio: 1;
   background-repeat: no-repeat;
   filter: drop-shadow(0 3px 2px rgba(38, 31, 24, 0.23));
@@ -2655,11 +2768,12 @@ button {
 
 .weave-node-copy strong {
   max-width: 100%;
-  overflow: hidden;
   color: inherit;
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: normal;
 }
 
 .weave-node-copy small {
@@ -2905,6 +3019,28 @@ button {
   gap: 8px;
 }
 
+.forge-blocker-choice {
+  min-height: 44px;
+  padding: 11px 16px;
+  color: #302c26;
+  background: #f5ecd8;
+  border: 1px solid rgba(48, 43, 36, 0.34);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.forge-blocker-choice:hover,
+.forge-blocker-choice:focus-visible {
+  color: #302c26;
+  background: #eee3cc;
+  border-color: rgba(48, 43, 36, 0.52);
+  outline: none;
+}
+
+.forge-blocker-choice:focus-visible {
+  box-shadow: 0 0 0 3px rgba(80, 118, 106, 0.28);
+}
+
 .forge-blocker-progress {
   padding: 12px;
   text-align: center;
@@ -2988,7 +3124,7 @@ button {
   }
 
   .weave-ring-preview {
-    --ring-node-size: clamp(62px, 7cqw, 82px);
+    --ring-node-size: clamp(52px, 7cqw, var(--ring-node-size-base));
   }
 
   .weave-node-copy small {
@@ -3216,7 +3352,7 @@ button {
   border: 1px solid rgba(50, 54, 45, 0.28);
   background: rgba(244, 237, 216, 0.84);
   color: rgba(45, 48, 40, 0.78);
-  font: 11px/1.2 "Paper Guild Text", serif;
+  font: 11px/1.2 var(--font-ink);
   letter-spacing: 0.08em;
   transform: translate(-100%, -100%);
   pointer-events: none;
@@ -3366,7 +3502,7 @@ button {
 }
 
 .viewport-too-short h2 {
-  font: 400 clamp(20px, 8vh, 28px)/1.15 "Paper Guild Display", var(--font-ink);
+  font: 400 clamp(20px, 8vh, 28px)/1.15 var(--font-brush);
 }
 
 .viewport-too-short span,

@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  loadArtAssets,
+  loadMinimumArtAssets,
+  preloadSeasonSceneAssets,
   releaseSeasonSceneAssets,
   retainSeasonSceneAssets,
   seasonIndex,
@@ -10,7 +11,9 @@ import {
   type LoadedArt,
 } from "./game/art";
 import {
-  loadEnemySpriteSheets,
+  loadMinimumEnemySpriteSheets,
+  attachEnemyBootFallback,
+  preloadEnemySpriteGroup,
   releaseEnemySpriteSheets,
   retainEnemySpriteSheets,
   type EnemySpriteSheets,
@@ -18,6 +21,7 @@ import {
 } from "./game/actors/enemySprites";
 import {
   findFusionDefinition,
+  getFusionDefinition,
   DIFFICULTIES,
   DIFFICULTY_IDS,
   ENDLESS_BOSSES,
@@ -62,6 +66,7 @@ import {
   spawnEndlessBossForTest,
   STANDARD_SECONDS,
   setPrimaryWeapon,
+  settleRunProgression,
   startEndless,
   stepRun,
   type RareChoice,
@@ -95,27 +100,42 @@ import {
   type ForgeOffer,
 } from "./game/runtime";
 import {
-  loadVisualPack,
+  loadMinimumVisualPack,
+  getBootSubjectImage,
+  preloadVisualGroup,
   preloadFusionVisuals,
   preloadWeaponVisuals,
   pruneVisualPack,
   resolveWeaponVisualFrame,
   FUSION_ATLASES,
+  EFFECT_ATLASES,
   WEAPON_ATLASES,
   type VisualPack,
 } from "./game/visual";
+import {
+  AssetStreamDirector,
+  assetRequestGate,
+  type AssetStreamGroupDefinition,
+} from "./game/assetStreamDirector";
 import {
   AudioManager,
   getFusionSfxCue,
   getSolarTermState,
   getTermAmbienceCue,
   type AudioSettings,
+  type AudioCueId,
   type SfxCueId,
 } from "./game/world";
 import {
-  isStandaloneDisplayMode,
-  requestGameFullscreen,
+  requestLandscapePresentation,
 } from "./ViewportController";
+import { publicAsset } from "./publicAsset";
+import {
+  EXPERIENCE_HOLD_MAX_PER_GESTURE,
+  calculateExperienceHoldDelta,
+  createTestUnlockState,
+  transitionTestUnlock,
+} from "./testUnlock";
 
 type Mode =
   | "menu"
@@ -229,6 +249,14 @@ type RingMoveState = {
   dragging: boolean;
 };
 
+type TestExperienceGesture = {
+  pointerId: number;
+  startedAt: number;
+  repeatedAmount: number;
+  totalAmount: number;
+  timer: ReturnType<typeof setInterval> | null;
+};
+
 type GamepadUiState = {
   direction: -1 | 0 | 1;
   repeatAt: number;
@@ -285,6 +313,11 @@ const TRIAL_DEFINITIONS: Array<{
   { id: "bossRush", name: "Boss更勤", description: "无尽 Boss 预算提高四成" },
   { id: "noRecovery", name: "无恢复", description: "所有生命恢复归零" },
   { id: "thinPower", name: "威力降低", description: "玩家威力降至八成八" },
+  {
+    id: "allAtOnce",
+    name: "齐出手",
+    description: "普通怪恢复高一档招式，并增加两个技能槽",
+  },
 ];
 
 const DIFFICULTY_SUMMARY: Readonly<Record<DifficultyId, string>> = {
@@ -303,7 +336,6 @@ const LEGACY_PROGRESS_KEYS = [
 ] as const;
 const LEGACY_CLEAR_KEY = "paper-guild-cleared-v3";
 const AUDIO_KEY_V1 = "paper-guild.audio.v1";
-const TEST_CODE = "baigong";
 const FIXED_STEP = 1 / 60;
 const MAX_SIMULATION_STEPS = 32;
 const TERM_CHANGE_CHIMES = new Set([
@@ -409,7 +441,7 @@ function weaponThumbStyle(
   const column = frame % 7;
   const row = Math.floor(frame / 7);
   return {
-    backgroundImage: `url("${WEAPON_ATLASES[weaponId].src}")`,
+    backgroundImage: `url("${publicAsset(WEAPON_ATLASES[weaponId].src)}")`,
     backgroundPosition: `${(column / 6) * 100}% ${row * 100}%`,
     backgroundSize: "700% 200%",
   };
@@ -417,7 +449,7 @@ function weaponThumbStyle(
 
 function fusionThumbStyle(fusionId: FusionId): React.CSSProperties {
   return {
-    backgroundImage: `url("${FUSION_ATLASES[fusionId].src}")`,
+    backgroundImage: `url("${publicAsset(FUSION_ATLASES[fusionId].src)}")`,
     backgroundPosition: "0% 0%",
     backgroundSize: "200% 200%",
   };
@@ -435,18 +467,51 @@ function weaveNodeThumbStyle(node: WeaveNode): React.CSSProperties | undefined {
   if (node.kind === "fusion") {
     return fusionThumbStyle(node.sourceId as FusionId);
   }
-  const celestialArtWeapon: Readonly<Record<string, WeaponId>> = {
-    thunderTrial: "thunderSeal",
-    galeTrial: "fan",
-    fireTrial: "lantern",
-    frostTrial: "umbrella",
-    ghostMarch: "lantern",
-    eclipseTrial: "pipa",
+  const celestialFrame: Readonly<Record<string, number>> = {
+    thunderTrial: 0,
+    galeTrial: 1,
+    fireTrial: 2,
+    frostTrial: 3,
+    ghostMarch: 4,
+    eclipseTrial: 5,
   };
-  const artWeapon = celestialArtWeapon[node.sourceId];
-  return artWeapon
-    ? weaponThumbStyle(artWeapon, { level: 5 })
-    : weaponThumbStyle("thunderSeal", { level: 3 });
+  const frame = celestialFrame[node.sourceId] ?? 0;
+  const column = frame % 3;
+  const row = Math.floor(frame / 3);
+  return {
+    backgroundImage: `url("${publicAsset("/art-v6/celestial-nodes-v63.webp")}")`,
+    backgroundPosition: `${(column / 2) * 100}% ${row * 100}%`,
+    backgroundSize: "300% 200%",
+  };
+}
+
+function weaveNodeDisplayName(node: WeaveNode) {
+  if (node.kind !== "fusion") return node.name;
+  const definition = getFusionDefinition(node.sourceId as FusionId);
+  return definition.weapons
+    .map((weaponId) => getWeaponDefinition(weaponId).shortName)
+    .join("×");
+}
+
+function weaveNodeSizeStyle(count: number): React.CSSProperties {
+  const size = count <= 4 ? 96 : count <= 6 ? 84 : 72;
+  return { "--ring-node-size-base": `${size}px` } as React.CSSProperties;
+}
+
+async function waitAtMost(
+  promise: Promise<unknown> | undefined,
+  timeoutMs = 10_000,
+) {
+  if (!promise) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const completed = await Promise.race([
+    promise.then(() => true, () => false),
+    new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  return completed;
 }
 
 function weaveNodePosition(index: number, count: number): React.CSSProperties {
@@ -656,6 +721,7 @@ export function PaperGuildGame() {
     solarTerms: null,
   });
   const audioRef = useRef<AudioManager | null>(null);
+  const assetStreamDirectorRef = useRef<AssetStreamDirector | null>(null);
   const keysRef = useRef(new Set<string>());
   const joystickRef = useRef({
     active: false,
@@ -668,7 +734,14 @@ export function PaperGuildGame() {
   const lastFrameRef = useRef(0);
   const simulationAccumulatorRef = useRef(0);
   const hudClockRef = useRef(0);
-  const cheatBufferRef = useRef("");
+  const testUnlockTapRef = useRef(createTestUnlockState());
+  const testUnlockPointerRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+    dragged: boolean;
+  } | null>(null);
+  const testExperienceGestureRef = useRef<TestExperienceGesture | null>(null);
   const queuedModalsRef = useRef<QueuedModal[]>([]);
   const forgeFireRef = useRef(0);
   const forgeCycleRef = useRef(0);
@@ -721,6 +794,7 @@ export function PaperGuildGame() {
   const [testPanelState, setTestPanelState] = useState<TestPanelState>(
     DEFAULT_TEST_PANEL_STATE,
   );
+  const [testExperienceAdded, setTestExperienceAdded] = useState(0);
   const [directorPanelState, setDirectorPanelState] =
     useState<DirectorPanelState | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
@@ -786,40 +860,150 @@ export function PaperGuildGame() {
       setAudioSettings(manager.getSettings());
     });
 
-    const seasonPromise = loadArtAssets((progress) => {
-      if (alive) setLoading((current) => ({ ...current, season: progress }));
+    const initialBootWeapon =
+      progress.preferredInitialWeapon === "random"
+        ? "sword"
+        : progress.preferredInitialWeapon;
+    const bootConnection = (navigator as Navigator & {
+      connection?: { saveData?: boolean; effectiveType?: string };
+    }).connection;
+    assetRequestGate.configure({
+      constrained: Boolean(
+        bootConnection?.saveData ||
+        bootConnection?.effectiveType === "slow-2g" ||
+        bootConnection?.effectiveType === "2g",
+      ),
     });
-    const enemyPromise = loadEnemySpriteSheets((progress) => {
-      if (alive) setLoading((current) => ({ ...current, enemy: progress }));
+    const seasonPromise = loadMinimumArtAssets((progressValue: number) => {
+      if (alive) setLoading((current) => ({ ...current, season: progressValue }));
     });
-    const visualPromise = loadVisualPack((done, total) => {
-      if (alive) setLoading((current) => ({
-        ...current,
-        visual: total > 0 ? done / total : 1,
-      }));
+    const enemyPromise = loadMinimumEnemySpriteSheets((progressValue: number) => {
+      if (alive) setLoading((current) => ({ ...current, enemy: progressValue }));
     });
-    const termsPromise = loadSolarTermAtlas().then((atlas) => {
-      if (alive) setLoading((current) => ({ ...current, terms: 1 }));
-      return atlas;
+    const visualPromise = loadMinimumVisualPack({
+      initialWeaponId: initialBootWeapon,
+      waitForFonts: false,
+      onProgress: (done: number, total: number) => {
+        if (alive) setLoading((current) => ({
+          ...current,
+          visual: total > 0 ? done / total : 1,
+        }));
+      },
     });
 
-    Promise.all([seasonPromise, enemyPromise, visualPromise, termsPromise])
-      .then(([seasons, enemies, visuals, solarTerms]: [
+    Promise.all([seasonPromise, enemyPromise, visualPromise])
+      .then(([seasons, enemies, visuals]: [
         LoadedArt,
         EnemySpriteSheets,
         VisualPack,
-        HTMLImageElement | null,
       ]) => {
         if (!alive) return;
-        assetsRef.current = { seasons, enemies, visuals, solarTerms };
+        attachEnemyBootFallback(enemies, getBootSubjectImage(visuals));
+        assetsRef.current = { seasons, enemies, visuals, solarTerms: null };
         seasonLifecycleIndexRef.current = 0;
         enemyLifecycleSignatureRef.current = ["cup", "fish", "rib", "shoe"].join(",");
-        setLoading({ season: 1, enemy: 1, visual: 1, terms: 1 });
+        setLoading({ season: 1, enemy: 1, visual: 1, terms: 0 });
+
+        let solarTermRequest: Promise<HTMLImageElement | null> | null = null;
+        const ensureSolarTerms = async () => {
+          solarTermRequest ??= assetRequestGate.schedule("large", loadSolarTermAtlas);
+          const atlas = await solarTermRequest;
+          if (!alive) return;
+          assetsRef.current.solarTerms = atlas;
+          setLoading((current) => ({ ...current, terms: 1 }));
+        };
+        const loadStreamGroup = async (
+          group: AssetStreamGroupDefinition,
+          signal: AbortSignal,
+        ) => {
+          if (signal.aborted) return;
+          const tasks: Promise<unknown>[] = [];
+          if (group.payload.seasonIndices?.length) {
+            tasks.push(preloadSeasonSceneAssets(seasons, group.payload.seasonIndices));
+          }
+          for (const enemyGroup of group.payload.enemyGroups ?? []) {
+            if (enemyGroup === "minimum" || enemyGroup === "nextEndlessBoss") continue;
+            tasks.push(preloadEnemySpriteGroup(enemies, enemyGroup));
+          }
+          for (const visualGroup of group.payload.visualGroups ?? []) {
+            if (visualGroup === "minimum") continue;
+            if (visualGroup === "upgradeCandidates") {
+              tasks.push(preloadVisualGroup(visuals, {
+                specs: Object.values(EFFECT_ATLASES),
+              }));
+              tasks.push(ensureSolarTerms());
+              tasks.push(Promise.all([
+                assetRequestGate.schedule("small", () =>
+                  document.fonts.load('16px "Paper Guild Text"')
+                ),
+                assetRequestGate.schedule("small", () =>
+                  document.fonts.load('32px "Paper Guild Display"')
+                ),
+              ]).then(() => {
+                  if (alive) document.documentElement.dataset.gameFontsReady = "true";
+              }));
+            } else {
+              const run = runRef.current;
+              if (!run) continue;
+              const ids = currentVisualIds(run);
+              tasks.push(preloadVisualGroup(visuals, {
+                weaponIds: ids.weaponIds,
+                fusionIds: visualGroup === "legalFusions" ? ids.fusionIds : [],
+              }));
+            }
+          }
+          const connection = (navigator as Navigator & {
+            connection?: { saveData?: boolean; effectiveType?: string };
+          }).connection;
+          const constrained = Boolean(
+            connection?.saveData ||
+            connection?.effectiveType === "slow-2g" ||
+            connection?.effectiveType === "2g",
+          );
+          if (!constrained && group.payload.audioGroups?.length) {
+            const cues = new Set<AudioCueId>();
+            for (const audioGroup of group.payload.audioGroups) {
+              const mapped: Partial<Record<typeof audioGroup, readonly AudioCueId[]>> = {
+                spring: ["music.spring"],
+                summer: ["music.summer"],
+                autumn: ["music.autumn"],
+                winter: ["music.winter"],
+                midBoss: ["music.boss.taotie"],
+                finalBoss: ["music.boss.nian"],
+                endless: ["music.endless"],
+              };
+              mapped[audioGroup]?.forEach((cue) => cues.add(cue));
+            }
+            if (cues.size) {
+              tasks.push(Promise.all([...cues].map((cue) =>
+                assetRequestGate.schedule("small", () =>
+                  audioRef.current?.preload([cue]) ?? Promise.resolve()
+                )
+              )));
+            }
+          }
+          await Promise.all(tasks);
+        };
+        const connection = (navigator as Navigator & {
+          connection?: { saveData?: boolean; effectiveType?: string };
+        }).connection;
+        const constrained = Boolean(
+          connection?.saveData ||
+          connection?.effectiveType === "slow-2g" ||
+          connection?.effectiveType === "2g",
+        );
+        const director = new AssetStreamDirector(loadStreamGroup, undefined, {
+          maxConcurrent: constrained ? 1 : 2,
+        });
+        assetStreamDirectorRef.current = director;
+        director.markReady("minimumPlayable");
         setAssetsReady(true);
       });
 
     return () => {
       alive = false;
+      assetStreamDirectorRef.current?.dispose();
+      assetStreamDirectorRef.current = null;
       if (assetsRef.current.seasons) {
         releaseSeasonSceneAssets(assetsRef.current.seasons);
       }
@@ -931,6 +1115,11 @@ export function PaperGuildGame() {
       finishHumanForm(run.player);
       refreshDirectorPanel(run);
     }
+    testUnlockTapRef.current = transitionTestUnlock(
+      testUnlockTapRef.current,
+      { type: "pause-exit" },
+    ).state;
+    testUnlockPointerRef.current = null;
     releaseMovementInput();
     setMode("paused");
   }, [refreshDirectorPanel, releaseMovementInput, setMode]);
@@ -1162,6 +1351,11 @@ export function PaperGuildGame() {
     if (!commitSynergyChoice(run, selectedSynergyIds)) return;
     setSnapshot(snapshotRun(run));
     play("sfx.synergy");
+    const progressionEvents = settleRunProgression(run);
+    for (const event of progressionEvents) {
+      if (event.type === "upgrade") queuedModalsRef.current.push("upgrade");
+      if (event.type === "synergy") play("sfx.synergy");
+    }
     openNextQueuedModal(run);
   }, [openNextQueuedModal, play, selectedSynergyIds]);
 
@@ -1220,6 +1414,27 @@ export function PaperGuildGame() {
     if (modeRef.current === "playing" && queued.length > 0) openNextQueuedModal(run);
   }, [endRun, openNextQueuedModal, play, syncMusic, syncSceneVisualLifecycle]);
 
+  const settleAfterBuildChoice = useCallback((run: RunState) => {
+    const events = settleRunProgression(run);
+    setSnapshot(snapshotRun(run));
+    if (events.length === 0) {
+      openNextQueuedModal(run);
+      return;
+    }
+    setMode("playing");
+    handleEvents(run, events);
+  }, [handleEvents, openNextQueuedModal, setMode]);
+
+  const resumePausedRun = useCallback(() => {
+    const run = runRef.current;
+    if (!run) return;
+    const events = settleRunProgression(run);
+    setSnapshot(snapshotRun(run));
+    setMode("playing");
+    if (events.length > 0) handleEvents(run, events);
+    if (modeRef.current === "playing") syncMusic();
+  }, [handleEvents, setMode, syncMusic]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
@@ -1230,16 +1445,7 @@ export function PaperGuildGame() {
       if (key === "escape" && modeRef.current === "playing") {
         pauseGame();
       } else if (key === "escape" && modeRef.current === "paused") {
-        setMode("playing");
-      }
-      if (modeRef.current === "paused" && /^[a-z]$/.test(key)) {
-        cheatBufferRef.current = `${cheatBufferRef.current}${key}`.slice(
-          -TEST_CODE.length,
-        );
-        if (cheatBufferRef.current === TEST_CODE) {
-          setTestPanelUnlocked(true);
-          cheatBufferRef.current = "";
-        }
+        resumePausedRun();
       }
       if (modeRef.current === "upgrade" && ["1", "2", "3"].includes(key)) {
         const option = upgradeOptions[Number(key) - 1];
@@ -1251,7 +1457,7 @@ export function PaperGuildGame() {
             else play("sfx.upgrade");
             void syncRunVisuals(run);
             refreshSnapshot();
-            openNextQueuedModal(run);
+            settleAfterBuildChoice(run);
           }
         }
       }
@@ -1293,11 +1499,12 @@ export function PaperGuildGame() {
     confirmSynergyChoice,
     endlessPerkChosen,
     endlessPerkOptions,
-    openNextQueuedModal,
     pauseGame,
     play,
     refreshSnapshot,
+    resumePausedRun,
     setMode,
+    settleAfterBuildChoice,
     syncRunVisuals,
     synergyOptions,
     toggleSynergyChoice,
@@ -1311,8 +1518,7 @@ export function PaperGuildGame() {
       if (modeRef.current === "playing") {
         pauseGame();
       } else if (modeRef.current === "paused") {
-        setMode("playing");
-        syncMusic();
+        resumePausedRun();
       } else if (modeRef.current === "menu" || modeRef.current === "result") {
         document
           .querySelector<HTMLButtonElement>(
@@ -1379,7 +1585,7 @@ export function PaperGuildGame() {
       modal?.querySelector<HTMLButtonElement>("[data-gamepad-cancel]")?.click();
     }
     state.cancel = cancelPressed;
-  }, [pauseGame, play, setMode, syncMusic]);
+  }, [pauseGame, play, resumePausedRun]);
 
   const consumeCombatAudio = useCallback((run: RunState) => {
     const previous = combatAudioRef.current;
@@ -1448,6 +1654,7 @@ export function PaperGuildGame() {
         frame = requestAnimationFrame(loop);
         return;
       }
+      assetStreamDirectorRef.current?.advance(run.elapsed);
       void syncSceneVisualLifecycle(run, run.elapsed);
 
       const gamepad = navigator.getGamepads?.()[0];
@@ -1521,14 +1728,17 @@ export function PaperGuildGame() {
     // Audio and fullscreen must both begin inside the original pointer gesture.
     // Neither capability is allowed to block a run when the browser declines it.
     const audioInitialization = audioRef.current?.initFromGesture();
-    const fullscreenAttempt =
+    const landscapeAttempt =
       typeof window !== "undefined" &&
-      window.matchMedia("(pointer: coarse)").matches &&
-      !isStandaloneDisplayMode()
-        ? requestGameFullscreen()
+      window.matchMedia("(pointer: coarse)").matches
+        ? requestLandscapePresentation()
         : undefined;
     setTestPanelUnlocked(false);
-    cheatBufferRef.current = "";
+    setTestExperienceAdded(0);
+    testUnlockTapRef.current = transitionTestUnlock(
+      testUnlockTapRef.current,
+      { type: "new-run" },
+    ).state;
     const seed = Date.now();
     const run = createRun(trials, seed, {
       initialWeaponId: preferredInitialWeapon,
@@ -1537,10 +1747,12 @@ export function PaperGuildGame() {
       unlockedDifficultyIds,
     });
     const initialWeaponId = run.build.weapons[0]?.id ?? "sword";
-    await audioInitialization;
-    if (fullscreenAttempt) void fullscreenAttempt;
+    await waitAtMost(audioInitialization);
+    if (landscapeAttempt) void landscapeAttempt;
     if (assetsRef.current.visuals) {
-      await preloadWeaponVisuals(assetsRef.current.visuals, [initialWeaponId]);
+      await waitAtMost(
+        preloadWeaponVisuals(assetsRef.current.visuals, [initialWeaponId]),
+      );
     }
     void audioRef.current?.preload([
       "music.spring",
@@ -1551,9 +1763,12 @@ export function PaperGuildGame() {
       "sfx.player-hit",
     ]);
     runRef.current = run;
+    assetStreamDirectorRef.current?.advance(0);
     simulationAccumulatorRef.current = 0;
     setTestPanelState(run.testModifiers);
-    await syncRunVisuals(run);
+    if (assetsRef.current.visuals) {
+      pruneVisualPack(assetsRef.current.visuals, [initialWeaponId], []);
+    }
     releaseMovementInput();
     queuedModalsRef.current = [];
     forgeFireRef.current = 0;
@@ -1600,8 +1815,7 @@ export function PaperGuildGame() {
     const synergy = applyUpgrade(run, option);
     play(synergy ? "sfx.synergy" : "sfx.upgrade");
     void syncRunVisuals(run);
-    setSnapshot(snapshotRun(run));
-    openNextQueuedModal(run);
+    settleAfterBuildChoice(run);
   };
 
   const chooseRare = (choice: RareChoice["id"]) => {
@@ -1662,6 +1876,12 @@ export function PaperGuildGame() {
     setRareChoiceAvailability([]);
     setDirectorPanelState(null);
     setTestPanelState(DEFAULT_TEST_PANEL_STATE);
+    setTestPanelUnlocked(false);
+    setTestExperienceAdded(0);
+    testUnlockTapRef.current = transitionTestUnlock(
+      testUnlockTapRef.current,
+      { type: "new-run" },
+    ).state;
     setSnapshot(emptySnapshot);
     setSelectedNodeIds([]);
     const visuals = assetsRef.current.visuals;
@@ -1718,12 +1938,133 @@ export function PaperGuildGame() {
     setSnapshot(snapshotRun(run));
   };
 
-  const addTestExperience = () => {
+  const addTestExperience = (amount = 100) => {
     const run = runRef.current;
-    if (!run) return;
-    run.player.xp += 100;
+    if (!run || amount <= 0) return;
+    run.player.xp += amount;
+    setTestExperienceAdded((current) => current + amount);
     updateTestModifiers({});
   };
+
+  const stopTestExperienceHold = useCallback(() => {
+    const gesture = testExperienceGestureRef.current;
+    if (gesture?.timer) clearInterval(gesture.timer);
+    testExperienceGestureRef.current = null;
+  }, []);
+
+  const startTestExperienceHold = (
+    event: React.PointerEvent<HTMLButtonElement>,
+  ) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    stopTestExperienceHold();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const gesture: TestExperienceGesture = {
+      pointerId: event.pointerId,
+      startedAt: performance.now(),
+      repeatedAmount: 0,
+      totalAmount: 100,
+      timer: null,
+    };
+    testExperienceGestureRef.current = gesture;
+    addTestExperience(100);
+    gesture.timer = setInterval(() => {
+      const current = testExperienceGestureRef.current;
+      if (!current || current.pointerId !== event.pointerId) return;
+      const elapsed = performance.now() - current.startedAt;
+      const desiredDelta = calculateExperienceHoldDelta(
+        current.repeatedAmount === 0
+          ? 0
+          : 350 + (current.repeatedAmount / 100 - 1) * 100,
+        elapsed,
+      );
+      const remaining = EXPERIENCE_HOLD_MAX_PER_GESTURE - current.totalAmount;
+      const amount = Math.min(desiredDelta, remaining);
+      if (amount > 0) {
+        current.repeatedAmount += amount;
+        current.totalAmount += amount;
+        addTestExperience(amount);
+      }
+      if (current.totalAmount >= EXPERIENCE_HOLD_MAX_PER_GESTURE) {
+        stopTestExperienceHold();
+      }
+    }, 50);
+  };
+
+  const finishTestExperienceHold = (
+    event: React.PointerEvent<HTMLButtonElement>,
+  ) => {
+    if (testExperienceGestureRef.current?.pointerId !== event.pointerId) return;
+    stopTestExperienceHold();
+  };
+
+  const resetTestUnlockSequence = useCallback(() => {
+    testUnlockTapRef.current = transitionTestUnlock(
+      testUnlockTapRef.current,
+      { type: "cancel" },
+    ).state;
+    testUnlockPointerRef.current = null;
+  }, []);
+
+  const beginTestUnlockTap = (event: React.PointerEvent<HTMLElement>) => {
+    testUnlockPointerRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      dragged: false,
+    };
+  };
+
+  const moveTestUnlockTap = (event: React.PointerEvent<HTMLElement>) => {
+    const pointer = testUnlockPointerRef.current;
+    if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged) return;
+    if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 6) {
+      pointer.dragged = true;
+      testUnlockTapRef.current = transitionTestUnlock(
+        testUnlockTapRef.current,
+        { type: "drag" },
+      ).state;
+    }
+  };
+
+  const cancelTestUnlockTap = () => {
+    testUnlockTapRef.current = transitionTestUnlock(
+      testUnlockTapRef.current,
+      { type: "cancel" },
+    ).state;
+    testUnlockPointerRef.current = null;
+  };
+
+  const completeTestUnlockTap = () => {
+    const pointer = testUnlockPointerRef.current;
+    testUnlockPointerRef.current = null;
+    if (!pointer || pointer.dragged) return;
+    const transition = transitionTestUnlock(testUnlockTapRef.current, {
+      type: "tap",
+      atMs: performance.now(),
+      onTarget: true,
+    });
+    testUnlockTapRef.current = transition.state;
+    if (transition.unlockedNow) setTestPanelUnlocked(true);
+  };
+
+  useEffect(() => {
+    if (mode !== "paused") {
+      stopTestExperienceHold();
+      testUnlockTapRef.current = transitionTestUnlock(
+        testUnlockTapRef.current,
+        { type: "pause-exit" },
+      ).state;
+      testUnlockPointerRef.current = null;
+    }
+    const stopWhenHidden = () => {
+      if (document.hidden) stopTestExperienceHold();
+    };
+    document.addEventListener("visibilitychange", stopWhenHidden);
+    return () => {
+      document.removeEventListener("visibilitychange", stopWhenHidden);
+      stopTestExperienceHold();
+    };
+  }, [mode, stopTestExperienceHold]);
 
   const fillTestForgeFire = () => {
     const run = runRef.current;
@@ -1793,6 +2134,12 @@ export function PaperGuildGame() {
 
   const canvasPoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
+    if (document.documentElement.dataset.viewportPresentation === "portrait-css-landscape") {
+      return {
+        x: ((event.clientY - rect.top) / rect.height) * GAME_WIDTH,
+        y: ((rect.right - event.clientX) / rect.width) * GAME_HEIGHT,
+      };
+    }
     return {
       x: ((event.clientX - rect.left) / rect.width) * GAME_WIDTH,
       y: ((event.clientY - rect.top) / rect.height) * GAME_HEIGHT,
@@ -2566,7 +2913,7 @@ export function PaperGuildGame() {
   );
 
   return (
-    <main className="page" data-game-phase={mode}>
+    <main className="page" data-game-phase={mode} data-season={term.season}>
       <section className="game-shell" aria-label="纸上百工游戏">
         <canvas
           ref={canvasRef}
@@ -3431,11 +3778,12 @@ export function PaperGuildGame() {
                                 </select>
                               </label>
                               <button
+                                className="forge-insert-preview"
                                 onClick={previewInsert}
                                 disabled={!insertRouteId}
                               >
                                 {insertRouteId
-                                  ? "预览添器 · 1 火"
+                                  ? "查看添器预览 · 1 火"
                                   : "先选一种改法"}
                               </button>
                             </div>
@@ -3653,6 +4001,8 @@ export function PaperGuildGame() {
                     <div
                       className={`weave-ring-large weave-ring-preview ${ringMove?.dragging ? "is-moving" : ""}`}
                       aria-label="器盘，节点按顺时针排列"
+                      data-node-count={previewWeave?.nodes.length ?? 0}
+                      style={weaveNodeSizeStyle(previewWeave?.nodes.length ?? 1)}
                     >
                       <div className="weave-ring-track">
                     <svg
@@ -3720,7 +4070,7 @@ export function PaperGuildGame() {
                           style={weaveNodeThumbStyle(node)}
                         />
                         <span className="weave-node-copy">
-                          <strong>{node.name}</strong>
+                          <strong>{weaveNodeDisplayName(node)}</strong>
                           <small>{weaveNodeKindLabel(node)}</small>
                         </span>
                       </button>
@@ -3838,12 +4188,7 @@ export function PaperGuildGame() {
                         {forgeExitBlocker.actions.map((action) => (
                           <button
                             key={action.id}
-                            autoFocus={action.emphasis === "primary"}
-                            className={
-                              action.emphasis === "primary"
-                                ? "primary-button"
-                                : "secondary-button"
-                            }
+                            className="forge-blocker-choice"
                             onClick={() => handleForgeExitAction(action.id)}
                           >
                             {action.label}
@@ -3863,9 +4208,25 @@ export function PaperGuildGame() {
         )}
 
         {mode === "paused" && (
-          <div className="overlay modal-shade">
+          <div
+            className="overlay modal-shade"
+            onPointerDownCapture={(event) => {
+              if (!(event.target as Element).closest("[data-test-unlock]")) {
+                resetTestUnlockSequence();
+              }
+            }}
+          >
             <section className="pause-panel">
-              <p className="kicker">卷轴暂歇</p>
+              <p
+                className="kicker pause-secret-trigger"
+                data-test-unlock
+                onPointerDown={beginTestUnlockTap}
+                onPointerMove={moveTestUnlockTap}
+                onPointerCancel={cancelTestUnlockTap}
+                onClick={completeTestUnlockTap}
+              >
+                卷轴暂歇
+              </p>
               <h2>行旅未完</h2>
               <p>角色已强制展开成人形，恢复后不会卡在折叠中途。</p>
               <div className="audio-settings">
@@ -3945,7 +4306,18 @@ export function PaperGuildGame() {
                     </button>
                   </div>
                   <div className="test-action-row">
-                    <button onClick={addTestExperience}>经验 +100</button>
+                    <button
+                      className="test-experience-button"
+                      onPointerDown={startTestExperienceHold}
+                      onPointerUp={finishTestExperienceHold}
+                      onPointerCancel={finishTestExperienceHold}
+                      onLostPointerCapture={finishTestExperienceHold}
+                      onClick={(event) => {
+                        if (event.detail === 0) addTestExperience(100);
+                      }}
+                    >
+                      经验 +100
+                    </button>
                     <button onClick={fillTestForgeFire}>炉火置 3</button>
                     <button
                       onClick={weakenCurrentBoss}
@@ -3989,17 +4361,19 @@ export function PaperGuildGame() {
                       "导演：尚未进入无尽；跳转或召唤会安全开启无尽并标记测试局。"
                     )}
                   </output>
+                  <output className="test-experience-status" aria-live="polite">
+                    当前经验 {snapshot.xp}／{snapshot.nextXp} · 本次已加 +{testExperienceAdded}
+                  </output>
                 </section>
-              ) : (
-                <p className="test-code-hint">
-                  测试人员可在暂停页键入 <kbd>BAIGONG</kbd>
-                </p>
-              )}
+              ) : null}
               <div className="button-row centered">
-                <button className="primary-button" data-gamepad-cancel onClick={() => {
-                  setMode("playing");
-                  syncMusic();
-                }}>继续行旅</button>
+                <button
+                  className="primary-button"
+                  data-gamepad-cancel
+                  onClick={resumePausedRun}
+                >
+                  继续行旅
+                </button>
                 <button className="secondary-button" onClick={() => updateAudio({ muted: !audioSettings.muted })}>
                   {audioSettings.muted ? "取消静音" : "静音"}
                 </button>

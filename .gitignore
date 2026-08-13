@@ -41,3 +41,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.tmp-server-*.log
+
+# Local image-generation source frames; only the optimized runtime atlas ships.
+/assets/source/

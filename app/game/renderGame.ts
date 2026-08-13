@@ -25,7 +25,9 @@ import {
   GAME_HEIGHT,
   GAME_WIDTH,
   getOrbitVisuals,
+  NIAN_LEAP_TELEGRAPH_SECONDS,
   STANDARD_SECONDS,
+  TAOTIE_CHARGE_TELEGRAPH_SECONDS,
   type Enemy,
   type ProjectileOwner,
   type RunState,
@@ -947,12 +949,12 @@ function hostileActionPhaseProgress(enemy: Enemy) {
       recovery = skill.recovery;
     }
   } else if (action.kind === "nianLeap") {
-    telegraph = 0.5;
+    telegraph = NIAN_LEAP_TELEGRAPH_SECONDS;
     active = 0.32;
     impact = 0.12;
     recovery = 0.35;
   } else if (action.kind === "taotieCharge") {
-    telegraph = 0.58;
+    telegraph = TAOTIE_CHARGE_TELEGRAPH_SECONDS;
     active = 0.46;
     impact = 0.12;
     recovery = 0.45;

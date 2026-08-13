@@ -1,5 +1,6 @@
 import type { PlayerFormState } from "./form";
 import { publicAsset } from "../publicAsset";
+import { assetRequestGate } from "./assetStreamDirector";
 
 export type BossTier = "mid" | "final" | null;
 
@@ -69,10 +70,16 @@ function loadSeasonPlate(art: LoadedArt, index: number) {
   }
   const pending = art.seasonLoads.get(normalized);
   if (pending) return pending;
-  const request = new Promise<HTMLImageElement | null>((resolve) => {
+  const request = assetRequestGate.schedule("large", () => new Promise<HTMLImageElement | null>((resolve) => {
     const image = new Image();
+    const timeout = window.setTimeout(() => {
+      art.seasonLoads.delete(normalized);
+      releaseImage(image);
+      resolve(null);
+    }, 10_000);
     image.decoding = "async";
     image.onload = () => {
+      window.clearTimeout(timeout);
       if (art.retainedSeasonIndices.has(normalized)) {
         art.seasons[normalized] = image;
       } else {
@@ -82,16 +89,54 @@ function loadSeasonPlate(art: LoadedArt, index: number) {
       resolve(image);
     };
     image.onerror = () => {
+      window.clearTimeout(timeout);
       art.seasonLoads.delete(normalized);
       resolve(null);
     };
     image.src = publicAsset(ART_MANIFEST.seasons[normalized].image);
-  });
+  }));
   art.seasonLoads.set(normalized, request);
   return request;
 }
 
-/** Keeps only the current plate and its two immediate neighbours decoded. */
+export function createArtAssetStore(): LoadedArt {
+  return {
+    seasons: ART_MANIFEST.seasons.map(() => null),
+    // Directional multi-frame sheets are loaded by enemySprites.ts. Keeping
+    // this map empty avoids downloading the retired single-pose cutouts.
+    enemies: {},
+    seasonLoads: new Map(),
+    retainedSeasonIndices: new Set(),
+  };
+}
+
+/**
+ * Loads explicit scene plates without implicitly fetching their neighbours.
+ * The stream director uses this to meet the next season's deadline while the
+ * current scene remains decoded.
+ */
+export async function preloadSeasonSceneAssets(
+  art: LoadedArt,
+  indices: readonly number[],
+) {
+  const count = ART_MANIFEST.seasons.length;
+  const requested = new Set(
+    indices.map((index) => (index + count) % count),
+  );
+  if (requested.size === 0) return;
+  art.retainedSeasonIndices = new Set([
+    ...art.retainedSeasonIndices,
+    ...requested,
+  ]);
+  await Promise.all([...requested].map((index) => loadSeasonPlate(art, index)));
+}
+
+/**
+ * Retains the current plate plus the two plates that can be reached at the
+ * next boundary. Deadline preloads outside that rolling window are released
+ * once the season changes, keeping decoded scene memory bounded at three
+ * plates without sacrificing a ready neighbour in either direction.
+ */
 export async function retainSeasonSceneAssets(
   art: LoadedArt,
   elapsed: number,
@@ -121,20 +166,19 @@ export function releaseSeasonSceneAssets(art: LoadedArt) {
   art.seasonLoads.clear();
 }
 
-export async function loadArtAssets(onProgress: (progress: number) => void): Promise<LoadedArt> {
-  const art: LoadedArt = {
-    seasons: ART_MANIFEST.seasons.map(() => null),
-    // Directional multi-frame sheets are loaded by enemySprites.ts. Keeping
-    // this map empty avoids downloading the retired single-pose cutouts.
-    enemies: {},
-    seasonLoads: new Map(),
-    retainedSeasonIndices: new Set([0]),
-  };
+/** The first playable frame needs only spring; later plates are streamed. */
+export async function loadMinimumArtAssets(
+  onProgress: (progress: number) => void = () => undefined,
+): Promise<LoadedArt> {
+  const art = createArtAssetStore();
+  art.retainedSeasonIndices.add(0);
   await loadSeasonPlate(art, 0);
   onProgress(1);
-  // Neighbour plates hydrate after the first readable frame.
-  void retainSeasonSceneAssets(art, 0);
   return art;
+}
+
+export async function loadArtAssets(onProgress: (progress: number) => void): Promise<LoadedArt> {
+  return loadMinimumArtAssets(onProgress);
 }
 
 export function seasonIndex(elapsed: number) {

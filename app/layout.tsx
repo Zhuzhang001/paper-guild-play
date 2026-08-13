@@ -67,20 +67,6 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <head>
-        <link
-          rel="preload"
-          href={regularFont}
-          as="font"
-          type="font/woff2"
-          crossOrigin="anonymous"
-        />
-        <link
-          rel="preload"
-          href={titleFont}
-          as="font"
-          type="font/woff2"
-          crossOrigin="anonymous"
-        />
         <style>{`
           @font-face {
             font-family: "Paper Guild Text";

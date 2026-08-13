@@ -1,26 +1,32 @@
-/* 纸上百工 v6.2：仅预缓存启动壳，其余美术与声音按需缓存。 */
-const VERSION = "paper-guild-v6.2.0";
+/* 纸上百工 v6.3：安装只装订页面壳，游戏资源由实际使用请求写入缓存。 */
+const VERSION = "paper-guild-v6.3.0";
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const SCOPE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, "");
 const scoped = (path = "") =>
   `${SCOPE_PATH}/${String(path).replace(/^\/+/, "")}`.replace(/\/{2,}/g, "/");
 const ROOT = scoped("");
+const NAVIGATION_TIMEOUT_MS = 3200;
+const INSTALL_FETCH_TIMEOUT_MS = 10_000;
+const runtimeInflight = new Map();
 
-const STARTUP_ASSETS = [
-  ROOT,
-  scoped("manifest.webmanifest"),
-  scoped("icon.png"),
-  scoped("icon-192.png"),
-  scoped("fonts/LXGWWenKaiScreen-Game.woff2"),
-  scoped("fonts/MaShanZheng-Game.woff2"),
-  scoped("art/season-spring-runtime.webp"),
-  scoped("art-v3/hero-directions-v3.webp"),
-  scoped("art-v4/hero-fold-runtime-v4.webp"),
-];
+async function fetchWithTimeout(request, timeoutMs, init = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(request, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 async function cacheDocumentShell(cache) {
-  const response = await fetch(ROOT, { cache: "reload" });
+  // The live document normally populated the HTTP cache immediately before
+  // registration, so the installer can reuse it instead of requesting it a
+  // second time from the network.
+  const response = await fetchWithTimeout(ROOT, INSTALL_FETCH_TIMEOUT_MS, {
+    cache: "force-cache",
+  });
   if (!response.ok) throw new Error("shell unavailable");
   await cache.put(ROOT, response.clone());
   const html = await response.text();
@@ -34,12 +40,25 @@ async function cacheDocumentShell(cache) {
           url.pathname.endsWith(".js")),
     )
     .map((url) => url.pathname);
-  await Promise.allSettled(
-    [...new Set([...STARTUP_ASSETS, ...discovered])].map(async (url) => {
-      const asset = await fetch(url, { cache: "reload" });
-      if (asset.ok) await cache.put(url, asset);
-    }),
-  );
+  const shellAssets = [...new Set(discovered)].filter((url) => url !== ROOT);
+  // Two small workers keep the install phase below the cold-start request
+  // budget. `force-cache` reuses the page's existing HTTP responses.
+  let cursor = 0;
+  const cacheNext = async () => {
+    while (cursor < shellAssets.length) {
+      const url = shellAssets[cursor++];
+      try {
+        const asset = await fetchWithTimeout(url, INSTALL_FETCH_TIMEOUT_MS, {
+          cache: "force-cache",
+        });
+        if (asset.ok) await cache.put(url, asset);
+      } catch {
+        // A single missing chunk must not prevent the worker from installing;
+        // the runtime route will cache it when the page actually uses it.
+      }
+    }
+  };
+  await Promise.all([cacheNext(), cacheNext()]);
 }
 
 self.addEventListener("install", (event) => {
@@ -68,27 +87,37 @@ self.addEventListener("activate", (event) => {
 });
 
 async function navigationResponse(request) {
+  const cached = caches.match(ROOT);
   try {
-    const response = await fetch(request);
+    const response = await fetchWithTimeout(request, NAVIGATION_TIMEOUT_MS);
     if (response.ok) {
       const cache = await caches.open(SHELL_CACHE);
       await cache.put(ROOT, response.clone());
+      return response;
     }
-    return response;
+    return (await cached) || response;
   } catch {
-    return (await caches.match(ROOT)) || Response.error();
+    return (await cached) || Response.error();
   }
 }
 
 async function cachedAsset(request) {
   const cached = await caches.match(request);
   if (cached) return cached;
-  const response = await fetch(request);
-  if (response.ok) {
-    const cache = await caches.open(RUNTIME_CACHE);
-    await cache.put(request, response.clone());
+  const key = request.url;
+  let pending = runtimeInflight.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const response = await fetch(request);
+      if (response.ok) {
+        const cache = await caches.open(RUNTIME_CACHE);
+        await cache.put(request, response.clone());
+      }
+      return response;
+    })().finally(() => runtimeInflight.delete(key));
+    runtimeInflight.set(key, pending);
   }
-  return response;
+  return (await pending).clone();
 }
 
 self.addEventListener("fetch", (event) => {

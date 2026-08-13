@@ -1,6 +1,7 @@
 import type { EnemyArchetype } from "../art";
 import type { EndlessBossId } from "../content/bosses";
 import { publicAsset } from "../../publicAsset";
+import { assetRequestGate } from "../assetStreamDirector";
 
 export type EnemyVisualId = EnemyArchetype | EndlessBossId | "bossEffects";
 
@@ -21,9 +22,25 @@ export type EnemySpritePose = {
   boss: boolean;
 };
 
-export type EnemySpriteSheets = Partial<Record<EnemyVisualId, HTMLImageElement>>;
+export type EnemySpriteSheets = Partial<Record<EnemyVisualId, HTMLImageElement>> & {
+  /** Shared with VisualPack; enemy sheet lifecycle does not own or release it. */
+  bootFallback?: CanvasImageSource;
+};
 
-const SPRITE_URLS: Record<EnemyVisualId, string> = {
+const BOOT_FALLBACK_ORDER: readonly EnemyArchetype[] = [
+  "cup",
+  "shoe",
+  "lantern",
+  "fish",
+  "abacus",
+  "rib",
+  "lion",
+  "puppet",
+  "taotie",
+  "nian",
+];
+
+export const ENEMY_VISUAL_SOURCES: Readonly<Record<EnemyVisualId, string>> = {
   cup: "/enemies-v3/cup-runtime.webp",
   shoe: "/enemies-v3/shoe-runtime.webp",
   lantern: "/enemies-v3/lantern-runtime.webp",
@@ -56,7 +73,20 @@ const STRIDE: Record<EnemyArchetype, number> = {
   nian: 34,
 };
 
-const BOOT_ENEMIES: readonly EnemyArchetype[] = ["cup", "shoe", "fish", "rib"];
+export const MINIMUM_ENEMY_VISUAL_IDS: readonly EnemyArchetype[] = [
+  "cup",
+  "shoe",
+  "fish",
+  "rib",
+];
+
+export const ENEMY_VISUAL_STREAM_GROUPS = {
+  springFollowup: ["cup", "shoe", "fish", "rib"],
+  summer: ["lantern", "lion"],
+  autumn: ["abacus", "puppet"],
+  winterMidBoss: ["taotie"],
+  finalBoss: ["nian"],
+} as const satisfies Readonly<Record<string, readonly EnemyVisualId[]>>;
 const sheetLoads = new WeakMap<
   EnemySpriteSheets,
   Map<EnemyVisualId, Promise<void>>
@@ -95,10 +125,16 @@ function loadSheet(sheets: EnemySpriteSheets, type: EnemyVisualId) {
   }
   const pending = loads.get(type);
   if (pending) return pending;
-  const request = new Promise<void>((resolve) => {
+  const request = assetRequestGate.schedule("large", () => new Promise<void>((resolve) => {
     const image = new Image();
+    const timeout = window.setTimeout(() => {
+      loads?.delete(type);
+      releaseSheet(image);
+      resolve();
+    }, 10_000);
     image.decoding = "async";
     image.onload = () => {
+      window.clearTimeout(timeout);
       if (retainedSheets.get(sheets)?.has(type) ?? true) {
         sheets[type] = image;
       } else {
@@ -108,30 +144,45 @@ function loadSheet(sheets: EnemySpriteSheets, type: EnemyVisualId) {
       resolve();
     };
     image.onerror = () => {
+      window.clearTimeout(timeout);
       loads?.delete(type);
       resolve();
     };
-    image.src = publicAsset(SPRITE_URLS[type]);
-  });
+    image.src = publicAsset(ENEMY_VISUAL_SOURCES[type]);
+  }));
   loads.set(type, request);
   return request;
 }
 
+export function createEnemySpriteSheets(
+  retained: readonly EnemyVisualId[] = [],
+): EnemySpriteSheets {
+  const sheets: EnemySpriteSheets = {};
+  retainedSheets.set(sheets, new Set(retained));
+  return sheets;
+}
+
+/** Loads only the actors that can appear during the first readable wave. */
+export async function loadMinimumEnemySpriteSheets(
+  onProgress?: (progress: number) => void,
+): Promise<EnemySpriteSheets> {
+  const sheets = createEnemySpriteSheets();
+  onProgress?.(1);
+  return sheets;
+}
+
+export function attachEnemyBootFallback(
+  sheets: EnemySpriteSheets,
+  image: CanvasImageSource | undefined,
+) {
+  sheets.bootFallback = image;
+}
+
+/** Backwards-compatible boot loader; staged callers use the minimum name. */
 export async function loadEnemySpriteSheets(
   onProgress?: (progress: number) => void,
 ): Promise<EnemySpriteSheets> {
-  const entries = Object.entries(SPRITE_URLS) as Array<[EnemyVisualId, string]>;
-  const sheets: EnemySpriteSheets = {};
-  const bootEnemySet = new Set<EnemyVisualId>(BOOT_ENEMIES);
-  retainedSheets.set(sheets, bootEnemySet);
-  const bootEntries = entries.filter(([type]) => bootEnemySet.has(type));
-  let complete = 0;
-  await Promise.all(bootEntries.map(async ([type]) => {
-    await loadSheet(sheets, type);
-    complete += 1;
-    onProgress?.(complete / bootEntries.length);
-  }));
-  return sheets;
+  return loadMinimumEnemySpriteSheets(onProgress);
 }
 
 export async function preloadEnemySpriteSheets(
@@ -145,6 +196,13 @@ export async function preloadEnemySpriteSheets(
   await Promise.all([...requested].map((type) => loadSheet(sheets, type)));
 }
 
+export async function preloadEnemySpriteGroup(
+  sheets: EnemySpriteSheets,
+  group: keyof typeof ENEMY_VISUAL_STREAM_GROUPS,
+) {
+  await preloadEnemySpriteSheets(sheets, ENEMY_VISUAL_STREAM_GROUPS[group]);
+}
+
 /**
  * Atomically retains active archetypes plus the one preselected Boss. Stale
  * in-flight decodes are discarded when they complete.
@@ -156,6 +214,7 @@ export async function retainEnemySpriteSheets(
   const keep = withBossEffects(types);
   retainedSheets.set(sheets, keep);
   for (const type of Object.keys(sheets) as EnemyVisualId[]) {
+    if (type === ("bootFallback" as EnemyVisualId)) continue;
     if (keep.has(type)) continue;
     releaseSheet(sheets[type]);
     delete sheets[type];
@@ -165,6 +224,8 @@ export async function retainEnemySpriteSheets(
 
 export function releaseEnemySpriteSheets(sheets: EnemySpriteSheets) {
   retainedSheets.set(sheets, new Set());
+  // bootFallback is owned by VisualPack and is only borrowed here.
+  delete sheets.bootFallback;
   for (const type of Object.keys(sheets) as EnemyVisualId[]) {
     releaseSheet(sheets[type]);
     delete sheets[type];
@@ -245,6 +306,49 @@ function drawFallbackSilhouette(
   ctx.restore();
 }
 
+function drawBootFallback(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  pose: EnemySpritePose,
+) {
+  const index = BOOT_FALLBACK_ORDER.indexOf(pose.type);
+  const source = image as HTMLImageElement | ImageBitmap | HTMLCanvasElement;
+  const width = source instanceof HTMLImageElement ? source.naturalWidth : source.width;
+  const height = source instanceof HTMLImageElement ? source.naturalHeight : source.height;
+  if (
+    index < 0 ||
+    ("complete" in image && !image.complete) ||
+    width <= 0 ||
+    height <= 0
+  ) return false;
+  const sourceWidth = width / 5;
+  const sourceHeight = height / 4;
+  const size = pose.radius * (pose.boss ? 4.55 : pose.elite ? 4.35 : 4.1);
+  ctx.save();
+  ctx.translate(pose.x, pose.y);
+  ctx.rotate(pose.heading + Math.PI / 2);
+  if (pose.hitFlash > 0 && Math.floor(pose.hitFlash * 90) % 2 === 0) {
+    ctx.globalAlpha = 0.46;
+    ctx.globalCompositeOperation = "screen";
+  }
+  if (pose.state === "dead") {
+    ctx.globalAlpha *= Math.max(0, 1 - pose.stateProgress);
+  }
+  ctx.drawImage(
+    image,
+    (index % 5) * sourceWidth,
+    (2 + Math.floor(index / 5)) * sourceHeight,
+    sourceWidth,
+    sourceHeight,
+    -size / 2,
+    -size * 0.54,
+    size,
+    size,
+  );
+  ctx.restore();
+  return true;
+}
+
 export function drawEnemySprite(
   ctx: CanvasRenderingContext2D,
   sheets: EnemySpriteSheets | null,
@@ -252,7 +356,9 @@ export function drawEnemySprite(
 ) {
   const image = sheets?.[pose.visualId ?? pose.type];
   if (!image || !image.complete || image.naturalWidth === 0) {
-    drawFallbackSilhouette(ctx, pose);
+    if (!sheets?.bootFallback || !drawBootFallback(ctx, sheets.bootFallback, pose)) {
+      drawFallbackSilhouette(ctx, pose);
+    }
     return;
   }
 

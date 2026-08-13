@@ -37,7 +37,9 @@ test("upgrade cards reserve a real art column and keep level dots in flow", () =
 });
 
 test("assisted controls use fixed substeps and cannot persist a clear", () => {
-  assert.match(component, /const TEST_CODE = "baigong"/);
+  assert.doesNotMatch(component, /BAIGONG|const TEST_CODE/);
+  assert.match(component, /transitionTestUnlock/);
+  assert.match(component, /type: "tap"/);
   assert.match(component, /stepRun\(run,\s*FIXED_STEP,\s*direction\)/);
   assert.match(
     component,

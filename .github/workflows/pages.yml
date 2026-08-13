@@ -27,6 +27,9 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
       - name: Install dependencies
         run: npm ci
 
@@ -38,9 +41,6 @@ jobs:
           # Open Graph and Twitter images are not prefixed twice.
           PAPER_GUILD_SITE_ORIGIN: https://${{ github.repository_owner }}.github.io
         run: npm run build:static:github
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

@@ -203,6 +203,10 @@ test("lantern summons occupy distinct world positions and separate while steppin
 test("Nian leap is phased, bounded, and survives taking damage", () => {
   const run = survivor.createRun(new Set(), "nian-leap-v5");
   run.player.powerMultiplier = 0;
+  // v6.3 hit relief intentionally interrupts every enemy, including Bosses.
+  // This regression isolates the opposite direction: taking weapon damage
+  // must not cancel Nian's authored leap state.
+  run.testModifiers.incomingDamageScale = 0;
   run.midBossSpawned = true;
   run.finalBossSpawned = false;
   run.spawnClock = Number.POSITIVE_INFINITY;

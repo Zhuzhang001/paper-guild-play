@@ -2,118 +2,33 @@
 
 import { useEffect, useState } from "react";
 import {
+  getFullscreenCapability,
+  isStandaloneDisplayMode,
+  requestGameFullscreen,
+  requestLandscapePresentation,
+  type FullscreenCapability,
+  type FullscreenRequestResult,
+  type LandscapePresentationResult,
+} from "./landscapePresentation";
+import {
   calculateViewportMetrics,
   type ViewportInsets,
   type ViewportMetrics,
 } from "./viewport";
 
-type WebkitFullscreenDocument = Document & {
-  webkitFullscreenElement?: Element | null;
+export {
+  getFullscreenCapability,
+  isStandaloneDisplayMode,
+  requestGameFullscreen,
+  requestLandscapePresentation,
 };
-
-type FullscreenTarget = {
-  requestFullscreen?: (options?: FullscreenOptions) => Promise<void>;
-  webkitRequestFullscreen?: () => Promise<void> | void;
-};
-
-type LockableScreenOrientation = ScreenOrientation & {
-  lock?: (orientation: "landscape") => Promise<void>;
-};
-
-export type FullscreenCapability = "active" | "available" | "unavailable";
-
-export type FullscreenRequestResult = {
-  capability: FullscreenCapability;
-  entered: boolean;
-  orientationLocked: boolean;
+export type {
+  FullscreenCapability,
+  FullscreenRequestResult,
+  LandscapePresentationResult,
 };
 
 const cssPixels = (value: number) => `${value}px`;
-
-export function getFullscreenCapability(
-  doc: Document = document,
-): FullscreenCapability {
-  const webkitDocument = doc as WebkitFullscreenDocument;
-  if (doc.fullscreenElement || webkitDocument.webkitFullscreenElement) {
-    return "active";
-  }
-  const root = doc.documentElement as unknown as FullscreenTarget;
-  return typeof root.requestFullscreen === "function" ||
-    typeof root.webkitRequestFullscreen === "function"
-    ? "available"
-    : "unavailable";
-}
-
-/**
- * Requests fullscreen without ever rejecting, so callers can start the game in
- * the same user gesture even when a browser does not expose the capability.
- */
-export async function requestGameFullscreen(
-  target?: HTMLElement | null,
-): Promise<FullscreenRequestResult> {
-  if (typeof document === "undefined") {
-    return {
-      capability: "unavailable",
-      entered: false,
-      orientationLocked: false,
-    };
-  }
-
-  const capability = getFullscreenCapability(document);
-  if (capability === "unavailable") {
-    return { capability, entered: false, orientationLocked: false };
-  }
-  if (capability === "active") {
-    return { capability, entered: true, orientationLocked: false };
-  }
-
-  const fullscreenTarget = (target ??
-    document.documentElement) as unknown as FullscreenTarget;
-  try {
-    if (fullscreenTarget.requestFullscreen) {
-      await fullscreenTarget.requestFullscreen({ navigationUI: "hide" });
-    } else if (fullscreenTarget.webkitRequestFullscreen) {
-      await fullscreenTarget.webkitRequestFullscreen();
-    } else {
-      return {
-        capability: "unavailable",
-        entered: false,
-        orientationLocked: false,
-      };
-    }
-  } catch {
-    return { capability, entered: false, orientationLocked: false };
-  }
-
-  let orientationLocked = false;
-  const orientation = screen.orientation as LockableScreenOrientation | undefined;
-  if (orientation?.lock) {
-    try {
-      await orientation.lock("landscape");
-      orientationLocked = true;
-    } catch {
-      // Fullscreen remains useful when orientation locking is unavailable.
-    }
-  }
-
-  return {
-    capability: getFullscreenCapability(document),
-    entered: true,
-    orientationLocked,
-  };
-}
-
-export function isStandaloneDisplayMode() {
-  if (typeof window === "undefined") return false;
-  const navigatorWithStandalone = navigator as Navigator & {
-    standalone?: boolean;
-  };
-  return (
-    window.matchMedia("(display-mode: standalone)").matches ||
-    window.matchMedia("(display-mode: fullscreen)").matches ||
-    navigatorWithStandalone.standalone === true
-  );
-}
 
 function createSafeAreaProbe(doc: Document) {
   const probe = doc.createElement("div");
@@ -151,12 +66,15 @@ function readViewportMetrics(probe: HTMLElement): ViewportMetrics {
     offsetTop: viewport?.offsetTop ?? 0,
     safeInsets: readSafeAreaInsets(probe),
     source: viewport ? "visual-viewport" : "window",
+    allowPortraitCssPresentation:
+      navigator.maxTouchPoints > 0 ||
+      window.matchMedia("(any-pointer: coarse)").matches,
   });
 }
 
 function writeViewportMetrics(metrics: ViewportMetrics) {
   const root = document.documentElement;
-  const { safeInsets } = metrics;
+  const { presentation, safeInsets } = metrics;
   const values: Record<string, number> = {
     "--viewport-width": metrics.width,
     "--viewport-height": metrics.height,
@@ -171,13 +89,36 @@ function writeViewportMetrics(metrics: ViewportMetrics) {
     "--game-stage-height": metrics.stageHeight,
     "--game-stage-left": metrics.stageLeft,
     "--game-stage-top": metrics.stageTop,
+    "--game-season-wing-left": presentation.stageLeftWingWidth,
+    "--game-season-wing-right": presentation.stageRightWingWidth,
+    "--game-presentation-origin-left": presentation.originLeft,
+    "--game-presentation-origin-top": presentation.originTop,
+    "--game-presentation-width": presentation.width,
+    "--game-presentation-height": presentation.height,
+    "--game-presentation-translate-x": presentation.cssTranslateX,
+    "--game-presentation-translate-y": presentation.cssTranslateY,
+    "--game-presentation-safe-top": presentation.safeInsets.top,
+    "--game-presentation-safe-right": presentation.safeInsets.right,
+    "--game-presentation-safe-bottom": presentation.safeInsets.bottom,
+    "--game-presentation-safe-left": presentation.safeInsets.left,
+    "--game-presentation-stage-width": presentation.stageWidth,
+    "--game-presentation-stage-height": presentation.stageHeight,
+    "--game-presentation-stage-left": presentation.stageLeft,
+    "--game-presentation-stage-top": presentation.stageTop,
   };
   for (const [property, value] of Object.entries(values)) {
     root.style.setProperty(property, cssPixels(value));
   }
+  root.style.setProperty(
+    "--game-presentation-rotation",
+    `${presentation.rotationDegrees}deg`,
+  );
   root.dataset.viewportSource = metrics.source;
-  root.dataset.viewportCompact = String(metrics.compact);
-  root.dataset.viewportTooShort = String(metrics.tooShort);
+  root.dataset.viewportOrientation = metrics.orientation;
+  root.dataset.viewportPresentation = presentation.mode;
+  root.dataset.viewportCompact = String(presentation.compact);
+  root.dataset.viewportTooShort = String(presentation.tooShort);
+  root.dataset.viewportSeasonWings = String(presentation.hasSeasonWings);
 }
 
 function pauseForUnsafeViewport() {
@@ -204,9 +145,11 @@ export function ViewportController() {
       const metrics = readViewportMetrics(probe);
       writeViewportMetrics(metrics);
       setTooShort((current) =>
-        current === metrics.tooShort ? current : metrics.tooShort,
+        current === metrics.presentation.tooShort
+          ? current
+          : metrics.presentation.tooShort,
       );
-      if (metrics.tooShort) pauseForUnsafeViewport();
+      if (metrics.presentation.tooShort) pauseForUnsafeViewport();
     };
 
     const scheduleUpdate = () => {
@@ -250,12 +193,12 @@ export function ViewportController() {
   if (!tooShort) return null;
 
   const enterFullscreen = async () => {
-    const result = await requestGameFullscreen();
-    if (!result.entered) {
+    const result = await requestLandscapePresentation();
+    if (!result.entered && !result.orientationLocked) {
       setFullscreenMessage(
         result.capability === "unavailable"
-          ? "此浏览器不提供网页全屏，请将游戏添加到主屏幕后再打开。"
-          : "浏览器未允许全屏，游戏仍保持暂停；也可添加到主屏幕后打开。",
+          ? "此浏览器不提供网页全屏，请横置设备并收起浏览器工具栏后再继续。"
+          : "浏览器未允许全屏，游戏仍保持暂停；请横置设备并扩大可视区域。",
       );
     }
   };
@@ -271,7 +214,7 @@ export function ViewportController() {
         <p>可视区域保护</p>
         <h2 id="viewport-too-short-title">浏览器可用高度不足</h2>
         <span>
-          行旅已暂停。进入全屏，或从浏览器菜单将游戏添加到主屏幕后再继续。
+          行旅已暂停。请尝试进入全屏，或横置设备并收起浏览器工具栏后再继续。
         </span>
         <button type="button" onClick={enterFullscreen}>
           尝试进入全屏

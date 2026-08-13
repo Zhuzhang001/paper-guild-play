@@ -2,13 +2,16 @@ import type { FusionId, WeaponId } from "../content/types";
 import { publicAsset } from "../../publicAsset";
 import {
   ALL_VISUAL_ASSETS,
-  CORE_VISUAL_ASSETS,
+  BASE_VISUAL_ASSETS,
+  BOOT_SUBJECT_ATLAS,
   EFFECT_ATLASES,
   FUSION_ATLASES,
   HERO_ATLASES,
   WEAPON_ATLASES,
+  minimumVisualAssets,
   type AtlasSpec,
 } from "./manifest";
+import { assetRequestGate } from "../assetStreamDirector";
 
 type VisualImage = HTMLImageElement | ImageBitmap | HTMLCanvasElement;
 
@@ -27,6 +30,19 @@ export type VisualPack = {
   readonly frameBounds: Map<string, readonly (OpaqueFrameBounds | null)[]>;
   readonly failed: Set<string>;
   readonly pending: Set<string>;
+};
+
+export type MinimumVisualPackOptions = {
+  initialWeaponId?: WeaponId;
+  onProgress?: (done: number, total: number) => void;
+  /** Font readiness can be scheduled separately when DOM text is not visible. */
+  waitForFonts?: boolean;
+};
+
+export type VisualPreloadGroup = {
+  weaponIds?: readonly WeaponId[];
+  fusionIds?: readonly FusionId[];
+  specs?: readonly AtlasSpec[];
 };
 
 export type HeroVisualState = "idle" | "move" | "hurt" | "dead";
@@ -191,21 +207,37 @@ export async function ensureCanvasFontsReady() {
     document.fonts.load('600 16px "Paper Guild Text"'),
     document.fonts.load('400 28px "Paper Guild Display"'),
   ]);
-  await document.fonts.ready;
 }
 
 async function loadImage(src: string): Promise<VisualImage> {
+  return assetRequestGate.schedule("large", () => loadImageDirect(src));
+}
+
+async function loadImageDirect(src: string): Promise<VisualImage> {
   if (typeof createImageBitmap === "function" && typeof fetch === "function") {
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 10_000);
     try {
-      const response = await fetch(publicAsset(src), { cache: "force-cache" });
+      const response = await fetch(publicAsset(src), {
+        cache: "force-cache",
+        signal: controller.signal,
+      });
       if (!response.ok) {
         throw new Error(`Unable to load ${src}: ${response.status}`);
       }
-      return await createImageBitmap(await response.blob(), {
+      const bitmap = await createImageBitmap(await response.blob(), {
         premultiplyAlpha: "premultiply",
         colorSpaceConversion: "default",
       });
+      window.clearTimeout(timeout);
+      return bitmap;
     } catch {
+      window.clearTimeout(timeout);
+      if (timedOut) throw new Error(`Timed out loading ${src}`);
       // Safari/WebView builds can expose createImageBitmap but reject WebP
       // options. The HTMLImageElement path preserves the static-art fallback.
     }
@@ -213,9 +245,20 @@ async function loadImage(src: string): Promise<VisualImage> {
 
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
+    const timeout = window.setTimeout(() => {
+      image.removeAttribute("src");
+      image.src = "";
+      reject(new Error(`Timed out loading ${src}`));
+    }, 10_000);
     image.decoding = "async";
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`Unable to load ${src}`));
+    image.onload = () => {
+      window.clearTimeout(timeout);
+      resolve(image);
+    };
+    image.onerror = () => {
+      window.clearTimeout(timeout);
+      reject(new Error(`Unable to load ${src}`));
+    };
     image.src = publicAsset(src);
   });
 }
@@ -510,6 +553,56 @@ function resolveHeroOutlineImage(
   return outlined;
 }
 
+const visualLoads = new WeakMap<VisualPack, Map<string, Promise<void>>>();
+const retainedVisuals = new WeakMap<VisualPack, Set<string>>();
+
+function releaseVisualImage(image: VisualImage) {
+  if ("close" in image && typeof image.close === "function") {
+    image.close();
+    return;
+  }
+  if (
+    typeof HTMLImageElement !== "undefined" &&
+    image instanceof HTMLImageElement
+  ) {
+    image.removeAttribute("src");
+    image.src = "";
+  }
+}
+
+function createVisualLoad(pack: VisualPack, spec: AtlasSpec) {
+  if (pack.images.has(spec.id) || pack.failed.has(spec.id)) {
+    return Promise.resolve();
+  }
+  let loads = visualLoads.get(pack);
+  if (!loads) {
+    loads = new Map();
+    visualLoads.set(pack, loads);
+  }
+  const pending = loads.get(spec.id);
+  if (pending) return pending;
+  const request = (async () => {
+    pack.pending.add(spec.id);
+    try {
+      const image = await loadImage(spec.src);
+      if (retainedVisuals.get(pack)?.has(spec.id) ?? true) {
+        pack.images.set(spec.id, image);
+        cacheVisualMetadata(pack, spec, image);
+      } else {
+        // A route, fusion or Boss may become irrelevant while it is decoding.
+        releaseVisualImage(image);
+      }
+    } catch {
+      pack.failed.add(spec.id);
+    } finally {
+      pack.pending.delete(spec.id);
+      loads?.delete(spec.id);
+    }
+  })();
+  loads.set(spec.id, request);
+  return request;
+}
+
 async function loadSpecs(
   pack: VisualPack,
   specs: readonly AtlasSpec[],
@@ -518,29 +611,63 @@ async function loadSpecs(
   const uniqueSpecs = [
     ...new Map(specs.map((spec) => [spec.id, spec] as const)).values(),
   ];
+  const retained = retainedVisuals.get(pack) ?? new Set<string>();
+  uniqueSpecs.forEach((spec) => retained.add(spec.id));
+  retainedVisuals.set(pack, retained);
   let done = 0;
   const total = uniqueSpecs.length;
   await Promise.all(
     uniqueSpecs.map(async (spec) => {
-      if (pack.images.has(spec.id) || pack.failed.has(spec.id)) {
-        done += 1;
-        onProgress?.(done, total);
-        return;
-      }
-      pack.pending.add(spec.id);
-      try {
-        const image = await loadImage(spec.src);
-        pack.images.set(spec.id, image);
-        cacheVisualMetadata(pack, spec, image);
-      } catch {
-        pack.failed.add(spec.id);
-      } finally {
-        pack.pending.delete(spec.id);
-        done += 1;
-        onProgress?.(done, total);
-      }
+      await createVisualLoad(pack, spec);
+      done += 1;
+      onProgress?.(done, total);
     }),
   );
+}
+
+export function createVisualPack(): VisualPack {
+  const pack: VisualPack = {
+    images: new Map(),
+    derived: new Map(),
+    frameBounds: new Map(),
+    failed: new Set(),
+    pending: new Set(),
+  };
+  retainedVisuals.set(pack, new Set());
+  return pack;
+}
+
+export function getBootSubjectImage(pack: VisualPack) {
+  return pack.images.get(BOOT_SUBJECT_ATLAS.id);
+}
+
+/** Loads the hero, shared effects and only the selected starting weapon. */
+export async function loadMinimumVisualPack(
+  options: MinimumVisualPackOptions = {},
+): Promise<VisualPack> {
+  const {
+    initialWeaponId = "sword",
+    onProgress,
+    waitForFonts = true,
+  } = options;
+  const pack = createVisualPack();
+  const selectedSpecs = minimumVisualAssets(initialWeaponId).filter(
+    // The boot atlas contains an authored static frame for all ten weapons.
+    // The selected weapon's full 14-frame sheet is promoted immediately after
+    // the user presses Start, keeping the cold gate independent of selection.
+    (spec) => spec.id !== WEAPON_ATLASES[initialWeaponId].id,
+  );
+  const visualLoad = loadSpecs(
+    pack,
+    selectedSpecs,
+    onProgress,
+  );
+  if (waitForFonts) {
+    await Promise.all([ensureCanvasFontsReady(), visualLoad]);
+  } else {
+    await visualLoad;
+  }
+  return pack;
 }
 
 /**
@@ -550,28 +677,29 @@ async function loadSpecs(
 export async function loadVisualPack(
   onProgress?: (done: number, total: number) => void,
 ): Promise<VisualPack> {
-  const pack: VisualPack = {
-    images: new Map(),
-    derived: new Map(),
-    frameBounds: new Map(),
-    failed: new Set(),
-    pending: new Set(),
-  };
-  await Promise.all([
-    ensureCanvasFontsReady(),
-    loadSpecs(pack, CORE_VISUAL_ASSETS, onProgress),
-  ]);
-  return pack;
+  return loadMinimumVisualPack({
+    initialWeaponId: "sword",
+    onProgress,
+  });
+}
+
+export async function preloadVisualGroup(
+  pack: VisualPack,
+  group: VisualPreloadGroup,
+) {
+  const specs = [
+    ...(group.specs ?? []),
+    ...(group.weaponIds ?? []).map((id) => WEAPON_ATLASES[id]),
+    ...(group.fusionIds ?? []).map((id) => FUSION_ATLASES[id]),
+  ];
+  await loadSpecs(pack, specs);
 }
 
 export async function preloadWeaponVisuals(
   pack: VisualPack,
   weaponIds: readonly WeaponId[],
 ) {
-  await loadSpecs(
-    pack,
-    [...new Set(weaponIds)].map((id) => WEAPON_ATLASES[id]),
-  );
+  await preloadVisualGroup(pack, { weaponIds: [...new Set(weaponIds)] });
 }
 
 export async function preloadFusionVisuals(
@@ -581,7 +709,7 @@ export async function preloadFusionVisuals(
   const specs = fusionIds?.length
     ? fusionIds.map((id) => FUSION_ATLASES[id])
     : Object.values(FUSION_ATLASES);
-  await loadSpecs(pack, specs);
+  await preloadVisualGroup(pack, { specs });
 }
 
 /**
@@ -594,9 +722,10 @@ export function pruneVisualPack(
   weaponIds: readonly WeaponId[],
   fusionIds: readonly FusionId[] = [],
 ) {
-  const keep = new Set(CORE_VISUAL_ASSETS.map((spec) => spec.id));
+  const keep = new Set(BASE_VISUAL_ASSETS.map((spec) => spec.id));
   weaponIds.forEach((id) => keep.add(WEAPON_ATLASES[id].id));
   fusionIds.forEach((id) => keep.add(FUSION_ATLASES[id].id));
+  retainedVisuals.set(pack, keep);
 
   let released = 0;
   for (const [id, image] of pack.images) {
@@ -606,9 +735,7 @@ export function pruneVisualPack(
     ) {
       continue;
     }
-    if ("close" in image && typeof image.close === "function") {
-      image.close();
-    }
+    releaseVisualImage(image);
     pack.images.delete(id);
     pack.frameBounds.delete(id);
     released += 1;
@@ -991,7 +1118,19 @@ function drawAuthoredWeaponFrame(
   alpha = 1,
 ) {
   const spec = WEAPON_ATLASES[weaponId];
-  if (!spec || !pack.images.has(spec.id)) return false;
+  if (!spec || !pack.images.has(spec.id)) {
+    return drawTrimmedFrame(
+      ctx,
+      pack,
+      BOOT_SUBJECT_ATLAS,
+      weaponIndex(weaponId),
+      x,
+      y,
+      size,
+      rotation,
+      alpha,
+    );
+  }
   const requestedFrame = resolveWeaponVisualFrame(selection);
   const bounds = pack.frameBounds.get(spec.id);
   const frame = bounds
@@ -1464,6 +1603,7 @@ export function drawFusionSprite(
 
 export {
   ALL_VISUAL_ASSETS,
+  BOOT_SUBJECT_ATLAS,
   EFFECT_ATLASES,
   FUSION_ATLASES,
   HERO_ATLASES,

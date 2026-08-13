@@ -33,7 +33,7 @@ test("mobile start invokes audio and fullscreen from the same gesture", () => {
     source.indexOf("const chooseUpgrade", source.indexOf("const startGame = async")),
   );
   const audioIndex = start.indexOf("initFromGesture");
-  const fullscreenIndex = start.indexOf("requestGameFullscreen");
+  const fullscreenIndex = start.indexOf("requestLandscapePresentation");
   const firstAwaitIndex = start.indexOf("await ");
   assert.ok(audioIndex >= 0 && audioIndex < firstAwaitIndex);
   assert.ok(fullscreenIndex >= 0 && fullscreenIndex < firstAwaitIndex);

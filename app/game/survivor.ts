@@ -8,6 +8,7 @@ import {
   type EndlessBossId,
 } from "./content/bosses";
 import {
+  DIFFICULTY_IDS,
   getDifficultyDefinition,
   nextDifficultyId,
   resolveDifficultyId,
@@ -99,6 +100,12 @@ import { getSolarTermState } from "./world";
 export const GAME_WIDTH = 1280;
 export const GAME_HEIGHT = 720;
 export const STANDARD_SECONDS = 480;
+export const NIAN_LEAP_TELEGRAPH_SECONDS = 0.68;
+export const TAOTIE_CHARGE_TELEGRAPH_SECONDS = 0.82;
+export const NIAN_METEOR_TELEGRAPH_SECONDS = 1.5;
+export const NIAN_METEOR_SAFE_CORRIDOR = 220;
+export const NIAN_RING_SAFE_GAP_DEGREES = 100;
+export const BOSS_SKILL_BREATHER_SECONDS = 0.5;
 
 export type {
   EnemyActionPhase,
@@ -112,7 +119,8 @@ export type TrialId =
   | "elite"
   | "bossRush"
   | "noRecovery"
-  | "thinPower";
+  | "thinPower"
+  | "allAtOnce";
 export type SynergyChoiceOption = {
   id: string;
   name: string;
@@ -193,6 +201,16 @@ export type Player = PlayerFormModel & {
   speedMultiplier: number;
   powerMultiplier: number;
   magnetMultiplier: number;
+  /** Fixed paper-life stack. Damage consumes from the front; healing refills it. */
+  lifeSegments: PlayerLifeSegment[];
+};
+
+export type LifeSegmentSource = "initial" | "travelNote" | "utility" | "external";
+export type HitReliefKind = "light" | "strong";
+export type PlayerLifeSegment = {
+  source: LifeSegmentSource;
+  relief: HitReliefKind;
+  value: number;
 };
 
 export type EnemyMotion = "moving" | "attacking" | "hurt" | "dead";
@@ -242,6 +260,8 @@ export type EnemySkillActionState = {
   lineY2?: number;
   previousPlayerSide?: number;
   followupCommitted?: boolean;
+  /** Paired actors share one authored skill/path slot. */
+  slotId: number;
   hostileTelegraph: HostileTelegraph;
 };
 
@@ -542,6 +562,9 @@ export type RunState = {
   endlessDirector?: EndlessDirectorState;
   primaryWeapon?: PrimaryWeaponSelection;
   attackReplays: Map<ProjectileOwner, AttackReplayRecord>;
+  /** Ordinary enemies cannot begin a skill until this Boss recovery window ends. */
+  enemySkillBreatherUntil: number;
+  lastHitRelief?: HitReliefKind;
 };
 
 export type TestModifiers = {
@@ -814,6 +837,141 @@ function recoveryFor(run: Pick<RunState, "difficultyId" | "trials">) {
   return difficultyFor(run).recoveryMultiplier;
 }
 
+export type CombatPressureProfile = {
+  spawnRateMultiplier: number;
+  enemySkillSlots: number;
+  enemyDashSlots: number;
+  hostileAttackCap: number;
+  bossBackgroundMultiplier: number;
+  behaviorDifficultyId: DifficultyId;
+};
+
+/**
+ * Resolves only encounter-coordination pressure. `allAtOnce` deliberately does
+ * not alter health, damage, rewards, refresh cadence or Boss density.
+ */
+export function getCombatPressureProfile(
+  run: Pick<RunState, "difficultyId" | "trials">,
+): CombatPressureProfile {
+  const base = difficultyFor(run);
+  const baseIndex = DIFFICULTY_IDS.indexOf(run.difficultyId);
+  const behaviorDifficultyId = run.trials.has("allAtOnce")
+    ? DIFFICULTY_IDS[Math.min(DIFFICULTY_IDS.length - 1, baseIndex + 1)]
+    : run.difficultyId;
+  const behavior = getDifficultyDefinition(behaviorDifficultyId);
+  return {
+    spawnRateMultiplier: base.threatMultiplier,
+    enemySkillSlots:
+      base.enemySkillSlots + (run.trials.has("allAtOnce") ? 2 : 0),
+    enemyDashSlots: behavior.enemyDashSlots,
+    hostileAttackCap: behavior.hostileAttackCap,
+    bossBackgroundMultiplier: base.bossBackgroundMultiplier,
+    behaviorDifficultyId,
+  };
+}
+
+function createInitialLifeSegments(count: number): PlayerLifeSegment[] {
+  return Array.from({ length: Math.max(0, Math.floor(count)) }, (_, index) => ({
+    source: "initial" as const,
+    relief: index < 3 ? "light" as const : "strong" as const,
+    value: 1,
+  }));
+}
+
+function lifeSegmentValue(player: Player) {
+  return player.lifeSegments.reduce(
+    (sum, segment) => sum + clamp(segment.value, 0, 1),
+    0,
+  );
+}
+
+/** Keeps test/imported scalar mutations compatible without retyping live segments. */
+function reconcileLifeSegments(player: Player) {
+  const expectedLength = Math.max(0, Math.floor(player.maxLife));
+  while (player.lifeSegments.length < expectedLength) {
+    player.lifeSegments.push({
+      source: "external",
+      relief: "light",
+      value: 1,
+    });
+  }
+  if (player.lifeSegments.length > expectedLength) {
+    player.lifeSegments.length = expectedLength;
+  }
+  const target = clamp(player.life, 0, expectedLength);
+  if (Math.abs(lifeSegmentValue(player) - target) <= 0.000001) return;
+  let remaining = target;
+  for (let index = player.lifeSegments.length - 1; index >= 0; index -= 1) {
+    const value = Math.min(1, remaining);
+    player.lifeSegments[index].value = value;
+    remaining -= value;
+  }
+}
+
+function syncLifeScalars(player: Player) {
+  player.maxLife = player.lifeSegments.length;
+  player.life = lifeSegmentValue(player);
+}
+
+function healPlayer(run: RunState, amount: number) {
+  if (amount <= 0) return 0;
+  reconcileLifeSegments(run.player);
+  let remaining = amount;
+  let restored = 0;
+  // Lost segments form a prefix. Refill the deepest missing segment first so
+  // the next loss follows the original stack order and source type.
+  for (
+    let index = run.player.lifeSegments.length - 1;
+    index >= 0 && remaining > 0;
+    index -= 1
+  ) {
+    const segment = run.player.lifeSegments[index];
+    const fill = Math.min(1 - segment.value, remaining);
+    if (fill <= 0) continue;
+    segment.value += fill;
+    restored += fill;
+    remaining -= fill;
+  }
+  syncLifeScalars(run.player);
+  return restored;
+}
+
+function addPlayerLifeSegment(
+  run: RunState,
+  source: Exclude<LifeSegmentSource, "initial" | "external">,
+  restoredValue: number,
+) {
+  reconcileLifeSegments(run.player);
+  run.player.lifeSegments.unshift({
+    source,
+    relief: "light",
+    value: clamp(restoredValue, 0, 1),
+  });
+  syncLifeScalars(run.player);
+}
+
+function damagePlayerLifeSegments(
+  run: RunState,
+  amount: number,
+): { damage: number; relief?: HitReliefKind } {
+  reconcileLifeSegments(run.player);
+  let remaining = Math.min(Math.max(0, amount), run.player.life);
+  let applied = 0;
+  let relief: HitReliefKind | undefined;
+  for (const segment of run.player.lifeSegments) {
+    if (remaining <= 0) break;
+    const taken = Math.min(segment.value, remaining);
+    if (taken <= 0) continue;
+    segment.value -= taken;
+    remaining -= taken;
+    applied += taken;
+    if (segment.relief === "strong") relief = "strong";
+    else relief ??= "light";
+  }
+  syncLifeScalars(run.player);
+  return { damage: applied, relief };
+}
+
 function length(x: number, y: number) {
   return Math.hypot(x, y);
 }
@@ -886,6 +1044,44 @@ function nextId(run: RunState) {
   const value = run.serial;
   run.serial += 1;
   return value;
+}
+
+type HostileStrikeSeed = Omit<
+  PendingStrike,
+  "id" | "owner" | "hostile"
+>;
+
+function pushHostileStrike(
+  run: RunState,
+  seed: HostileStrikeSeed,
+  priority: "ordinary" | "boss" = "ordinary",
+): PendingStrike | undefined {
+  const cap = getCombatPressureProfile(run).hostileAttackCap;
+  let activeHostile = run.strikes.reduce(
+    (count, strike) => count + (strike.hostile ? 1 : 0),
+    0,
+  );
+  // A saturated ordinary volley must never erase the warning contract of a
+  // Boss skill. Cancel one older ordinary hazard to make the replacement
+  // visible while keeping the authored difficulty ceiling exact.
+  if (activeHostile >= cap && priority === "boss") {
+    const replaceIndex = run.strikes.findIndex(
+      (strike) => strike.hostile && !strike.artKey.startsWith("boss/"),
+    );
+    if (replaceIndex >= 0) {
+      run.strikes.splice(replaceIndex, 1);
+      activeHostile -= 1;
+    }
+  }
+  if (activeHostile >= cap) return undefined;
+  const strike: PendingStrike = {
+    id: nextId(run),
+    owner: "terminal",
+    hostile: true,
+    ...seed,
+  };
+  run.strikes.push(strike);
+  return strike;
 }
 
 function createEndlessPerkCombatState(): EndlessPerkCombatState {
@@ -973,6 +1169,7 @@ export function createRun(
       powerMultiplier:
         difficulty.playerPower * (trials.has("thinPower") ? 0.88 : 1),
       magnetMultiplier: 1,
+      lifeSegments: createInitialLifeSegments(difficulty.playerLife),
     },
     build: createCombatBuild(initialWeaponId),
     enemies: [],
@@ -1020,6 +1217,7 @@ export function createRun(
     difficultyClearEligible: true,
     primaryWeapon,
     attackReplays: new Map(),
+    enemySkillBreatherUntil: 0,
   };
 }
 
@@ -1385,8 +1583,7 @@ export function applyUpgrade(run: RunState, option: UpgradeOption): string | und
       option.travelNoteId === "paperWard" &&
       run.difficultyId !== "oneLife"
     ) {
-      run.player.maxLife += 1;
-      run.player.life = Math.min(run.player.maxLife, run.player.life + 1);
+      addPlayerLifeSegment(run, "travelNote", 1);
     } else if (!option.travelNoteId && option.modifierId === "keenEdge") {
       run.player.powerMultiplier *= 1.08;
     } else if (!option.travelNoteId && option.modifierId === "gatheringWind") {
@@ -1394,13 +1591,10 @@ export function applyUpgrade(run: RunState, option: UpgradeOption): string | und
     } else if (
       !option.travelNoteId &&
       option.modifierId === "paperWard" &&
-      run.difficultyId !== "oneLife"
+      run.difficultyId !== "oneLife" &&
+      run.player.maxLife < 7
     ) {
-      run.player.maxLife = Math.min(7, run.player.maxLife + 1);
-      run.player.life = Math.min(
-        run.player.maxLife,
-        run.player.life + recoveryFor(run),
-      );
+      addPlayerLifeSegment(run, "utility", recoveryFor(run));
     }
   }
   const eligible = getEligibleSynergies(run.build.weapons);
@@ -2493,7 +2687,10 @@ function executeEndlessPerkAction(
       );
     }
   } else if (action.kind === "preventLethalDamage") {
-    run.player.life = Math.max(action.value ?? 1, 1);
+    healPlayer(
+      run,
+      Math.max(0, Math.max(action.value ?? 1, 1) - run.player.life),
+    );
     run.player.invulnerability = Math.max(
       run.player.invulnerability,
       action.durationSeconds ?? 1,
@@ -2525,10 +2722,9 @@ function executeEndlessPerkAction(
       strength,
     );
   } else if (action.kind === "healWhileIdle") {
-    run.player.life = Math.min(
-      run.player.maxLife,
-      run.player.life +
-        (action.value ?? 0.2) * strength * recoveryFor(run),
+    healPlayer(
+      run,
+      (action.value ?? 0.2) * strength * recoveryFor(run),
     );
   }
 }
@@ -3446,10 +3642,17 @@ function updateEndlessSpawning(
     }
   }
   director.lastSample = sample;
+  const pressure = getCombatPressureProfile(run);
+  const bossAlive = run.enemies.some(
+    (enemy) => enemy.boss && enemy.hp > 0,
+  );
+  const backgroundScale = bossAlive
+    ? pressure.bossBackgroundMultiplier
+    : 1;
   director.nonBossThreatBudget = Math.min(
     sample.nonBossThreatPerSecond * 10,
     director.nonBossThreatBudget +
-      sample.nonBossThreatPerSecond * delta,
+      sample.nonBossThreatPerSecond * delta * backgroundScale,
   );
   director.bossBudget = Math.min(
     6,
@@ -3502,7 +3705,7 @@ function updateEndlessSpawning(
 }
 
 function updateSpawning(run: RunState, delta: number, events: RunEvent[]) {
-  const bossAlive = run.enemies.some((enemy) => enemy.boss && enemy.hp > 0);
+  let bossAlive = run.enemies.some((enemy) => enemy.boss && enemy.hp > 0);
   if (!run.endless) {
     if (
       run.elapsed >= 360 &&
@@ -3512,6 +3715,7 @@ function updateSpawning(run: RunState, delta: number, events: RunEvent[]) {
     ) {
       spawnEnemy(run, "taotie");
       run.midBossSpawned = true;
+      bossAlive = true;
       events.push({ type: "bossSpawn", tier: "mid" });
     }
     if (
@@ -3522,6 +3726,7 @@ function updateSpawning(run: RunState, delta: number, events: RunEvent[]) {
     ) {
       spawnEnemy(run, "nian");
       run.finalBossSpawned = true;
+      bossAlive = true;
       events.push({ type: "bossSpawn", tier: "final" });
     }
   } else {
@@ -3531,14 +3736,21 @@ function updateSpawning(run: RunState, delta: number, events: RunEvent[]) {
 
   run.spawnClock -= delta;
   if (run.spawnClock <= 0 && run.enemies.length < ENDLESS_ACTOR_CAP) {
-    const density = run.trials.has("crowd") ? 1.3 : 1;
+    const pressure = getCombatPressureProfile(run);
+    const density =
+      pressure.spawnRateMultiplier *
+      (run.trials.has("crowd") ? 1.3 : 1) *
+      (bossAlive ? pressure.bossBackgroundMultiplier : 1);
     const count = Math.min(5, 1 + Math.floor(run.elapsed / 115));
     const available = Math.min(
       count,
       ENDLESS_ACTOR_CAP - run.enemies.length,
     );
     for (let index = 0; index < available; index += 1) spawnEnemy(run);
-    run.spawnClock = Math.max(0.18, (0.88 - run.elapsed * 0.00072) / density);
+    run.spawnClock = Math.max(
+      0.18,
+      (0.88 - run.elapsed * 0.00072) / Math.max(0.05, density),
+    );
   }
   for (const [at, type] of [[120, "lion"], [300, "puppet"]] as Array<[number, EnemyArchetype]>) {
     if (run.elapsed >= at && run.elapsed - delta < at) spawnEnemy(run, type);
@@ -3722,9 +3934,7 @@ function scheduleEnemyPattern(
     const delay =
       (skill.mode === "burst" ? 0.38 : 0.3) +
       index * delayStep;
-    run.strikes.push({
-      id: nextId(run),
-      owner: "terminal",
+    pushHostileStrike(run, {
       artKey: `${skill.artKey}/strike`,
       x: clamp(x, 40, GAME_WIDTH - 40),
       y: clamp(y, 40, GAME_HEIGHT - 40),
@@ -3732,7 +3942,6 @@ function scheduleEnemyPattern(
       damage: enemy.damage,
       delay,
       maxDelay: delay,
-      hostile: true,
     });
   }
 }
@@ -3751,9 +3960,7 @@ function scheduleSlowHostileVolley(
     const centered = index - (count - 1) / 2;
     const angle = baseAngle + centered * 0.17;
     const life = 2.75 + index * 0.08;
-    run.strikes.push({
-      id: nextId(run),
-      owner: "terminal",
+    pushHostileStrike(run, {
       artKey: `${skill.artKey}/slow-fire/${index + 1}`,
       x: enemy.x + Math.cos(angle) * (enemy.radius + 18),
       y: enemy.y + Math.sin(angle) * (enemy.radius + 18),
@@ -3761,7 +3968,6 @@ function scheduleSlowHostileVolley(
       damage: enemy.damage,
       delay: life,
       maxDelay: life,
-      hostile: true,
       velocityX: Math.cos(angle) * 142,
       velocityY: Math.sin(angle) * 142,
       contactOnly: true,
@@ -3796,11 +4002,70 @@ function distanceToSegmentSquared(
   return distanceSquared(x1 + dx * t, y1 + dy * t, x, y);
 }
 
+function enemySkillUsesDashPath(skill: EnemySkillDefinition) {
+  return skill.movement !== undefined;
+}
+
+function activeEnemySkillSlotIds(run: RunState, dashOnly = false) {
+  const ids = new Set<number>();
+  for (const enemy of run.enemies) {
+    const action = enemy.action;
+    if (!action || action.kind !== "enemySkill") continue;
+    if (dashOnly && action.hostileTelegraph.movementKind === "stationary") {
+      continue;
+    }
+    ids.add(action.slotId);
+  }
+  return ids;
+}
+
+function canBeginEnemySkill(
+  run: RunState,
+  skill: EnemySkillDefinition,
+) {
+  const pressure = getCombatPressureProfile(run);
+  if (activeEnemySkillSlotIds(run).size >= pressure.enemySkillSlots) {
+    return false;
+  }
+  return !enemySkillUsesDashPath(skill) ||
+    activeEnemySkillSlotIds(run, true).size < pressure.enemyDashSlots;
+}
+
+function beginBossBreather(run: RunState) {
+  run.enemySkillBreatherUntil = Math.max(
+    run.enemySkillBreatherUntil,
+    run.elapsed + BOSS_SKILL_BREATHER_SECONDS,
+  );
+}
+
+function bossSkillCoordinatorActive(run: RunState, cooldownLookahead = 0) {
+  if (run.elapsed < run.enemySkillBreatherUntil) return true;
+  return run.enemies.some((enemy) => {
+    if (!enemy.boss || enemy.hp <= 0) return false;
+    if (enemy.action || enemy.motion === "attacking") return true;
+    const cooldownScale = (enemy.ralliedUntil ?? 0) > run.elapsed ? 1.24 : 1;
+    if (enemy.attackCooldown > cooldownLookahead * cooldownScale) return false;
+    const distance = Math.hypot(
+      enemy.x - run.player.x,
+      enemy.y - run.player.y,
+    );
+    if (enemy.endlessBossId) {
+      const definition = getEndlessBoss(enemy.endlessBossId);
+      const skill = definition.skills[
+        enemy.skillIndex % definition.skills.length
+      ];
+      return distance < skill.triggerRange;
+    }
+    return distance < 430;
+  });
+}
+
 function assignEnemySkillAction(
   run: RunState,
   enemy: Enemy,
   skill: EnemySkillDefinition,
   target: MovementTargetResult,
+  slotId: number,
   partnerId?: number,
 ) {
   const warningFxId = addFx(
@@ -3825,6 +4090,7 @@ function assignEnemySkillAction(
     committed: false,
     warningFxId,
     partnerId,
+    slotId,
     hostileTelegraph: {
       kind: target.dangerKind,
       locked: true,
@@ -3895,11 +4161,13 @@ function beginEnemySkill(
   if (skill.behavior === "pairedShoeCross") {
     const partner = ensureShoePartner(run, enemy);
     if (!skill.movement) return;
+    const slotId = enemy.id;
     assignEnemySkillAction(
       run,
       enemy,
       skill,
       actionTarget(run, enemy, skill.movement),
+      slotId,
       partner?.id,
     );
     if (partner) {
@@ -3908,6 +4176,7 @@ function beginEnemySkill(
         partner,
         skill,
         actionTarget(run, partner, skill.movement),
+        slotId,
         enemy.id,
       );
     }
@@ -3923,7 +4192,7 @@ function beginEnemySkill(
         movementKind: "stationary" as const,
         dangerKind: "landing" as const,
       };
-  assignEnemySkillAction(run, enemy, skill, target);
+  assignEnemySkillAction(run, enemy, skill, target, enemy.id);
   enemy.patternCycle = (enemy.patternCycle ?? 0) + 1;
 
   if (skill.behavior === "puppetTripwire" && enemy.action?.kind === "enemySkill") {
@@ -3964,9 +4233,7 @@ function beginEnemySkill(
       [enemy.action.lineX2, enemy.action.lineY2],
     ] as const) {
       const life = skill.telegraph + skill.active;
-      run.strikes.push({
-        id: nextId(run),
-        owner: "terminal",
+      pushHostileStrike(run, {
         artKey: `${skill.artKey}/thread-anchor`,
         x,
         y,
@@ -3974,7 +4241,6 @@ function beginEnemySkill(
         damage: enemy.damage,
         delay: life,
         maxDelay: life,
-        hostile: true,
         contactOnly: true,
       });
     }
@@ -4071,6 +4337,7 @@ function stepEnemySkill(
         if (hurtPlayer(run, enemy.damage)) {
           events.push({ type: "playerHit" });
         }
+        if (enemy.action !== action) return true;
       }
       if (ratio >= 1 && !action.committed) {
         action.committed = true;
@@ -4099,6 +4366,7 @@ function stepEnemySkill(
           action.playerHitCommitted = true;
           events.push({ type: "playerHit" });
         }
+        if (enemy.action !== action) return true;
       }
       if (
         ratio >= 1 &&
@@ -4209,6 +4477,7 @@ function stepEnemySkill(
             if (hurtPlayer(run, enemy.damage)) {
               events.push({ type: "playerHit" });
             }
+            if (enemy.action !== action) return true;
           }
           action.previousPlayerSide = side;
         }
@@ -4291,9 +4560,7 @@ function scheduleBossVolley(
     const band = 42 + (index % 3) * 38;
     const delay =
       delayOffset + 0.48 + index * (skill.delay ?? 0.2);
-    run.strikes.push({
-      id: nextId(run),
-      owner: "terminal",
+    pushHostileStrike(run, {
       artKey: `${skill.artKey}/strike`,
       x: clamp(
         targetX + Math.cos(angle) * band,
@@ -4309,8 +4576,7 @@ function scheduleBossVolley(
       damage: enemy.damage,
       delay,
       maxDelay: delay,
-      hostile: true,
-    });
+    }, "boss");
   }
 }
 
@@ -4329,9 +4595,7 @@ function pushBossStrike(
     suffix?: string;
   } = {},
 ) {
-  run.strikes.push({
-    id: nextId(run),
-    owner: "terminal",
+  pushHostileStrike(run, {
     artKey: `${skill.artKey}/${options.suffix ?? "strike"}`,
     x: clamp(x, -70, GAME_WIDTH + 70),
     y: clamp(y, -70, GAME_HEIGHT + 70),
@@ -4339,11 +4603,10 @@ function pushBossStrike(
     damage: enemy.damage,
     delay,
     maxDelay: delay,
-    hostile: true,
     velocityX: options.velocityX,
     velocityY: options.velocityY,
     contactOnly: options.contactOnly,
-  });
+  }, "boss");
 }
 
 function scheduleBossLine(
@@ -4684,9 +4947,7 @@ function applyEndlessBossTraits(
   }
   if (enemy.bossTraits?.includes("lingeringGround")) {
     const delay = 0.82;
-    run.strikes.push({
-      id: nextId(run),
-      owner: "terminal",
+    pushHostileStrike(run, {
       artKey: `${definition.artKey}/trait/lingering-ground`,
       x: targetX,
       y: targetY,
@@ -4694,8 +4955,7 @@ function applyEndlessBossTraits(
       damage: enemy.damage,
       delay,
       maxDelay: delay,
-      hostile: true,
-    });
+    }, "boss");
   }
   if (enemy.bossTraits?.includes("delayedRepeat")) {
     scheduleBossVolley(
@@ -4852,6 +5112,7 @@ function stepEndlessBossSkill(
         if (hurtPlayer(run, enemy.damage)) {
           events.push({ type: "playerHit" });
         }
+        if (enemy.action !== action) return true;
       }
       if (ratio >= 1 && !action.committed) {
         action.committed = true;
@@ -4870,6 +5131,7 @@ function stepEndlessBossSkill(
           action.playerHitCommitted = true;
           events.push({ type: "playerHit" });
         }
+        if (enemy.action !== action) return true;
         executeEndlessBossBehavior(
           run,
           enemy,
@@ -4936,6 +5198,7 @@ function stepEndlessBossSkill(
     enemy.attackCooldown =
       (skill.cooldown * recoveryScale * phaseRecoveryScale) /
       Math.max(1, enemy.actionSpeed ?? 1);
+    beginBossBreather(run);
   }
   return true;
 }
@@ -4954,7 +5217,7 @@ function beginNianLeap(run: RunState, enemy: Enemy) {
     target.x,
     target.y,
     150,
-    0.68,
+    NIAN_LEAP_TELEGRAPH_SECONDS + 0.18,
     "#a94838",
     "boss/nian/leap-warning",
   );
@@ -5004,7 +5267,7 @@ function stepNianLeap(
       action.targetY - enemy.y,
       action.targetX - enemy.x,
     );
-    if (action.elapsed >= 0.5) {
+    if (action.elapsed >= NIAN_LEAP_TELEGRAPH_SECONDS) {
       action.startX = enemy.x;
       action.startY = enemy.y;
       action.phase = "active";
@@ -5053,6 +5316,7 @@ function stepNianLeap(
       ) {
         events.push({ type: "playerHit" });
       }
+      if (enemy.action !== action) return true;
     }
     return true;
   }
@@ -5070,6 +5334,7 @@ function stepNianLeap(
     enemy.motion = "moving";
     enemy.motionTime = 0;
     enemy.attackCooldown = 3.5;
+    beginBossBreather(run);
   }
   return true;
 }
@@ -5088,7 +5353,7 @@ function beginTaotieCharge(run: RunState, enemy: Enemy) {
     target.x,
     target.y,
     120,
-    0.82,
+    TAOTIE_CHARGE_TELEGRAPH_SECONDS + 0.18,
     "#55776e",
     "boss/taotie/charge-warning",
   );
@@ -5139,7 +5404,7 @@ function stepTaotieCharge(
   );
 
   if (action.phase === "telegraph") {
-    if (action.elapsed >= 0.58) {
+    if (action.elapsed >= TAOTIE_CHARGE_TELEGRAPH_SECONDS) {
       action.phase = "active";
       action.elapsed = 0;
     }
@@ -5173,6 +5438,7 @@ function stepTaotieCharge(
       if (hurtPlayer(run, enemy.damage)) {
         events.push({ type: "playerHit" });
       }
+      if (enemy.action !== action) return true;
     }
     if (ratio >= 1) {
       action.phase = "impact";
@@ -5207,8 +5473,120 @@ function stepTaotieCharge(
     enemy.motion = "moving";
     enemy.motionTime = 0;
     enemy.attackCooldown = 3.5;
+    beginBossBreather(run);
   }
   return true;
+}
+
+function scheduleNianMeteorPattern(run: RunState) {
+  const corridorCenterX = clamp(run.player.x, 250, GAME_WIDTH - 250);
+  const radius = 250;
+  const offset =
+    NIAN_METEOR_SAFE_CORRIDOR / 2 + radius + PLAYER_HIT_RADIUS + 12;
+  const zones = [
+    { x: corridorCenterX - offset, y: 180 },
+    { x: corridorCenterX + offset, y: 360 },
+    { x: corridorCenterX - offset, y: 540 },
+  ];
+  zones.forEach((zone, index) => {
+    pushHostileStrike(run, {
+      artKey: `boss/nian/meteor-${index + 1}`,
+      x: zone.x,
+      y: zone.y,
+      radius,
+      damage: 1,
+      delay: NIAN_METEOR_TELEGRAPH_SECONDS,
+      maxDelay: NIAN_METEOR_TELEGRAPH_SECONDS,
+    }, "boss");
+  });
+}
+
+function scheduleNianRingWithGap(run: RunState, enemy: Enemy) {
+  const safeAngle = Math.atan2(
+    run.player.y - enemy.y,
+    run.player.x - enemy.x,
+  );
+  const ringRadius = 220;
+  const strikeRadius = 48;
+  // The centre gap is wider than the authored 100 degrees so the physical
+  // circles cannot nibble into the promised escape sector.
+  const excludedHalfAngle = (70 * Math.PI) / 180;
+  for (let index = 0; index < 18; index += 1) {
+    const angle = (Math.PI * 2 * index) / 18;
+    if (Math.abs(normalizeAngle(angle - safeAngle)) <= excludedHalfAngle) {
+      continue;
+    }
+    pushHostileStrike(run, {
+      artKey: "boss/nian/ring-spin",
+      x: enemy.x + Math.cos(angle) * ringRadius,
+      y: enemy.y + Math.sin(angle) * ringRadius,
+      radius: strikeRadius,
+      damage: enemy.damage,
+      delay: 1.05,
+      maxDelay: 1.05,
+    }, "boss");
+  }
+}
+
+function scheduleTaotieShock(run: RunState, enemy: Enemy) {
+  pushHostileStrike(run, {
+    artKey: "boss/taotie/shock",
+    x: enemy.x,
+    y: enemy.y,
+    radius: 205,
+    damage: enemy.damage,
+    delay: 1,
+    maxDelay: 1,
+  }, "boss");
+}
+
+function scheduleTaotieSuction(run: RunState, enemy: Enemy) {
+  const targetX = run.player.x;
+  const targetY = run.player.y;
+  for (const [index, ratio] of [0.35, 0.65, 0.95].entries()) {
+    pushHostileStrike(run, {
+      artKey: `boss/taotie/suction-lane-${index + 1}`,
+      x: enemy.x + (targetX - enemy.x) * ratio,
+      y: enemy.y + (targetY - enemy.y) * ratio,
+      radius: 72,
+      damage: enemy.damage,
+      delay: 1.05,
+      maxDelay: 1.05,
+    }, "boss");
+  }
+}
+
+function prepareStandardBossSkill(run: RunState, enemy: Enemy) {
+  const ability = enemy.skillIndex % 3;
+  if (enemy.type === "nian") {
+    if (ability === 1) scheduleNianMeteorPattern(run);
+    else if (ability === 2) scheduleNianRingWithGap(run, enemy);
+  } else if (enemy.type === "taotie") {
+    if (ability === 1) scheduleTaotieShock(run, enemy);
+    else if (ability === 2) scheduleTaotieSuction(run, enemy);
+  }
+}
+
+function stepStandardBossWindup(run: RunState, enemy: Enemy, delta: number) {
+  if (
+    enemy.type !== "taotie" ||
+    enemy.skillIndex % 3 !== 2 ||
+    enemy.motion !== "attacking" ||
+    enemy.motionTime >= 0.82
+  ) {
+    return;
+  }
+  const pull = normalized(enemy.x - run.player.x, enemy.y - run.player.y);
+  run.player.x = clamp(
+    run.player.x + pull.x * 58 * delta,
+    PLAYER_HIT_RADIUS,
+    GAME_WIDTH - PLAYER_HIT_RADIUS,
+  );
+  run.player.y = clamp(
+    run.player.y + pull.y * 58 * delta,
+    PLAYER_HIT_RADIUS,
+    GAME_HEIGHT - PLAYER_HIT_RADIUS,
+  );
 }
 
 function executeBossSkill(run: RunState, enemy: Enemy) {
@@ -5216,36 +5594,12 @@ function executeBossSkill(run: RunState, enemy: Enemy) {
   if (enemy.type === "taotie") {
     if (ability === 0) {
       if (!enemy.action) beginTaotieCharge(run, enemy);
-    } else if (ability === 1) {
-      addFx(run, "ring", enemy.x, enemy.y, 205, 0.55, "#708c83", "boss/taotie/shock");
-      if (distanceSquared(enemy.x, enemy.y, run.player.x, run.player.y) < 205 ** 2) hurtPlayer(run, enemy.damage);
-    } else {
-      const pull = normalized(enemy.x - run.player.x, enemy.y - run.player.y);
-      run.player.x += pull.x * 58;
-      run.player.y += pull.y * 58;
-      addFx(run, "warning", enemy.x, enemy.y, 235, 0.7, "#3f625e", "boss/taotie/suction");
     }
   } else if (enemy.type === "nian") {
     if (ability === 0) {
       // The leap begins at attack wind-up so it can be shown continuously.
       // This fallback is retained for malformed imported states.
       if (!enemy.action) beginNianLeap(run, enemy);
-    } else if (ability === 1) {
-      run.strikes.push({
-        id: nextId(run),
-        owner: "terminal",
-        artKey: "boss/nian/lantern-slam",
-        x: run.player.x,
-        y: run.player.y,
-        radius: 112,
-        damage: 1,
-        delay: 0.65,
-        maxDelay: 0.65,
-        hostile: true,
-      });
-    } else {
-      addFx(run, "ring", enemy.x, enemy.y, 260, 0.72, "#b74b35", "boss/nian/roar");
-      if (distanceSquared(enemy.x, enemy.y, run.player.x, run.player.y) < 260 ** 2) hurtPlayer(run, enemy.damage);
     }
   }
 }
@@ -5279,6 +5633,98 @@ function triggerStepBack(run: RunState) {
     0.36,
     "#7b8d80",
     "travel-note/step-back",
+  );
+}
+
+function interruptEnemiesForHitRelief(run: RunState) {
+  let interruptedBoss = false;
+  for (const enemy of run.enemies) {
+    if (enemy.hp <= 0) continue;
+    interruptedBoss ||= enemy.boss &&
+      (enemy.action !== undefined || enemy.motion === "attacking");
+    enemy.action = undefined;
+    enemy.attackCommitted = false;
+    enemy.motion = "hurt";
+    enemy.motionTime = 0;
+    enemy.vx *= 0.12;
+    enemy.vy *= 0.12;
+    const respite = enemy.boss ? 1.1 : 0.85;
+    enemy.attackCooldown = Math.max(
+      Number.isFinite(enemy.attackCooldown) ? enemy.attackCooldown : 0,
+      respite,
+    );
+  }
+  if (interruptedBoss) beginBossBreather(run);
+}
+
+function applyHitRelief(run: RunState, relief: HitReliefKind) {
+  // Hostile projectiles and delayed warning actors share PendingStrike. Never
+  // delete player-owned attacks while opening this recovery window.
+  run.strikes = run.strikes.filter((strike) => !strike.hostile);
+  run.fx = run.fx.filter((fx) => {
+    if (fx.kind === "warning") return false;
+    const hostileBeam =
+      fx.owner === undefined &&
+      fx.kind === "beam" &&
+      /^(enemy|boss|celestial)\//.test(fx.artKey);
+    return !hostileBeam;
+  });
+  interruptEnemiesForHitRelief(run);
+
+  if (relief === "strong") {
+    for (const enemy of run.enemies) {
+      if (
+        enemy.hp <= 0 ||
+        enemy.boss ||
+        distanceSquared(
+          enemy.x,
+          enemy.y,
+          run.player.x,
+          run.player.y,
+        ) > 520 ** 2
+      ) {
+        continue;
+      }
+      if (enemy.elite) {
+        enemy.hp = Math.min(
+          enemy.hp,
+          Math.max(1, enemy.hp - enemy.maxHp * 0.45),
+        );
+      } else {
+        enemy.hp = 0;
+      }
+    }
+  }
+
+  for (const enemy of run.enemies) {
+    if (enemy.hp <= 0 || enemy.boss) continue;
+    const dx = enemy.x - run.player.x;
+    const dy = enemy.y - run.player.y;
+    const distance = Math.hypot(dx, dy);
+    const direction = distance > 0.001
+      ? { x: dx / distance, y: dy / distance }
+      : { x: Math.cos(run.player.facing), y: Math.sin(run.player.facing) };
+    enemy.x = clamp(
+      enemy.x + direction.x * 180,
+      -80,
+      GAME_WIDTH + 80,
+    );
+    enemy.y = clamp(
+      enemy.y + direction.y * 180,
+      -80,
+      GAME_HEIGHT + 80,
+    );
+  }
+
+  addFx(
+    run,
+    relief === "strong" ? "wave" : "ring",
+    run.player.x,
+    run.player.y,
+    relief === "strong" ? 520 : 180,
+    relief === "strong" ? 0.64 : 0.42,
+    relief === "strong" ? "#d8c58d" : "#9a7760",
+    `fx/player-hit-${relief}-relief`,
   );
 }
 
@@ -5384,10 +5830,13 @@ function hurtPlayer(run: RunState, incomingDamage = 1) {
     3,
   );
   if (damage <= 0) return false;
-  run.player.life -= damage;
+  const loss = damagePlayerLifeSegments(run, damage);
+  if (loss.damage <= 0 || !loss.relief) return false;
+  run.lastHitRelief = loss.relief;
   run.player.invulnerability =
     1.25 + travelNoteRank(run, "slowPaper") * 0.15;
   forceHumanForm(run.player);
+  applyHitRelief(run, loss.relief);
   triggerStepBack(run);
   addFx(run, "burst", run.player.x, run.player.y, 76, 0.42, "#a54535", "fx/player-hit");
   dispatchAllOwnersTrigger(run, "onDamageTaken");
@@ -5395,7 +5844,9 @@ function hurtPlayer(run: RunState, incomingDamage = 1) {
 }
 
 function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
+  let ordinarySkillStartsBlocked = bossSkillCoordinatorActive(run, delta);
   for (const enemy of run.enemies) {
+    if (enemy.hp <= 0) continue;
     enemy.hitFlash = Math.max(0, enemy.hitFlash - delta);
     enemy.marked = Math.max(0, enemy.marked - delta);
     if (enemy.marked === 0) {
@@ -5454,6 +5905,7 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
           enemy.skillIndex % bossDefinition.skills.length
         ];
       if (distanceToPlayer < nextSkill.triggerRange) {
+        ordinarySkillStartsBlocked = true;
         beginEndlessBossSkill(run, enemy);
         continue;
       }
@@ -5461,8 +5913,10 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
     if (
       !enemy.boss &&
       enemyDefinition &&
+      !ordinarySkillStartsBlocked &&
       enemy.attackCooldown <= 0 &&
-      distanceToPlayer < enemyDefinition.skill.triggerRange
+      distanceToPlayer < enemyDefinition.skill.triggerRange &&
+      canBeginEnemySkill(run, enemyDefinition.skill)
     ) {
       beginEnemySkill(run, enemy, enemyDefinition.skill);
       continue;
@@ -5483,6 +5937,7 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
         isBossSkill &&
         enemy.skillIndex % 3 === 0
       ) {
+        ordinarySkillStartsBlocked = true;
         beginTaotieCharge(run, enemy);
         continue;
       }
@@ -5491,6 +5946,7 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
         isBossSkill &&
         enemy.skillIndex % 3 === 0
       ) {
+        ordinarySkillStartsBlocked = true;
         beginNianLeap(run, enemy);
         continue;
       }
@@ -5499,9 +5955,16 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
       enemy.attackCommitted = false;
       enemy.vx *= 0.16;
       enemy.vy *= 0.16;
+      if (enemy.boss) {
+        ordinarySkillStartsBlocked = true;
+        prepareStandardBossSkill(run, enemy);
+      }
     }
 
     if (enemy.motion === "attacking") {
+      if (enemy.boss && !enemy.endlessBossId) {
+        stepStandardBossWindup(run, enemy, delta);
+      }
       const commitAt = enemy.boss ? 0.82 : 0.28;
       const finishAt = enemy.boss ? 1.32 : 0.58;
       if (!enemy.attackCommitted && enemy.motionTime >= commitAt) {
@@ -5517,6 +5980,7 @@ function updateEnemies(run: RunState, delta: number, events: RunEvent[]) {
         enemy.motion = "moving";
         enemy.motionTime = 0;
         enemy.attackCooldown = enemy.boss ? 3.5 : 0.85;
+        if (enemy.boss) beginBossBreather(run);
       }
       continue;
     }
@@ -5935,7 +6399,10 @@ function updateSummons(run: RunState, delta: number) {
 }
 
 function updateStrikes(run: RunState, delta: number, events: RunEvent[]) {
-  for (const strike of run.strikes) {
+  // Hit relief replaces the hostile collection while this pass is active.
+  // Iterate a snapshot and stop immediately after relief so cancelled attacks
+  // cannot keep resolving from the stale pre-clear array.
+  for (const strike of [...run.strikes]) {
     strike.delay -= delta;
     if (strike.velocityX !== undefined || strike.velocityY !== undefined) {
       strike.x += (strike.velocityX ?? 0) * delta;
@@ -5963,6 +6430,7 @@ function updateStrikes(run: RunState, delta: number, events: RunEvent[]) {
         if (hurtPlayer(run, strike.damage)) {
           events.push({ type: "playerHit" });
         }
+        if (run.lastHitRelief) break;
         addFx(
           run,
           "burst",
@@ -5983,7 +6451,10 @@ function updateStrikes(run: RunState, delta: number, events: RunEvent[]) {
         distanceSquared(strike.x, strike.y, run.player.x, run.player.y) <=
         (strike.radius + 18) ** 2 &&
         hurtPlayer(run, strike.damage)
-      ) events.push({ type: "playerHit" });
+      ) {
+        events.push({ type: "playerHit" });
+        if (run.lastHitRelief) break;
+      }
     } else {
       for (const enemy of nearbyEnemies(
         run,
@@ -6217,10 +6688,7 @@ function updatePickups(run: RunState, delta: number, events: RunEvent[]) {
     if (distance < 25) {
       const collectedValue = pickup.value;
       if (pickup.kind === "healingLeaf") {
-        run.player.life = Math.min(
-          run.player.maxLife,
-          run.player.life + pickup.value * recoveryFor(run),
-        );
+        healPlayer(run, pickup.value * recoveryFor(run));
       } else {
         run.player.xp += pickup.value;
         recordPickupMend(run);
@@ -6510,9 +6978,7 @@ function pushCelestialStrike(
     contactOnly?: boolean;
   } = {},
 ) {
-  run.strikes.push({
-    id: nextId(run),
-    owner: "terminal",
+  pushHostileStrike(run, {
     artKey: `celestial/${id}/hostile/${suffix}`,
     x,
     y,
@@ -6520,7 +6986,6 @@ function pushCelestialStrike(
     damage: 1,
     delay,
     maxDelay: delay,
-    hostile: true,
     velocityX: options.velocityX,
     velocityY: options.velocityY,
     contactOnly: options.contactOnly,
@@ -6802,7 +7267,7 @@ export function startEndless(run: RunState) {
   run.terminalLabelLife = 2.2;
 }
 
-/** Safe, non-persistent test jump used by the BAIGONG pause panel. */
+/** Safe, non-persistent test jump used by the hidden pause test panel. */
 export function jumpEndlessMinutesForTest(
   run: RunState,
   minutes: number,
@@ -6945,9 +7410,41 @@ function syncSynergySelection(run: RunState, events: RunEvent[]) {
   });
 }
 
+/**
+ * Settles only build/experience progression. It advances no clocks, actors,
+ * attacks, pickups or encounter directors, so paused/test XP can be drained
+ * one player decision at a time without sneaking in a combat frame.
+ */
+export function settleRunProgression(run: RunState): RunEvent[] {
+  const events: RunEvent[] = [];
+  syncSynergySelection(run, events);
+  if (
+    events.some((event) => event.type === "synergyChoice") ||
+    run.pendingSynergyChoiceIds.length > 0
+  ) {
+    return events;
+  }
+  while (run.player.xp >= run.player.nextXp) {
+    run.player.xp -= run.player.nextXp;
+    run.player.level += 1;
+    run.player.nextXp = 7 + run.player.level * 4;
+    const travelNotesComplete =
+      areAllWeaponsMastered(run.build, 4) &&
+      !hasAvailableTravelNotes(run.build, travelNoteContext(run));
+    if (travelNotesComplete) {
+      run.surplusPages += 1;
+      continue;
+    }
+    events.push({ type: "upgrade" });
+    break;
+  }
+  return events;
+}
+
 export function stepRun(run: RunState, deltaSeconds: number, moveInput: MoveInput): RunEvent[] {
   const delta = Math.min(0.034, Math.max(0, deltaSeconds));
   const events: RunEvent[] = [];
+  run.lastHitRelief = undefined;
   run.elapsed += delta;
   run.player.invulnerability = Math.max(0, run.player.invulnerability - delta);
   run.endlessPerks = stepEndlessPerkState(run.endlessPerks, delta);
@@ -7048,22 +7545,7 @@ export function stepRun(run: RunState, deltaSeconds: number, moveInput: MoveInpu
   updateEndless(run, delta, events);
   updateFx(run, delta);
 
-  syncSynergySelection(run, events);
-
-  while (run.player.xp >= run.player.nextXp) {
-    run.player.xp -= run.player.nextXp;
-    run.player.level += 1;
-    run.player.nextXp = 7 + run.player.level * 4;
-    const travelNotesComplete =
-      areAllWeaponsMastered(run.build, 4) &&
-      !hasAvailableTravelNotes(run.build, travelNoteContext(run));
-    if (travelNotesComplete) {
-      run.surplusPages += 1;
-      continue;
-    }
-    events.push({ type: "upgrade" });
-    break;
-  }
+  events.push(...settleRunProgression(run));
   if (run.player.life <= 0) events.push({ type: "defeat" });
   return events;
 }

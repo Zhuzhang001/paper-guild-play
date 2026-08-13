@@ -76,7 +76,10 @@ test("malformed inset measurements cannot push the stage outside the viewport", 
 });
 
 test("controller uses VisualViewport with a window fallback and frame-coalesced listeners", async () => {
-  const controller = await text("app/ViewportController.tsx");
+  const [controller, presentation] = await Promise.all([
+    text("app/ViewportController.tsx"),
+    text("app/landscapePresentation.ts"),
+  ]);
   assert.match(controller, /window\.visualViewport/);
   assert.match(controller, /window\.innerWidth/);
   assert.match(controller, /window\.innerHeight/);
@@ -86,8 +89,9 @@ test("controller uses VisualViewport with a window fallback and frame-coalesced 
   assert.match(controller, /orientationchange/);
   assert.match(controller, /fullscreenchange/);
   assert.match(controller, /pauseForUnsafeViewport/);
-  assert.match(controller, /navigationUI:\s*"hide"/);
-  assert.match(controller, /orientation\.lock\("landscape"\)/);
+  assert.match(presentation, /navigationUI:\s*"hide"/);
+  assert.match(presentation, /orientation\.lock\("landscape"\)/);
+  assert.match(controller, /viewportPresentation/);
 });
 
 test("the start gesture launches audio and fullscreen without making fullscreen a gate", async () => {
@@ -97,23 +101,23 @@ test("the start gesture launches audio and fullscreen without making fullscreen 
     game.indexOf("const chooseUpgrade"),
   );
   assert.match(start, /audioRef\.current\?\.initFromGesture\(\)/);
-  assert.match(start, /const fullscreenAttempt =[\s\S]*?requestGameFullscreen\(\)/);
-  assert.match(start, /if \(fullscreenAttempt\) void fullscreenAttempt/);
-  assert.doesNotMatch(start, /await fullscreenAttempt/);
+  assert.match(start, /const landscapeAttempt =[\s\S]*?requestLandscapePresentation\(\)/);
+  assert.match(start, /if \(landscapeAttempt\) void landscapeAttempt/);
+  assert.doesNotMatch(start, /await landscapeAttempt/);
 });
 
 test("shell and forge are sized by the measured stage, not an internal viewport", async () => {
   const css = await text("app/globals.css");
   const forgeCss = css.slice(css.indexOf("v6.1: one forge layout system"));
   assert.match(css, /container-name:\s*game-shell/);
-  assert.match(css, /width:\s*var\(--game-stage-width\)/);
-  assert.match(css, /height:\s*var\(--game-stage-height\)/);
+  assert.match(css, /width:\s*var\(--game-presentation-stage-width\)/);
+  assert.match(css, /height:\s*var\(--game-presentation-stage-height\)/);
   assert.match(css, /@container game-shell \(max-height: 620px\)/);
   assert.doesNotMatch(forgeCss, /100dvh|100vh/);
   assert.match(forgeCss, /\.forge-panel \{[\s\S]*?height:\s*calc\(100% - 8px\)/);
 });
 
-test("PWA and visible build labeling expose only the v6.2 test stage", async () => {
+test("PWA and visible build labeling expose only the v6.3 test stage", async () => {
   const [manifestRaw, bootstrap, layout, helper, versionRaw] = await Promise.all([
     text("public/manifest.webmanifest"),
     text("app/PwaBootstrap.tsx"),
@@ -127,11 +131,11 @@ test("PWA and visible build labeling expose only the v6.2 test stage", async () 
   assert.equal(manifest.display, "standalone");
   assert.match(bootstrap, /aria-label="测试版">\s*测试版\s*</);
   assert.doesNotMatch(bootstrap, /非商业|non-commercial/);
-  assert.match(bootstrap, /beforeinstallprompt/);
-  assert.match(bootstrap, /添加到主屏幕/);
+  assert.doesNotMatch(bootstrap, /addEventListener\("beforeinstallprompt"/);
+  assert.doesNotMatch(bootstrap, /className="pwa-install"/);
   assert.match(bootstrap, /重新进入全屏/);
   assert.match(layout, /"paper-guild-stage":\s*"test"/);
   assert.doesNotMatch(layout, /paper-guild-test|non-commercial/);
-  assert.match(helper, /version:\s*"6\.2\.0"/);
-  assert.equal(version.version, "6.2.0");
+  assert.match(helper, /version:\s*"6\.3\.0"/);
+  assert.equal(version.version, "6.3.0");
 });
