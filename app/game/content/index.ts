@@ -7,6 +7,7 @@ export * from "./effects";
 export * from "./endlessPerks";
 export * from "./fusions";
 export * from "./synergies";
+export * from "./travelNotes";
 export * from "./types";
 export * from "./validate";
 export * from "./weapons";

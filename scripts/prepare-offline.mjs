@@ -26,13 +26,13 @@ http.createServer(async(req,res)=>{try{if(req.method!=="GET"&&req.method!=="HEAD
 );
 await writeFile(
   path.join(out, "离线测试说明.txt"),
-  "纸上百工 v6.3 测试版 · 电脑端备用包\r\n\r\n请在本目录安装有 Node.js 的电脑上运行：node start-local.mjs\r\n然后打开 http://127.0.0.1:4173 。\r\n手机端首次成功进入后会逐步缓存已使用资源，可在弱网下再次打开。\r\n",
+  "纸上百工 v6.4 测试版 · 电脑端备用包\r\n\r\n请在本目录安装有 Node.js 的电脑上运行：node start-local.mjs\r\n然后打开 http://127.0.0.1:4173 。\r\n手机端首次成功进入后会逐步缓存已使用资源，可在弱网下再次打开。\r\n",
   "utf8",
 );
 
 // Keep a copy of the build identity beside the launcher for support checks.
 const version = await readFile(path.join(root, "public", "version.json"));
 await copyFile(path.join(root, "public", "version.json"), path.join(out, "version.json"));
-if (!version.includes(Buffer.from('"6.3.0"'))) {
+if (!version.includes(Buffer.from('"6.4.0"'))) {
   throw new Error("Unexpected build version while preparing offline package.");
 }

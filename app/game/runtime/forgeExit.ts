@@ -67,7 +67,7 @@ const BLOCKERS: Readonly<
   processing: {
     state: "processing",
     title: "正在落锤",
-    description: "铸器结果正在写入器盘，请稍候。",
+    description: "器盘正在落锤，请稍候。",
     actions: [],
     disablesContinue: true,
   },
@@ -99,8 +99,8 @@ const BLOCKERS: Readonly<
   },
   needsPrimaryWeapon: {
     state: "needsPrimaryWeapon",
-    title: "照样对象失效",
-    description: "走马灯需要一把当前持有的非走马灯武器作为照样对象。",
+    title: "请另选照样对象",
+    description: "原照样对象已不在盘中。请选择一件仍在器盘里的非走马灯武器。",
     actions: [
       {
         id: "focusPrimaryWeapon",
@@ -112,17 +112,17 @@ const BLOCKERS: Readonly<
   },
   unconfirmedPreview: {
     state: "unconfirmedPreview",
-    title: "预览尚未处理",
-    description: "这项变化还没有落锤。请返回确认，或放弃本次预览。",
+    title: "还有一项变化未落锤",
+    description: "可以确认这次改动，也可以舍下改动后续战。",
     actions: [
       {
         id: "returnToPreview",
-        label: "返回确认",
+        label: "确认改动",
         emphasis: "primary",
       },
       {
         id: "discardPreview",
-        label: "放弃预览",
+        label: "舍下改动",
         emphasis: "secondary",
       },
     ],
@@ -136,7 +136,7 @@ const BLOCKERS: Readonly<
       {
         id: "returnToCelestialReward",
         label: "返回炼化",
-        emphasis: "primary",
+        emphasis: "secondary",
       },
       {
         id: "dismissCelestialReward",

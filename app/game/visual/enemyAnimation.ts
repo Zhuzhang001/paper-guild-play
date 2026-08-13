@@ -21,6 +21,7 @@ export type EnemyAnimationPose = {
   elite: boolean;
   boss: boolean;
   bossTier: BossTier;
+  bossAttackFrameColumn?: 0 | 1 | 2 | 3;
 };
 
 const STRIDE: Readonly<Record<EnemyArchetype, number>> = {
@@ -239,7 +240,7 @@ export function drawEnemyAnimation(
       column = Math.min(1, Math.floor(stateProgress * 2));
     } else if (pose.state === "attacking") {
       row = 2;
-      column = Math.min(3, Math.floor(stateProgress * 4));
+      column = pose.bossAttackFrameColumn ?? 0;
     } else if (speed > 3) {
       row = 1;
       column = Math.floor(Math.max(0, pose.travelled) / STRIDE[pose.type]) % 4;

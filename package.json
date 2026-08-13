@@ -15,6 +15,7 @@
     "start": "vinext start",
     "test": "vinext build && node --test tests/*.test.mjs",
     "typecheck:game": "tsc -p tsconfig.game.json --noEmit",
+    "check:copy": "node scripts/check-player-copy.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

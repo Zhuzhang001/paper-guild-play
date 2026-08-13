@@ -60,7 +60,7 @@ if (result.code === 0) {
   const version = JSON.parse(
     await readFile(path.join(root, "out", "version.json"), "utf8"),
   );
-  if (version.version !== "6.3.0" || version.contentVersion !== 6) {
+  if (version.version !== "6.4.0" || version.contentVersion !== 6) {
     throw new Error("Static output contains an unexpected build identity.");
   }
 

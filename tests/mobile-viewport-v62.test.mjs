@@ -117,7 +117,7 @@ test("shell and forge are sized by the measured stage, not an internal viewport"
   assert.match(forgeCss, /\.forge-panel \{[\s\S]*?height:\s*calc\(100% - 8px\)/);
 });
 
-test("PWA and visible build labeling expose only the v6.3 test stage", async () => {
+test("PWA and visible build labeling expose only the v6.4 test stage", async () => {
   const [manifestRaw, bootstrap, layout, helper, versionRaw] = await Promise.all([
     text("public/manifest.webmanifest"),
     text("app/PwaBootstrap.tsx"),
@@ -136,6 +136,6 @@ test("PWA and visible build labeling expose only the v6.3 test stage", async () 
   assert.match(bootstrap, /重新进入全屏/);
   assert.match(layout, /"paper-guild-stage":\s*"test"/);
   assert.doesNotMatch(layout, /paper-guild-test|non-commercial/);
-  assert.match(helper, /version:\s*"6\.3\.0"/);
-  assert.equal(version.version, "6.3.0");
+  assert.match(helper, /version:\s*"6\.4\.0"/);
+  assert.equal(version.version, "6.4.0");
 });

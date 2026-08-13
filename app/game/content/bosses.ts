@@ -51,6 +51,8 @@ export type BossSkillDefinition = {
   count?: number;
   delay?: number;
   artKey: `boss/${string}`;
+  /** Peak pose in row 2 of the authored 4x4 atlas. */
+  attackFrameColumn: 0 | 1 | 2 | 3;
 };
 
 export type EndlessBossDefinition = {
@@ -99,13 +101,15 @@ const skill = (
   behavior: BossBehaviorId,
   overrides: Omit<
     BossSkillDefinition,
-    "id" | "mode" | "behavior" | "artKey"
+    "id" | "mode" | "behavior" | "artKey" | "attackFrameColumn"
   >,
+  attackFrameColumn: 0 | 1 | 2 | 3,
 ): BossSkillDefinition => ({
   id,
   mode,
   behavior,
   artKey: `boss/${id}`,
+  attackFrameColumn,
   ...overrides,
 });
 
@@ -127,13 +131,13 @@ export const ENDLESS_BOSSES: Readonly<
       skill("troupe-master-crossing", "dash", "maskCrossing", {
         triggerRange: 620, cooldown: 4.2, telegraph: 0.58, active: 0.5, recovery: 0.54, radius: 96,
         movement: { kind: "crossTarget", maxTravel: 420, overshoot: 72, clearance: 8, sweptDamage: true },
-      }),
+      }, 1),
       skill("troupe-master-curtain", "volley", "fanCurtain", {
         triggerRange: 700, cooldown: 4.6, telegraph: 0.64, active: 0.16, recovery: 0.62, radius: 74, count: 7, delay: 0.2,
-      }),
+      }, 3),
       skill("troupe-master-cast", "summon", "shadowCast", {
         triggerRange: 720, cooldown: 5.1, telegraph: 0.72, active: 0.18, recovery: 0.7, radius: 108, count: 3,
-      }),
+      }, 2),
     ],
   },
   chiefClerk: {
@@ -150,13 +154,13 @@ export const ENDLESS_BOSSES: Readonly<
     skills: [
       skill("chief-clerk-ledger", "volley", "inkGrid", {
         triggerRange: 760, cooldown: 4.1, telegraph: 0.6, active: 0.14, recovery: 0.54, radius: 66, count: 9, delay: 0.18,
-      }),
+      }, 0),
       skill("chief-clerk-seal", "radial", "fallingSeal", {
         triggerRange: 520, cooldown: 4.4, telegraph: 0.68, active: 0.12, recovery: 0.62, radius: 250,
-      }),
+      }, 1),
       skill("chief-clerk-runners", "summon", "orderedClosure", {
         triggerRange: 720, cooldown: 5.4, telegraph: 0.74, active: 0.16, recovery: 0.72, radius: 92, count: 4,
-      }),
+      }, 2),
     ],
   },
   nightWatch: {
@@ -173,14 +177,14 @@ export const ENDLESS_BOSSES: Readonly<
     skills: [
       skill("night-watch-bell", "radial", "bellRings", {
         triggerRange: 560, cooldown: 4, telegraph: 0.66, active: 0.12, recovery: 0.58, radius: 285,
-      }),
+      }, 1),
       skill("night-watch-patrol", "dash", "lanternPatrol", {
         triggerRange: 650, cooldown: 4.5, telegraph: 0.5, active: 0.58, recovery: 0.5, radius: 104,
         movement: { kind: "crossTarget", maxTravel: 380, overshoot: 68, clearance: 8, sweptDamage: true },
-      }),
+      }, 3),
       skill("night-watch-third-call", "volley", "thirdWatchCone", {
         triggerRange: 740, cooldown: 4.9, telegraph: 0.76, active: 0.18, recovery: 0.68, radius: 84, count: 3, delay: 0.48,
-      }),
+      }, 0),
     ],
   },
   kilnForeman: {
@@ -197,14 +201,14 @@ export const ENDLESS_BOSSES: Readonly<
     skills: [
       skill("kiln-foreman-coals", "volley", "rollingClay", {
         triggerRange: 720, cooldown: 4.2, telegraph: 0.62, active: 0.16, recovery: 0.58, radius: 92, count: 6, delay: 0.24,
-      }),
+      }, 0),
       skill("kiln-foreman-heat", "radial", "kilnFireLanes", {
         triggerRange: 500, cooldown: 4.6, telegraph: 0.72, active: 0.14, recovery: 0.68, radius: 275,
-      }),
+      }, 1),
       skill("kiln-foreman-hammer", "dash", "furnaceBlast", {
         triggerRange: 610, cooldown: 4.8, telegraph: 0.64, active: 0.42, recovery: 0.7, radius: 118,
         movement: { kind: "landShort", maxTravel: 320, minTravel: 96, clearance: 8, closeFallback: { kind: "stomp" } },
-      }),
+      }, 3),
     ],
   },
   siegeTower: {
@@ -221,14 +225,14 @@ export const ENDLESS_BOSSES: Readonly<
     skills: [
       skill("siege-tower-bolts", "volley", "turretVolley", {
         triggerRange: 820, cooldown: 3.9, telegraph: 0.56, active: 0.14, recovery: 0.5, radius: 62, count: 11, delay: 0.14,
-      }),
+      }, 2),
       skill("siege-tower-crew", "summon", "edgeDeployment", {
         triggerRange: 740, cooldown: 5.2, telegraph: 0.76, active: 0.16, recovery: 0.7, radius: 100, count: 4,
-      }),
+      }, 0),
       skill("siege-tower-ram", "dash", "sweepingArm", {
         triggerRange: 580, cooldown: 5, telegraph: 0.72, active: 0.62, recovery: 0.78, radius: 132,
         movement: { kind: "crossTarget", maxTravel: 285, overshoot: 76, clearance: 8, sweptDamage: true },
-      }),
+      }, 1),
     ],
   },
   bannerCaptain: {
@@ -246,13 +250,13 @@ export const ENDLESS_BOSSES: Readonly<
       skill("banner-captain-spear", "dash", "spearPass", {
         triggerRange: 700, cooldown: 3.8, telegraph: 0.48, active: 0.46, recovery: 0.46, radius: 96,
         movement: { kind: "crossTarget", maxTravel: 440, overshoot: 88, clearance: 8, sweptDamage: true },
-      }),
+      }, 3),
       skill("banner-captain-rally", "summon", "plantFlags", {
         triggerRange: 760, cooldown: 5, telegraph: 0.68, active: 0.14, recovery: 0.62, radius: 90, count: 5,
-      }),
+      }, 0),
       skill("banner-captain-arrows", "volley", "commandFormation", {
         triggerRange: 800, cooldown: 4.4, telegraph: 0.7, active: 0.16, recovery: 0.58, radius: 70, count: 9, delay: 0.17,
-      }),
+      }, 2),
     ],
   },
 });

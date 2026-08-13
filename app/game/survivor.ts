@@ -46,6 +46,8 @@ import {
   type EffectTag,
   type EffectTrigger,
   type TravelNoteId,
+  resolveTravelNoteEffect,
+  getTravelNoteRank,
   type UpgradeOption,
   type WeaponId,
   type WeaponState,
@@ -69,7 +71,6 @@ import {
   deriveWeaveTerminal,
   fuseAdjacentNodes,
   generateUpgradeOptions,
-  getTravelNoteRank,
   hasAvailableTravelNotes,
   insertWeaponNode,
   keepNewestAndRecycleInPlace,
@@ -772,6 +773,8 @@ export type RunSnapshot = {
   primaryWeaponValid: boolean;
   availablePrimaryWeaponIds: readonly WeaponId[];
   primaryWeaponRule: string;
+  travelNotes: Readonly<Partial<Record<TravelNoteId, number>>>;
+  travelNoteRepeatEnabled: Readonly<Partial<Record<TravelNoteId, boolean>>>;
 };
 
 export type MoveInput = {
@@ -1252,6 +1255,20 @@ export function setPrimaryWeapon(
   return true;
 }
 
+export function setTravelNoteRepeatEnabled(
+  run: RunState,
+  id: TravelNoteId,
+  enabled: boolean,
+) {
+  run.build = {
+    ...run.build,
+    travelNoteRepeatEnabled: {
+      ...run.build.travelNoteRepeatEnabled,
+      [id]: enabled,
+    },
+  };
+}
+
 export function availablePrimaryWeapons(run: RunState): readonly WeaponId[] {
   return run.build.weapons
     .map((weapon) => weapon.id)
@@ -1383,6 +1400,8 @@ export function snapshotRun(run: RunState): RunSnapshot {
     primaryWeaponValid: getPrimaryWeaponSelection(run) !== undefined,
     availablePrimaryWeaponIds: availablePrimaryWeapons(run),
     primaryWeaponRule: PRIMARY_WEAPON_RULE,
+    travelNotes: { ...run.build.travelNotes },
+    travelNoteRepeatEnabled: { ...run.build.travelNoteRepeatEnabled },
   };
 }
 
@@ -1568,33 +1587,25 @@ export function applyUpgrade(run: RunState, option: UpgradeOption): string | und
   }
   if (option.kind === "utility") {
     if (option.travelNoteId === "keenEdge") {
+      const before = resolveTravelNoteEffect("keenEdge", previousTravelNoteRank).damageMultiplier;
+      const after = resolveTravelNoteEffect("keenEdge", previousTravelNoteRank + 1).damageMultiplier;
       run.player.powerMultiplier *=
-        (1 + (previousTravelNoteRank + 1) * 0.06) /
-        (1 + previousTravelNoteRank * 0.06);
+        after / before;
     } else if (option.travelNoteId === "gatheringWind") {
+      const before = resolveTravelNoteEffect("gatheringWind", previousTravelNoteRank).magnetMultiplier;
+      const after = resolveTravelNoteEffect("gatheringWind", previousTravelNoteRank + 1).magnetMultiplier;
       run.player.magnetMultiplier *=
-        (1 + (previousTravelNoteRank + 1) * 0.18) /
-        (1 + previousTravelNoteRank * 0.18);
+        after / before;
     } else if (option.travelNoteId === "lightStep") {
+      const before = resolveTravelNoteEffect("lightStep", previousTravelNoteRank).speedMultiplier;
+      const after = resolveTravelNoteEffect("lightStep", previousTravelNoteRank + 1).speedMultiplier;
       run.player.speedMultiplier *=
-        (1 + (previousTravelNoteRank + 1) * 0.05) /
-        (1 + previousTravelNoteRank * 0.05);
+        after / before;
     } else if (
       option.travelNoteId === "paperWard" &&
       run.difficultyId !== "oneLife"
     ) {
       addPlayerLifeSegment(run, "travelNote", 1);
-    } else if (!option.travelNoteId && option.modifierId === "keenEdge") {
-      run.player.powerMultiplier *= 1.08;
-    } else if (!option.travelNoteId && option.modifierId === "gatheringWind") {
-      run.player.magnetMultiplier *= 1.18;
-    } else if (
-      !option.travelNoteId &&
-      option.modifierId === "paperWard" &&
-      run.difficultyId !== "oneLife" &&
-      run.player.maxLife < 7
-    ) {
-      addPlayerLifeSegment(run, "utility", recoveryFor(run));
     }
   }
   const eligible = getEligibleSynergies(run.build.weapons);
@@ -1718,15 +1729,15 @@ function ownerColor(owner: ProjectileOwner) {
 }
 
 function travelRangeMultiplier(run: RunState) {
-  return 1 + travelNoteRank(run, "longReach") * 0.1;
+  return resolveTravelNoteEffect("longReach", travelNoteRank(run, "longReach")).rangeMultiplier;
 }
 
 function travelDurationMultiplier(run: RunState) {
-  return 1 + travelNoteRank(run, "lastingWork") * 0.15;
+  return resolveTravelNoteEffect("lastingWork", travelNoteRank(run, "lastingWork")).durationMultiplier;
 }
 
 function coreAttackIntervalMultiplier(run: RunState) {
-  return 1 - travelNoteRank(run, "quickHands") * 0.05;
+  return resolveTravelNoteEffect("quickHands", travelNoteRank(run, "quickHands")).attackIntervalMultiplier;
 }
 
 function spawnProjectilePattern(
@@ -3193,6 +3204,7 @@ const TURNING_MOMENTUM_COOLDOWN = "travel-note:turning-momentum:cooldown";
 
 function armTurningMomentum(run: RunState) {
   const rank = travelNoteRank(run, "turningMomentum");
+  const effect = resolveTravelNoteEffect("turningMomentum", rank);
   if (
     rank <= 0 ||
     (run.cooldowns.get(TURNING_MOMENTUM_COOLDOWN) ?? 0) > 0
@@ -3200,7 +3212,7 @@ function armTurningMomentum(run: RunState) {
     return;
   }
   run.accumulators.set(TURNING_MOMENTUM_ARMED, 1);
-  run.cooldowns.set(TURNING_MOMENTUM_COOLDOWN, rank >= 2 ? 4 : 6);
+  run.cooldowns.set(TURNING_MOMENTUM_COOLDOWN, effect.turnEchoCooldown);
 }
 
 function releaseTurningMomentumEcho(
@@ -3210,6 +3222,10 @@ function releaseTurningMomentumEcho(
   if ((run.accumulators.get(TURNING_MOMENTUM_ARMED) ?? 0) <= 0) return;
   const echoEffect = replaySafeEffect(primary);
   if (!echoEffect) return;
+  const echoRatio = resolveTravelNoteEffect(
+    "turningMomentum",
+    travelNoteRank(run, "turningMomentum"),
+  ).turnEchoRatio;
   run.accumulators.delete(TURNING_MOMENTUM_ARMED);
   const echoTarget = pickNearest(run);
   const echoEffects = echoEffect.kind === "accumulator"
@@ -3223,7 +3239,7 @@ function releaseTurningMomentumEcho(
       effect,
       "terminal",
       echoTarget,
-      0.45,
+      echoRatio,
       false,
       1,
     );
@@ -5606,10 +5622,11 @@ function executeBossSkill(run: RunState, enemy: Enemy) {
 
 function triggerStepBack(run: RunState) {
   const rank = travelNoteRank(run, "stepBack");
+  const effect = resolveTravelNoteEffect("stepBack", rank);
   const cooldownKey = "travel-note:step-back";
   if (rank <= 0 || (run.cooldowns.get(cooldownKey) ?? 0) > 0) return;
-  const radius = rank >= 2 ? 140 : 100;
-  run.cooldowns.set(cooldownKey, rank >= 2 ? 6 : 8);
+  const radius = effect.stepBackRadius;
+  run.cooldowns.set(cooldownKey, effect.stepBackCooldown);
   for (const enemy of run.enemies) {
     if (enemy.hp <= 0 || enemy.boss) continue;
     const dx = enemy.x - run.player.x;
@@ -5834,7 +5851,10 @@ function hurtPlayer(run: RunState, incomingDamage = 1) {
   if (loss.damage <= 0 || !loss.relief) return false;
   run.lastHitRelief = loss.relief;
   run.player.invulnerability =
-    1.25 + travelNoteRank(run, "slowPaper") * 0.15;
+    1.25 + resolveTravelNoteEffect(
+      "slowPaper",
+      travelNoteRank(run, "slowPaper"),
+    ).extraInvulnerability;
   forceHumanForm(run.player);
   applyHitRelief(run, loss.relief);
   triggerStepBack(run);
@@ -6512,7 +6532,8 @@ function addExperiencePickup(
 
 function mergeExperience(run: RunState) {
   const mergeRank = travelNoteRank(run, "mergePearls");
-  const baseThreshold = mergeRank >= 2 ? 56 : mergeRank === 1 ? 72 : 92;
+  const mergeEffect = resolveTravelNoteEffect("mergePearls", mergeRank);
+  const baseThreshold = mergeEffect.mergeThreshold;
   const mergeBoost = run.pickups.reduce(
     (best, pickup) => pickup.kind === "healingLeaf"
       ? best
@@ -6540,7 +6561,7 @@ function mergeExperience(run: RunState) {
   if (mergeRank > 0) {
     merged.magnetRadius = Math.max(
       merged.magnetRadius ?? 0,
-      mergeRank >= 2 ? 340 : 260,
+      150 * mergeEffect.mergedPearlAttractionMultiplier,
     );
   }
 }
@@ -6650,14 +6671,14 @@ function recordPickupMend(run: RunState) {
   ) {
     return;
   }
-  const required = rank >= 2 ? 6 : 8;
+  const required = resolveTravelNoteEffect("pickupMend", rank).pickupMendRequirement;
   const counterKey = "travel-note:pickup-mend";
-  const count = (run.accumulators.get(counterKey) ?? 0) + 1;
-  if (count < required) {
-    run.accumulators.set(counterKey, count);
+  const progress = (run.accumulators.get(counterKey) ?? 0) + 1 / required;
+  if (progress + 1e-9 < 1) {
+    run.accumulators.set(counterKey, progress);
     return;
   }
-  run.accumulators.set(counterKey, count - required);
+  run.accumulators.set(counterKey, progress - 1);
   const angle = run.player.facing + Math.PI / 2;
   run.pickups.push({
     id: nextId(run),

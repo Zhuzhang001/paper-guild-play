@@ -1126,6 +1126,10 @@ function drawEnemies(
       enemy.motion === "moving" && velocity > 3
         ? Math.atan2(enemy.vy, enemy.vx)
         : enemy.heading;
+    const endlessBossAction = enemy.action?.kind === "endlessBossSkill" ? enemy.action : undefined;
+    const bossAttackFrameColumn = enemy.endlessBossId && endlessBossAction
+      ? getEndlessBoss(enemy.endlessBossId).skills.find((skill) => skill.id === endlessBossAction.skillId)?.attackFrameColumn
+      : undefined;
     drawEnemyAnimation(ctx, sheets, {
       id: enemy.id,
       type: enemy.type,
@@ -1148,6 +1152,7 @@ function drawEnemies(
       elite: enemy.elite,
       boss: enemy.boss,
       bossTier: enemy.bossTier,
+      bossAttackFrameColumn,
     });
     if (enemy.marked > 0) {
       ctx.save();

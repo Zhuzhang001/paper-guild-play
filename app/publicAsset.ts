@@ -36,7 +36,7 @@ export type BuildInfo = {
 };
 
 export const BUILD_INFO: BuildInfo = Object.freeze({
-  version: "6.3.0",
+  version: "6.4.0",
   contentVersion: 6,
   target: STATIC_BUILD_TARGET,
   basePath: PUBLIC_BASE_PATH,

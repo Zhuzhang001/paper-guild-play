@@ -76,9 +76,9 @@ function applyNote(run, id) {
     slotCategory: definition.category,
     currentRank,
     nextRank: currentRank + 1,
-    maxRank: definition.maxRank,
+    masteryRank: definition.masteryRank,
     title: definition.name,
-    description: definition.rankEffects[currentRank],
+    description: definition.description,
     artKey: definition.artKey,
   });
 }
@@ -109,7 +109,7 @@ function spawnTarget(run) {
   return enemy;
 }
 
-test("the twelve travel notes have the locked 4/4/4 catalog and rank caps", () => {
+test("the twelve travel notes have the locked 4/4/4 catalog and four-rank mastery", () => {
   assert.equal(runtime.TRAVEL_NOTE_DEFINITIONS.length, 12);
   assert.equal(
     new Set(runtime.TRAVEL_NOTE_DEFINITIONS.map((note) => note.id)).size,
@@ -127,28 +127,15 @@ test("the twelve travel notes have the locked 4/4/4 catalog and rank caps", () =
   assert.deepEqual(
     Object.fromEntries(runtime.TRAVEL_NOTE_DEFINITIONS.map((note) => [
       note.name,
-      note.maxRank,
+      note.masteryRank,
     ])),
     {
-      "砺锋": 4,
-      "顺手": 3,
-      "放远": 2,
-      "久留": 2,
-      "聚风": 3,
-      "轻脚": 2,
-      "并珠": 2,
-      "转身借力": 2,
-      "护纸": 2,
-      "缓纸": 2,
-      "退一步": 2,
-      "拾补": 2,
+      "砺锋": 4, "顺手": 4, "放远": 4, "久留": 4,
+      "聚风": 4, "轻脚": 4, "并珠": 4, "转身借力": 4,
+      "护纸": 4, "缓纸": 4, "退一步": 4, "拾补": 4,
     },
   );
-  assert.ok(
-    runtime.TRAVEL_NOTE_DEFINITIONS.every(
-      (note) => note.rankEffects.length === note.maxRank,
-    ),
-  );
+  assert.ok(runtime.TRAVEL_NOTE_DEFINITIONS.every((note) => note.masteryRank === 4));
 });
 
 test("four mastered slots switch to deterministic craft/journey/protection choices", () => {
@@ -171,7 +158,7 @@ test("four mastered slots switch to deterministic craft/journey/protection choic
     option.kind === "utility" &&
     option.currentRank === 0 &&
     option.nextRank === 1 &&
-    option.description.includes(`0/${option.maxRank}`)
+    option.description.includes("0/4")
   ));
 
   const unfinished = masteredBuild([
@@ -207,7 +194,7 @@ test("context and cap filtering never offer an ineffective travel note", () => {
   const protectionFull = Object.fromEntries(
     runtime.TRAVEL_NOTE_DEFINITIONS
       .filter((note) => note.category === "protection")
-      .map((note) => [note.id, note.maxRank]),
+      .map((note) => [note.id, note.masteryRank]),
   );
   const filled = runtime.generateTravelNoteOptions(
     masteredBuild(MASTERED_WITH_DURATION, protectionFull),
@@ -218,38 +205,29 @@ test("context and cap filtering never offer an ineffective travel note", () => {
   assert.notEqual(filled.options[2].travelNoteCategory, "protection");
 
   const allFull = Object.fromEntries(
-    runtime.TRAVEL_NOTE_DEFINITIONS.map((note) => [note.id, note.maxRank]),
+    runtime.TRAVEL_NOTE_DEFINITIONS.map((note) => [note.id, note.masteryRank]),
   );
   assert.deepEqual(runtime.generateTravelNoteOptions(
     masteredBuild(MASTERED_WITH_DURATION, allFull),
     runtime.createRngState("all-full"),
   ).options, []);
-  assert.throws(
-    () => runtime.applyUpgradeOption(masteredBuild(MASTERED_WITH_DURATION, allFull), {
-      id: "overflow-keen-edge",
-      kind: "utility",
-      modifierId: "keenEdge",
-      travelNoteId: "keenEdge",
-      title: "砺锋",
-      description: "",
-      artKey: "",
-    }),
-    /already complete/,
-  );
+  const repeatedBuild = masteredBuild(MASTERED_WITH_DURATION, allFull);
+  repeatedBuild.travelNoteRepeatEnabled = { keenEdge: true };
+  assert.ok(runtime.availableTravelNotes(repeatedBuild).some((note) => note.id === "keenEdge"));
 });
 
 test("stat travel notes apply exact additive rank totals", () => {
   const run = survivor.createRun(new Set(), "travel-note-stats");
   const baseLife = run.player.maxLife;
   for (let rank = 0; rank < 4; rank += 1) applyNote(run, "keenEdge");
-  for (let rank = 0; rank < 3; rank += 1) applyNote(run, "gatheringWind");
-  for (let rank = 0; rank < 2; rank += 1) applyNote(run, "lightStep");
+  for (let rank = 0; rank < 4; rank += 1) applyNote(run, "gatheringWind");
+  for (let rank = 0; rank < 4; rank += 1) applyNote(run, "lightStep");
   run.player.life = 1;
   applyNote(run, "paperWard");
   applyNote(run, "paperWard");
   assert.ok(Math.abs(run.player.powerMultiplier - 1.24) < 1e-9);
-  assert.ok(Math.abs(run.player.magnetMultiplier - 1.54) < 1e-9);
-  assert.ok(Math.abs(run.player.speedMultiplier - 1.1) < 1e-9);
+  assert.ok(Math.abs(run.player.magnetMultiplier - 1.72) < 1e-9);
+  assert.ok(Math.abs(run.player.speedMultiplier - 1.2) < 1e-9);
   assert.equal(run.player.maxLife, baseLife + 2);
   assert.equal(run.player.life, 3);
 });
@@ -431,7 +409,7 @@ test("completed notes convert further levels to surplus pages without modals", (
   run.build = masteredBuild(
     MASTERED_WITH_DURATION,
     Object.fromEntries(
-      runtime.TRAVEL_NOTE_DEFINITIONS.map((note) => [note.id, note.maxRank]),
+      runtime.TRAVEL_NOTE_DEFINITIONS.map((note) => [note.id, note.masteryRank]),
     ),
   );
   run.player.xp = 100;
@@ -440,4 +418,45 @@ test("completed notes convert further levels to surplus pages without modals", (
   assert.ok(run.surplusPages > 0);
   assert.equal(survivor.getUpgradeChoices(run).length, 0);
   assert.equal(survivor.snapshotRun(run).surplusPages, run.surplusPages);
+});
+
+test("continued notes stay monotone and bounded at ranks 5, 20, and 100", () => {
+  const effect = runtime.resolveTravelNoteEffect;
+  const ranks = [4, 5, 20, 100];
+  for (const id of runtime.TRAVEL_NOTE_DEFINITIONS.map((note) => note.id)) {
+    for (const rank of ranks) {
+      const resolved = effect(id, rank);
+      assert.ok(Object.values(resolved).every((value) => !Number.isNaN(value)), `${id}@${rank}`);
+      assert.ok(resolved.attackIntervalMultiplier >= 0.7);
+      assert.ok(resolved.speedMultiplier <= 1.3 + 1e-9);
+      assert.ok(resolved.durationMultiplier <= 1.9 + 1e-9);
+      assert.ok(resolved.extraInvulnerability <= 0.9 + 1e-9);
+      assert.ok(resolved.stepBackRadius <= 300 + 1e-9);
+      assert.ok(resolved.stepBackCooldown >= 2 - 1e-9);
+      assert.ok(resolved.pickupMendRequirement >= 1 - 1e-9);
+    }
+  }
+  const quick = runtime.describeTravelNoteStep("quickHands", 4, {
+    fastestWeaponName: "漆木算盘",
+    fastestWeaponInterval: 0.3,
+  });
+  assert.match(quick.sentence, /漆木算盘/);
+  assert.doesNotMatch(quick.sentence, /减少0秒/);
+  assert.ok(effect("keenEdge", 100).damageMultiplier < 1.361);
+  assert.ok(effect("longReach", 100).rangeMultiplier < 1.601);
+  assert.ok(effect("gatheringWind", 100).magnetMultiplier < 2.081);
+});
+
+test("each mastered note returns independently only when its continuation switch is on", () => {
+  const mastered = Object.fromEntries(
+    runtime.TRAVEL_NOTE_DEFINITIONS.map((note) => [note.id, note.masteryRank]),
+  );
+  const build = masteredBuild(MASTERED_WITH_DURATION, mastered);
+  build.travelNoteRepeatEnabled = { quickHands: true, paperWard: false };
+  const available = runtime.availableTravelNotes(build);
+  assert.deepEqual(available.map((note) => note.id), ["quickHands"]);
+  assert.equal(
+    runtime.generateTravelNoteOptions(build, runtime.createRngState("repeat-one")).options[0]?.travelNoteId,
+    "quickHands",
+  );
 });

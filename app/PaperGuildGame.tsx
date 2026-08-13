@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   loadMinimumArtAssets,
   preloadSeasonSceneAssets,
@@ -28,6 +28,7 @@ import {
   ENDLESS_BOSS_IDS,
   getCelestialIntrusion,
   getEndlessPerkDefinition,
+  getTravelNoteDefinition,
   getWeaponDefinition,
   type DifficultyId,
   type EndlessBossId,
@@ -36,6 +37,7 @@ import {
   type EndlessPerkPairId,
   type FusionId,
   type UpgradeOption,
+  type TravelNoteId,
   type WeaponId,
   type WeaponRouteId,
   type WeaponState,
@@ -43,7 +45,10 @@ import {
   type WeaveState,
   WEAPON_IDS,
 } from "./game/content";
+import type { GuideSectionId } from "./game/help/model";
 import { finishHumanForm } from "./game/form";
+
+const GuideOverlay = lazy(() => import("./game/help/GuideOverlay"));
 import {
   drawMenuPreview,
   drawRun,
@@ -66,6 +71,7 @@ import {
   spawnEndlessBossForTest,
   STANDARD_SECONDS,
   setPrimaryWeapon,
+  setTravelNoteRepeatEnabled,
   settleRunProgression,
   startEndless,
   stepRun,
@@ -298,6 +304,8 @@ const emptySnapshot: RunSnapshot = {
   terminalLabelLife: 0,
   primaryWeaponValid: false,
   availablePrimaryWeaponIds: ["sword"],
+  travelNotes: {},
+  travelNoteRepeatEnabled: {},
   primaryWeaponRule:
     "主武器须是当前持有的一把非走马灯武器；走马灯只照样它最近一次完整核心攻击。",
 };
@@ -309,14 +317,14 @@ const TRIAL_DEFINITIONS: Array<{
 }> = [
   { id: "swift", name: "疾行", description: "敌人转向与移动更快" },
   { id: "crowd", name: "聚众", description: "每波敌群数量提高" },
-  { id: "elite", name: "强敌", description: "精英和 Boss 更坚韧" },
-  { id: "bossRush", name: "Boss更勤", description: "无尽 Boss 预算提高四成" },
+  { id: "elite", name: "强敌", description: "精英和首领更坚韧" },
+  { id: "bossRush", name: "首领更勤", description: "无尽中的首领来得更勤" },
   { id: "noRecovery", name: "无恢复", description: "所有生命恢复归零" },
   { id: "thinPower", name: "威力降低", description: "玩家威力降至八成八" },
   {
     id: "allAtOnce",
     name: "齐出手",
-    description: "普通怪恢复高一档招式，并增加两个技能槽",
+    description: "普通怪会更频繁地使出完整招式",
   },
 ];
 
@@ -828,6 +836,7 @@ export function PaperGuildGame() {
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(initialAudioSettings);
   const [trialsUnlocked, setTrialsUnlocked] = useState(false);
   const [tutorialNonce, setTutorialNonce] = useState(0);
+  const [guideSection, setGuideSection] = useState<GuideSectionId | null>(null);
 
   const setMode = useCallback((next: Mode) => {
     modeRef.current = next;
@@ -1818,6 +1827,16 @@ export function PaperGuildGame() {
     settleAfterBuildChoice(run);
   };
 
+  const toggleTravelNoteContinuation = (
+    noteId: TravelNoteId,
+    enabled: boolean,
+  ) => {
+    const run = runRef.current;
+    if (!run) return;
+    setTravelNoteRepeatEnabled(run, noteId, enabled);
+    setSnapshot(snapshotRun(run));
+  };
+
   const chooseRare = (choice: RareChoice["id"]) => {
     const run = runRef.current;
     if (!run) return;
@@ -2178,9 +2197,9 @@ export function PaperGuildGame() {
     joystickRef.current.pointerId = -1;
   };
 
-  const showForgePreview = (preview: ForgePreview) => {
+  const showForgePreview = (preview: ForgePreview, openRing = true) => {
     setForgePreview(preview);
-    setForgeMobileView("ring");
+    if (openRing) setForgeMobileView("ring");
     ringMoveRef.current = null;
     setRingMove(null);
   };
@@ -2250,7 +2269,7 @@ export function PaperGuildGame() {
       description:
         cost === 1
           ? `${definition.pairLabel}相邻，直接合器并空出一格。`
-          : `${definition.pairLabel}不相邻：自动采用最短调位，再完成合器。`,
+          : `${definition.pairLabel}不相邻，将沿较近位置归拢后合器（共 2 火）。`,
       cost,
       before: deriveWeaveTerminal(weave).name,
       after: deriveWeaveTerminal(result.state).name,
@@ -2465,15 +2484,19 @@ export function PaperGuildGame() {
     }
   };
 
-  const previewInsert = () => {
+  const previewInsert = (
+    weaponId = insertWeaponId,
+    routeId = insertRouteId,
+    afterIndex = insertAfter,
+  ) => {
     const run = runRef.current;
-    if (!run?.weave || !insertWeaponId || !insertRouteId) return;
+    if (!run?.weave || !weaponId || !routeId) return;
     const weaponState: WeaponState = {
-      id: insertWeaponId,
+      id: weaponId,
       level: 3,
-      routeId: insertRouteId,
+      routeId,
     };
-    const result = insertWeaponNode(run.weave, weaponState, insertAfter);
+    const result = insertWeaponNode(run.weave, weaponState, afterIndex);
     if (!result.ok) {
       setForgeMessage(
         result.reason === "node-capacity"
@@ -2483,22 +2506,22 @@ export function PaperGuildGame() {
       play("sfx.ui-back");
       return;
     }
-    const definition = getWeaponDefinition(insertWeaponId);
+    const definition = getWeaponDefinition(weaponId);
     const route = definition.routes.find(
-      (candidate) => candidate.id === insertRouteId,
+      (candidate) => candidate.id === routeId,
     );
     showForgePreview({
       kind: "insert",
       title: `添器 · ${definition.name}`,
       description: `以「${route?.name ?? "既定改法"}」插入${
-        insertAfter < 0 ? "盘首" : `「${run.weave.nodes[insertAfter]?.name}」之后`
+        afterIndex < 0 ? "盘首" : `「${run.weave.nodes[afterIndex]?.name}」之后`
       }。`,
       cost: 1,
       before: deriveWeaveTerminal(run.weave).name,
       after: deriveWeaveTerminal(result.state).name,
       weave: result.state,
-    });
-    setForgeMessage("新武器的位置与改法已排好，确认后才会消耗炉火。");
+    }, false);
+    setForgeMessage("新武器的位置与改法已排好；落锤后消耗一火。");
   };
 
   const previewTemper = (offer: TemperForgeOffer) => {
@@ -2524,8 +2547,8 @@ export function PaperGuildGame() {
       before: deriveWeaveTerminal(run.weave).name,
       after: deriveWeaveTerminal(nextWeave).name,
       weave: nextWeave,
-    });
-    setForgeMessage("做细预览已生成，确认后推进一阶。");
+    }, false);
+    setForgeMessage("下一阶做法已排好；落锤后推进一阶。");
   };
 
   const previewCelestial = () => {
@@ -2635,7 +2658,7 @@ export function PaperGuildGame() {
       try {
         await syncRunVisuals(run);
       } catch {
-        setForgeMessage("器盘已经写入；个别美工素材将在战斗中继续补载。");
+        setForgeMessage("器盘已定，余火仍可留用。");
       }
       play(
         preview.kind === "fusion"
@@ -2750,8 +2773,7 @@ export function PaperGuildGame() {
         focusForgeControl(".forge-primary-picker select");
         return;
       case "returnToPreview":
-        setForgeMobileView("ring");
-        focusForgeControl(".forge-confirm:not(:disabled)");
+        confirmForgePreview();
         return;
       case "discardPreview":
         setForgePreview(null);
@@ -2930,7 +2952,14 @@ export function PaperGuildGame() {
             <div className="hud-top">
               <div className="status-card">
                 <div className="status-line">
-                  <span>纸命 <b className="hearts">{"◆".repeat(Math.max(0, snapshot.life))}{"◇".repeat(Math.max(0, snapshot.maxLife - snapshot.life))}</b></span>
+                  <span>
+                    纸命{" "}
+                    <b className="hearts">
+                      {snapshot.maxLife > 10
+                        ? `◆×${Math.max(0, snapshot.life)} / ${snapshot.maxLife}`
+                        : `${"◆".repeat(Math.max(0, snapshot.life))}${"◇".repeat(Math.max(0, snapshot.maxLife - snapshot.life))}`}
+                    </b>
+                  </span>
                   <strong>等级 {snapshot.level}</strong>
                 </div>
                 <div className="xp-track" aria-label="经验进度">
@@ -3032,21 +3061,10 @@ export function PaperGuildGame() {
         {mode === "menu" && (
           <div className="overlay menu">
             <div className="menu-panel">
-              <p className="kicker"><span className="seal">百工</span> 水墨绘本 · 剪纸肉鸽</p>
+              <p className="kicker"><span className="seal">百工</span> 一人一卷 · 四时百工</p>
               <h1 className="title">纸上<span>百工</span></h1>
               <p className="subtitle">
-                清俊纸旅人携十般百工器物走过二十四节气。只需移动，让「拿到、做细、改法、再磨、定型」与器盘自然接成一局。
-              </p>
-              <div className="feature-row">
-                <span>10 把本命器</span>
-                <span>30 种改法</span>
-                <span>12 套搭手</span>
-                <span>45 件合器</span>
-                <span>32 新页 · 64 分支 · 16 合页</span>
-                <span>二十四节气</span>
-              </div>
-              <p className="tao-note">
-                少量道门元素只放在「五雷木令、伞骨接雷、弦尾落雷、雷部天变与法铃音色」，其余仍是市井百工与岁时行旅。
+                只需移动，器物自会寻敌。八分钟走过四时，击退年兽后收卷，或续入无尽。
               </p>
               <label className="initial-weapon-select">
                 <span>开卷武器</span>
@@ -3100,7 +3118,10 @@ export function PaperGuildGame() {
               </div>
               <div className="button-row">
                 <button className="primary-button" onClick={startGame} disabled={!assetsReady}>
-                  {assetsReady ? "展卷启程" : `美工图集装订中 ${loadProgress}%`}
+                  {assetsReady ? "展卷启程" : `卷页装订中 ${loadProgress}%`}
+                </button>
+                <button className="secondary-button" onClick={() => setGuideSection("start")}>
+                  百工手册
                 </button>
                 <button
                   className="secondary-button"
@@ -3109,8 +3130,8 @@ export function PaperGuildGame() {
                   {audioSettings.muted ? "开启声音" : "声音已开"}
                 </button>
               </div>
-              <div className="trial-area">
-                <p className="trial-label">{trialsUnlocked ? "试炼签 · 可叠加" : "首次收卷后解锁试炼签"}</p>
+              <details className="trial-area menu-trials">
+                <summary>{trialsUnlocked ? "试炼签（可叠加）" : "首次收卷后解锁试炼签"}</summary>
                 <div className="trials">
                   {TRIAL_DEFINITIONS.map((trial) => (
                     <button
@@ -3124,7 +3145,7 @@ export function PaperGuildGame() {
                     </button>
                   ))}
                 </div>
-              </div>
+              </details>
             </div>
           </div>
         )}
@@ -3146,9 +3167,45 @@ export function PaperGuildGame() {
               <p className="upgrade-note">
                 {upgradeOptions[0]?.kind === "utility" &&
                 upgradeOptions[0].travelNoteId
-                  ? "三张牌依次照顾器用、行路与护身；已满阶或本局不能生效的札记不会出现。"
-                  : "第三阶固定同时展示三种改法，第五阶固定展示两种定型；选择后本局不可反悔。"}
+                  ? "三张牌依次照顾器用、行路与护身。四阶精通后，可自行决定哪些札记继续收入牌池。"
+                  : "武器到3/5时选一种改法，到5/5时从两种定型中择一；本局选定后不再更改。"}
               </p>
+              <button
+                className="context-guide-link"
+                onClick={() => setGuideSection(
+                  upgradeOptions[0]?.kind === "utility" && upgradeOptions[0].travelNoteId
+                    ? "progression"
+                    : "weapons",
+                )}
+              >
+                查看这一步的规则
+              </button>
+              {upgradeOptions.some(
+                (option) => option.kind === "utility" && Boolean(option.travelNoteId),
+              ) && (
+                <details className="travel-note-repeat-panel">
+                  <summary>已精通札记 · 继续收录</summary>
+                  <p>开关只影响后续牌面，不撤销已经获得的效果。未选札记仍会更常出现。</p>
+                  <div className="travel-note-repeat-grid">
+                    {Object.entries(snapshot.travelNotes)
+                      .filter(([, rank]) => Number(rank ?? 0) >= 4)
+                      .map(([noteId, rank]) => {
+                        const id = noteId as TravelNoteId;
+                        return (
+                          <label key={id}>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(snapshot.travelNoteRepeatEnabled[id])}
+                              onChange={(event) => toggleTravelNoteContinuation(id, event.target.checked)}
+                            />
+                            <span>{getTravelNoteDefinition(id).name}</span>
+                            <small>已精通 · 续记 {Math.max(0, Number(rank) - 4)}</small>
+                          </label>
+                        );
+                      })}
+                  </div>
+                </details>
+              )}
               {lanternHeld && (
                 <label className="initial-weapon-select">
                   <span>走马灯照样对象</span>
@@ -3284,14 +3341,16 @@ export function PaperGuildGame() {
                         <div
                           className="stage-progress travel-note-progress"
                           role="img"
-                          aria-label={`当前 ${option.currentRank ?? 0}/${option.maxRank ?? 0} 阶，选择后 ${option.nextRank ?? 1}/${option.maxRank ?? 0} 阶`}
+                          aria-label={`当前 ${option.currentRank ?? 0} 阶，选择后 ${option.nextRank ?? 1} 阶；四阶精通`}
                         >
                           <span>
-                            当前 {option.currentRank ?? 0}/{option.maxRank ?? 0}
+                            {Number(option.currentRank ?? 0) >= Number(option.masteryRank ?? 4)
+                              ? `已精通 · 续记 ${Math.max(0, Number(option.currentRank ?? 0) - Number(option.masteryRank ?? 4))}`
+                              : `当前 ${option.currentRank ?? 0}/${option.masteryRank ?? 4}`}
                           </span>
                           <span className="travel-note-arrow" aria-hidden="true">→</span>
                           <span>
-                            选择后 {option.nextRank ?? 1}/{option.maxRank ?? 0}
+                            选择后 {option.nextRank ?? 1} 阶
                           </span>
                         </div>
                       )}
@@ -3445,7 +3504,7 @@ export function PaperGuildGame() {
                 <small>
                   {selectedRareAdvance
                     ? `当前武器·${selectedRareAdvance.weaponName}　当前 ${selectedRareAdvance.currentLevel}/5 → 选择后 ${selectedRareAdvance.nextLevel}/5`
-                    : "“趁热做细”不会替你随机选择改法或定型。"}
+                    : "改法或定型仍由你选定。"}
                 </small>
               </label>
               <div className="upgrade-grid">
@@ -3742,7 +3801,7 @@ export function PaperGuildGame() {
                                   className={insertRouteId === route.id ? "active" : ""}
                                   onClick={() => {
                                     setInsertRouteId(route.id);
-                                    setForgePreview(null);
+                                    previewInsert(insertWeaponId, route.id, insertAfter);
                                   }}
                                 >
                                   <i
@@ -3765,8 +3824,9 @@ export function PaperGuildGame() {
                                 <select
                                   value={insertAfter}
                                   onChange={(event) => {
-                                    setInsertAfter(Number(event.target.value));
-                                    setForgePreview(null);
+                                    const nextAfter = Number(event.target.value);
+                                    setInsertAfter(nextAfter);
+                                    previewInsert(insertWeaponId, insertRouteId, nextAfter);
                                   }}
                                 >
                                   <option value={-1}>盘首</option>
@@ -3777,15 +3837,11 @@ export function PaperGuildGame() {
                                   ))}
                                 </select>
                               </label>
-                              <button
-                                className="forge-insert-preview"
-                                onClick={previewInsert}
-                                disabled={!insertRouteId}
-                              >
+                              <div className={`forge-insert-preview ${insertRouteId ? "ready" : ""}`}>
                                 {insertRouteId
-                                  ? "查看添器预览 · 1 火"
+                                  ? "已自动排好 · 落锤添入 1 火"
                                   : "先选一种改法"}
-                              </button>
+                              </div>
                             </div>
                           </div>
                         )}
@@ -4117,14 +4173,14 @@ export function PaperGuildGame() {
               </div>
               <footer className="forge-footer">
                 <div className={`forge-footer-preview ${forgePreview ? "ready" : ""}`} aria-live="polite">
-                  <span>{forgePreview ? "预览已排好" : "尚未预览"}</span>
-                  <strong>{forgePreview?.title ?? "从操作页选择一项变化"}</strong>
+                  <span>{forgePreview ? "改动已排好" : "尚未选择改动"}</span>
+                  <strong>{forgePreview?.title ?? "从操作页选择一项做法"}</strong>
                   <small>
                     {forgePreview
                       ? forgePreview.cost === 0
-                        ? "本次不耗炉火；确认后写入器盘。"
-                        : `需要 ${forgePreview.cost} 火；确认后写入器盘。`
-                      : "所有变化都先预览，确认后才扣炉火。"}
+                        ? "本次不耗炉火；落锤后生效。"
+                        : `需要 ${forgePreview.cost} 火；落锤后生效。`
+                      : "添器与做细会随选择自动排好；其余做法在落锤前核对一次。"}
                   </small>
                 </div>
                 <div className="forge-footer-actions">
@@ -4133,7 +4189,7 @@ export function PaperGuildGame() {
                     onClick={cancelForgePreview}
                     disabled={!forgePreview || forgeConfirming}
                   >
-                    取消预览
+                    舍下改动
                   </button>
                   <button
                     className="primary-button compact forge-confirm"
@@ -4147,12 +4203,16 @@ export function PaperGuildGame() {
                     {forgeConfirming
                       ? "正在落锤"
                       : !forgePreview
-                      ? "等待预览"
+                      ? "等待选择"
                       : forgeFire < forgePreview.cost
                         ? "炉火不足"
                         : forgePreview.cost === 0
                           ? "确认炼成"
-                          : "确认落锤"}
+                          : forgePreview.kind === "insert"
+                            ? `添入器盘 · ${forgePreview.cost} 火`
+                            : forgePreview.kind === "temper"
+                              ? `做细 · ${forgePreview.cost} 火`
+                              : "确认落锤"}
                   </button>
                   <button
                     className="secondary-button forge-close"
@@ -4200,6 +4260,18 @@ export function PaperGuildGame() {
                         正在写入器盘……
                       </div>
                     )}
+                    <button
+                      className="forge-blocker-guide"
+                      onClick={() => setGuideSection(
+                        forgeExitBlocker.state === "celestialRewardPending"
+                          ? "celestials"
+                          : forgeExitBlocker.state === "needsPerk" || forgeExitBlocker.state === "needsPairReplacement"
+                            ? "perk-book"
+                            : "endless",
+                      )}
+                    >
+                      查看这条规则
+                    </button>
                   </section>
                 </div>
               )}
@@ -4228,7 +4300,7 @@ export function PaperGuildGame() {
                 卷轴暂歇
               </p>
               <h2>行旅未完</h2>
-              <p>角色已强制展开成人形，恢复后不会卡在折叠中途。</p>
+              <p>纸偶在卷边稍息，续行时从人形起步。</p>
               <div className="audio-settings">
                 <label>
                   <span>音乐</span>
@@ -4377,6 +4449,9 @@ export function PaperGuildGame() {
                 <button className="secondary-button" onClick={() => updateAudio({ muted: !audioSettings.muted })}>
                   {audioSettings.muted ? "取消静音" : "静音"}
                 </button>
+                <button className="secondary-button" onClick={() => setGuideSection("start")}>
+                  百工手册
+                </button>
                 <button className="secondary-button" onClick={returnToMenu}>弃卷返回</button>
               </div>
             </section>
@@ -4439,6 +4514,11 @@ export function PaperGuildGame() {
               </div>
             </section>
           </div>
+        )}
+        {guideSection && (
+          <Suspense fallback={<div className="guide-loading">手册展卷中……</div>}>
+            <GuideOverlay section={guideSection} onClose={() => setGuideSection(null)} />
+          </Suspense>
         )}
       </section>
       <aside className="rotate-hint">请将手机横置，给四时绘卷留出完整战场。</aside>

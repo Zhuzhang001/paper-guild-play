@@ -49,11 +49,14 @@ test("lantern rule is compact and no longer borrows the expanding guide", () => 
   assert.match(forgeCss, /\.forge-primary-rule \{[\s\S]*?flex: none;/);
 });
 
-test("preview actions stay in the footer and preview switches to the ring page", () => {
+test("insert and temper drafts stay on the operation page and confirm once in the footer", () => {
   assert.match(
     game,
-    /const showForgePreview = \(preview: ForgePreview\) => \{[\s\S]*?setForgeMobileView\("ring"\)/,
+    /const showForgePreview = \(preview: ForgePreview, openRing = true\) => \{[\s\S]*?if \(openRing\) setForgeMobileView\("ring"\)/,
   );
+  assert.match(game, /showForgePreview\(\{[\s\S]*?kind: "insert"[\s\S]*?\}, false\)/);
+  assert.match(game, /showForgePreview\(\{[\s\S]*?kind: "temper"[\s\S]*?\}, false\)/);
+  assert.doesNotMatch(game, /查看添器预览/);
   assert.match(
     game,
     /<div className="forge-footer-actions">[\s\S]*?cancelForgePreview[\s\S]*?confirmForgePreview[\s\S]*?closeForge/,

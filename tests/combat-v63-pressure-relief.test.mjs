@@ -474,9 +474,9 @@ test("guards do not trigger relief, while travel-note life heals as the same lig
     slotCategory: paperWard.category,
     currentRank: 0,
     nextRank: 1,
-    maxRank: paperWard.maxRank,
+    masteryRank: paperWard.masteryRank,
     title: paperWard.name,
-    description: paperWard.rankEffects[0],
+    description: paperWard.description,
     artKey: paperWard.artKey,
   });
   assert.deepEqual(
@@ -725,7 +725,7 @@ test("settleRunProgression advances no combat state and stops at one player choi
     { id: "crossbow", level: 5, routeId: "crossbow:b", masteryId: "crossbow:b:focus" },
   ];
   complete.build.travelNotes = Object.fromEntries(
-    runtime.TRAVEL_NOTE_DEFINITIONS.map((note) => [note.id, note.maxRank]),
+    runtime.TRAVEL_NOTE_DEFINITIONS.map((note) => [note.id, note.masteryRank]),
   );
   complete.player.xp = 100;
   const surplusEvents = survivor.settleRunProgression(complete);

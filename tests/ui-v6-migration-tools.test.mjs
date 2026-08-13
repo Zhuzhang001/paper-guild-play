@@ -51,7 +51,7 @@ test("forge celestial nodes use authored atlas art instead of a text seal", () =
 });
 
 test("the three direct challenge slips are visible in the menu", () => {
-  assert.match(source, /id: "bossRush", name: "Boss更勤"/);
+  assert.match(source, /id: "bossRush", name: "首领更勤"/);
   assert.match(source, /id: "noRecovery", name: "无恢复"/);
   assert.match(source, /id: "thinPower", name: "威力降低"/);
 });

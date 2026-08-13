@@ -6,8 +6,6 @@ import type {
   RunModifierId,
   TravelNoteCategory,
   TravelNoteDefinition,
-  TravelNoteId,
-  TravelNoteRankState,
   UpgradeOption,
   WeaponId,
   WeaponLevel,
@@ -19,6 +17,12 @@ import {
   getWeaponRoute,
   WEAPON_IDS,
 } from "../content/weapons";
+import {
+  describeTravelNoteStep,
+  getTravelNoteRank,
+  TRAVEL_NOTE_CATEGORIES,
+  TRAVEL_NOTE_DEFINITIONS,
+} from "../content/travelNotes";
 import { randomInt, sampleDeterministic, type RngState } from "./rng";
 
 export type UpgradeGenerationConfig = {
@@ -40,188 +44,21 @@ export type UpgradeGenerationResult = {
   weaponId?: WeaponId;
 };
 
-export const TRAVEL_NOTE_CATEGORIES: readonly TravelNoteCategory[] = [
-  "craft",
-  "journey",
-  "protection",
-] as const;
-
-export const TRAVEL_NOTE_DEFINITIONS: readonly TravelNoteDefinition[] = [
-  {
-    id: "keenEdge",
-    name: "砺锋",
-    category: "craft",
-    maxRank: 4,
-    description: "逐阶打磨器锋，提高所有基础伤害。",
-    rankEffects: ["基础伤害 +6%", "基础伤害 +12%", "基础伤害 +18%", "基础伤害 +24%"],
-    requirements: [],
-    artKey: "upgrade/travel-note-keen-edge",
-  },
-  {
-    id: "quickHands",
-    name: "顺手",
-    category: "craft",
-    maxRank: 3,
-    description: "收紧现有核心攻击的节拍，不另开攻击计时。",
-    rankEffects: ["核心攻击间隔 -5%", "核心攻击间隔 -10%", "核心攻击间隔 -15%"],
-    requirements: [],
-    artKey: "upgrade/travel-note-quick-hands",
-  },
-  {
-    id: "longReach",
-    name: "放远",
-    category: "craft",
-    maxRank: 2,
-    description: "延伸弹体、扫击、光束与区域的作用距离。",
-    rankEffects: ["作用距离 +10%", "作用距离 +20%"],
-    requirements: [],
-    artKey: "upgrade/travel-note-long-reach",
-  },
-  {
-    id: "lastingWork",
-    name: "久留",
-    category: "craft",
-    maxRank: 2,
-    description: "让召唤物与驻留区域在场上维持更久。",
-    rankEffects: ["召唤物与驻留区域时间 +15%", "召唤物与驻留区域时间 +30%"],
-    requirements: ["durationWeapon"],
-    artKey: "upgrade/travel-note-lasting-work",
-  },
-  {
-    id: "gatheringWind",
-    name: "聚风",
-    category: "journey",
-    maxRank: 3,
-    description: "扩大纸结感应范围，并加快吸附。",
-    rankEffects: ["经验吸附范围与速度 +18%", "经验吸附范围与速度 +36%", "经验吸附范围与速度 +54%"],
-    requirements: [],
-    artKey: "upgrade/travel-note-gathering-wind",
-  },
-  {
-    id: "lightStep",
-    name: "轻脚",
-    category: "journey",
-    maxRank: 2,
-    description: "让行路脚步更轻快。",
-    rankEffects: ["移动速度 +5%", "移动速度 +10%"],
-    requirements: [],
-    artKey: "upgrade/travel-note-light-step",
-  },
-  {
-    id: "mergePearls",
-    name: "并珠",
-    category: "journey",
-    maxRank: 2,
-    description: "更早归并散落纸结，并加强合并纸结的吸附。",
-    rankEffects: ["归并阈值 92 → 72，合并纸结吸附增强", "归并阈值 72 → 56，合并纸结吸附再次增强"],
-    requirements: [],
-    artKey: "upgrade/travel-note-merge-pearls",
-  },
-  {
-    id: "turningMomentum",
-    name: "转身借力",
-    category: "journey",
-    maxRank: 2,
-    description: "急转后令下一次核心攻击重新索敌并补发45%回响。",
-    rankEffects: ["回响冷却 6 秒", "回响冷却 6 → 4 秒"],
-    requirements: [],
-    artKey: "upgrade/travel-note-turning-momentum",
-  },
-  {
-    id: "paperWard",
-    name: "护纸",
-    category: "protection",
-    maxRank: 2,
-    description: "增加一命并立即恢复一命。",
-    rankEffects: ["生命上限 +1，并恢复 1 命", "生命上限再 +1，并恢复 1 命"],
-    requirements: ["notOneLife"],
-    artKey: "upgrade/travel-note-paper-ward",
-  },
-  {
-    id: "slowPaper",
-    name: "缓纸",
-    category: "protection",
-    maxRank: 2,
-    description: "延长受击后的安全间隙。",
-    rankEffects: ["受击无敌时间 +0.15 秒", "受击无敌时间 +0.30 秒"],
-    requirements: [],
-    artKey: "upgrade/travel-note-slow-paper",
-  },
-  {
-    id: "stepBack",
-    name: "退一步",
-    category: "protection",
-    maxRank: 2,
-    description: "受击时推开身边的非Boss敌人。",
-    rankEffects: ["推开 100px 内敌人，冷却 8 秒", "推开 140px 内敌人，冷却 6 秒"],
-    requirements: [],
-    artKey: "upgrade/travel-note-step-back",
-  },
-  {
-    id: "pickupMend",
-    name: "拾补",
-    category: "protection",
-    maxRank: 2,
-    description: "拾取足够多的朱砂纸结后生成恢复叶。",
-    rankEffects: ["每拾取 8 枚朱砂纸结生成恢复叶", "每拾取 6 枚朱砂纸结生成恢复叶"],
-    requirements: ["notOneLife", "recoveryEnabled"],
-    artKey: "upgrade/travel-note-pickup-mend",
-  },
-] as const;
-
-const TRAVEL_NOTE_BY_ID = new Map(
-  TRAVEL_NOTE_DEFINITIONS.map((definition) => [definition.id, definition]),
-);
-
-export function getTravelNoteDefinition(id: TravelNoteId): TravelNoteDefinition {
-  const definition = TRAVEL_NOTE_BY_ID.get(id);
-  if (!definition) throw new Error(`Unknown travel note ${id}`);
-  return definition;
-}
-
-export function getTravelNoteRank(
-  buildOrRanks: CombatBuild | TravelNoteRankState | undefined,
-  id: TravelNoteId,
-): number {
-  if (!buildOrRanks) return 0;
-  const ranks = "weapons" in buildOrRanks
-    ? buildOrRanks.travelNotes
-    : buildOrRanks;
-  return Math.max(0, Math.floor(ranks?.[id] ?? 0));
-}
-
-const UTILITY_OPTIONS: readonly UpgradeOption[] = [
-  {
-    id: "utility-paper-ward",
-    kind: "utility",
-    modifierId: "paperWard",
-    title: "护纸",
-    description: "获得一层可叠加的受击缓冲。",
-    artKey: "upgrade/utility-paper-ward",
-  },
-  {
-    id: "utility-keen-edge",
-    kind: "utility",
-    modifierId: "keenEdge",
-    title: "砺锋",
-    description: "所有武器的基础伤害获得小幅提高。",
-    artKey: "upgrade/utility-keen-edge",
-  },
-  {
-    id: "utility-gathering-wind",
-    kind: "utility",
-    modifierId: "gatheringWind",
-    title: "聚风",
-    description: "提高经验物吸附距离与吸附速度。",
-    artKey: "upgrade/utility-gathering-wind",
-  },
-];
+export {
+  describeTravelNoteStep,
+  getTravelNoteDefinition,
+  getTravelNoteRank,
+  resolveTravelNoteEffect,
+  TRAVEL_NOTE_CATEGORIES,
+  TRAVEL_NOTE_DEFINITIONS,
+} from "../content/travelNotes";
 
 export function createCombatBuild(initialWeaponId: WeaponId = "sword"): CombatBuild {
   return {
     weapons: [{ id: initialWeaponId, level: 1 }],
     modifiers: {},
     travelNotes: {},
+    travelNoteRepeatEnabled: {},
     synergyCapacity: 3,
   };
 }
@@ -342,7 +179,11 @@ export function availableTravelNotes(
 ): readonly TravelNoteDefinition[] {
   const durationWeapon = hasDurationWeapon(build);
   return TRAVEL_NOTE_DEFINITIONS.filter((definition) => {
-    if (getTravelNoteRank(build, definition.id) >= definition.maxRank) {
+    const rank = getTravelNoteRank(build, definition.id);
+    if (
+      rank >= definition.masteryRank &&
+      !build.travelNoteRepeatEnabled?.[definition.id]
+    ) {
       return false;
     }
     if (
@@ -378,6 +219,7 @@ function travelNoteOption(
 ): UpgradeOption {
   const currentRank = getTravelNoteRank(build, definition.id);
   const nextRank = currentRank + 1;
+  const step = describeTravelNoteStep(definition.id, currentRank);
   return {
     id: `travel-note-${definition.id}-${nextRank}`,
     kind: "utility",
@@ -387,9 +229,10 @@ function travelNoteOption(
     slotCategory,
     currentRank,
     nextRank,
-    maxRank: definition.maxRank,
+    masteryRank: definition.masteryRank,
+    repeatEnabled: Boolean(build.travelNoteRepeatEnabled?.[definition.id]),
     title: definition.name,
-    description: `当前 ${currentRank}/${definition.maxRank} 阶；选择后：${definition.rankEffects[nextRank - 1]}`,
+    description: `${currentRank >= definition.masteryRank ? "已精通 · 续记" : `当前 ${currentRank}/${definition.masteryRank}`}；${step.sentence}`,
     artKey: definition.artKey,
   };
 }
@@ -415,7 +258,13 @@ export function generateTravelNoteOptions(
     const matching = unused.filter(
       (definition) => definition.category === slotCategory,
     );
-    const picked = takeOne(matching.length > 0 ? matching : unused, currentState);
+    const pool = matching.length > 0 ? matching : unused;
+    const weighted = pool.flatMap((definition) => {
+      const rank = getTravelNoteRank(build, definition.id);
+      const weight = rank === 0 ? 4 : rank === 1 ? 3 : rank === 2 ? 2 : 1;
+      return Array.from({ length: weight }, () => definition);
+    });
+    const picked = takeOne(weighted, currentState);
     currentState = picked.rngState;
     if (!picked.value) continue;
     chosen.push(picked.value);
@@ -491,10 +340,17 @@ export function generateUpgradeOptions(
   }
 
   const used = new Set(guaranteed.map((option) => option.id));
+  const earlyTravelNotes = availableTravelNotes(build, config.travelNoteContext)
+    .filter((definition) =>
+      definition.id === "keenEdge" ||
+      definition.id === "gatheringWind" ||
+      definition.id === "paperWard"
+    )
+    .map((definition) => travelNoteOption(build, definition, definition.category));
   const remaining = [
     ...progressCandidates,
     ...acquireCandidates,
-    ...UTILITY_OPTIONS,
+    ...earlyTravelNotes,
   ].filter((option) => !used.has(option.id));
   const sampled = sampleDeterministic(
     remaining,
@@ -522,11 +378,7 @@ export function applyUpgradeOption(
 ): CombatBuild {
   if (option.kind === "utility") {
     if (option.travelNoteId) {
-      const definition = getTravelNoteDefinition(option.travelNoteId);
       const currentRank = getTravelNoteRank(build, option.travelNoteId);
-      if (currentRank >= definition.maxRank) {
-        throw new Error(`Travel note ${option.travelNoteId} is already complete`);
-      }
       return {
         ...build,
         travelNotes: {

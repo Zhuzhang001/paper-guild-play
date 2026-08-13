@@ -325,9 +325,9 @@ export type TravelNoteDefinition = {
   id: TravelNoteId;
   name: string;
   category: TravelNoteCategory;
-  maxRank: number;
+  /** Four ranks teach the complete note; later ranks are optional continuations. */
+  masteryRank: 4;
   description: string;
-  rankEffects: readonly string[];
   requirements: readonly TravelNoteRequirement[];
   artKey: string;
 };
@@ -335,6 +335,10 @@ export type TravelNoteDefinition = {
 /** Ranks are run-local. Missing keys are rank zero for save compatibility. */
 export type TravelNoteRankState = Readonly<
   Partial<Record<TravelNoteId, number>>
+>;
+
+export type TravelNoteOfferPreference = Readonly<
+  Partial<Record<TravelNoteId, boolean>>
 >;
 
 export type RunModifierId =
@@ -347,6 +351,8 @@ export type CombatBuild = {
   modifiers: Readonly<Partial<Record<RunModifierId, number>>>;
   /** Optional so v6 build snapshots without travel notes still hydrate. */
   travelNotes?: TravelNoteRankState;
+  /** Run-local: mastered notes return to the pool only when explicitly enabled. */
+  travelNoteRepeatEnabled?: TravelNoteOfferPreference;
   synergyCapacity: number;
 };
 
@@ -395,7 +401,8 @@ export type UpgradeOption =
       slotCategory?: TravelNoteCategory;
       currentRank?: number;
       nextRank?: number;
-      maxRank?: number;
+      masteryRank?: number;
+      repeatEnabled?: boolean;
       title: string;
       description: string;
       artKey: string;
