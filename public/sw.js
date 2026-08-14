@@ -1,5 +1,5 @@
 /* 纸上百工 v6.4：安装只装订页面壳，游戏资源由实际使用请求写入缓存。 */
-const VERSION = "paper-guild-v6.4.0";
+const VERSION = "paper-guild-v6.4.1";
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const SCOPE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, "");

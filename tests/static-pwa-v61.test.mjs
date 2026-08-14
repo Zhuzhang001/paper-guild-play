@@ -86,7 +86,7 @@ test("build identity is shared by both mirrors", async () => {
     text("app/publicAsset.ts"),
   ]);
   const version = JSON.parse(versionRaw);
-  assert.equal(version.version, "6.4.0");
-  assert.match(helper, /version:\s*"6\.4\.0"/);
+  assert.equal(version.version, "6.4.1");
+  assert.match(helper, /version:\s*"6\.4\.1"/);
   assert.equal(version.contentVersion, 6);
 });

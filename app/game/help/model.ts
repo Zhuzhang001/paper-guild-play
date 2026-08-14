@@ -49,8 +49,10 @@ export type GuideSection = {
   title: string;
   summary: string;
   paragraphs?: readonly string[];
+  exactParagraphs?: readonly string[];
   bullets?: readonly string[];
   table?: { columns: readonly string[]; rows: readonly GuideRow[] };
+  tableDetail?: "summary" | "exact";
   details?: readonly { title: string; body: readonly string[] }[];
   diagram?: "upgrade" | "fold" | "weave" | "curve";
   searchText: string;
@@ -294,14 +296,17 @@ const sections: GuideSection[] = [
     title: "无尽后期增长",
     summary: "进入无尽后的分钟数记为 m。高级怪概率先平缓增长，15 分钟后按对数曲线增加；80 分钟达到 98% 后不再提高。",
     paragraphs: [
-      "m < 15：p = 0.06 + 0.12m/15。m ≥ 15：p = min(0.98, 0.18 + 0.80×ln(1+(m−15)/18)/ln(1+65/18))。高级判定优先生成可用首领，否则生成精英。",
       `同屏真实敌人约 ${ENDLESS_RULES.entityCap} 封顶，未用威胁最多积压 10 秒。首领同屏上限：0–35 分钟 1 名，35–60 分钟 2 名，60 分钟后 3 名。`,
       `${ENDLESS_RULES.scalingBeginsMinutes}–${ENDLESS_RULES.scalingEndsMinutes} 分钟每 3 分钟加一级：生命每级 +4.5%，速度 +1%，行动速度 +1.8%；到 ${ENDLESS_RULES.frozenAfterMinutes} 分钟后冻结。单次命中最多扣 ${ENDLESS_RULES.maxHitDamage} 命。`,
+    ],
+    exactParagraphs: [
+      "m < 15：p = 0.06 + 0.12m/15。m ≥ 15：p = min(0.98, 0.18 + 0.80×ln(1+(m−15)/18)/ln(1+65/18))。高级判定优先生成可用首领，否则生成精英。",
     ],
     table: {
       columns: ["无尽分钟", "高级怪概率", "说明"],
       rows: [["0", "6%", "刚续卷"], ["15", "18%", "进入对数增长"], ["35", "约57%", "首领上限升至2"], ["45", "约69%", "后期增幅将开始"], ["60", "约84%", "首领上限升至3"], ["80", "98%", "概率与数值冻结"]],
     },
+    tableDetail: "exact",
     diagram: "curve",
     searchText: "无尽 增长 概率 对数 首领预算 150 48 78 80 冻结",
   },

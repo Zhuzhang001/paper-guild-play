@@ -268,6 +268,8 @@ type GamepadUiState = {
   repeatAt: number;
   confirm: boolean;
   cancel: boolean;
+  cancelStartedAt: number;
+  cancelLongTriggered: boolean;
   pause: boolean;
 };
 
@@ -757,11 +759,14 @@ export function PaperGuildGame() {
   const ringNodeRefs = useRef(new Map<string, HTMLButtonElement>());
   const ringMoveRef = useRef<RingMoveState | null>(null);
   const suppressRingClickRef = useRef(false);
+  const guideReturnFocusRef = useRef<HTMLElement | null>(null);
   const gamepadUiRef = useRef<GamepadUiState>({
     direction: 0,
     repeatAt: 0,
     confirm: false,
     cancel: false,
+    cancelStartedAt: 0,
+    cancelLongTriggered: false,
     pause: false,
   });
   const combatAudioRef = useRef({
@@ -841,6 +846,23 @@ export function PaperGuildGame() {
   const setMode = useCallback((next: Mode) => {
     modeRef.current = next;
     setModeState(next);
+  }, []);
+
+  const openGuide = useCallback((section: GuideSectionId) => {
+    guideReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setGuideSection(section);
+  }, []);
+
+  const closeGuide = useCallback(() => {
+    setGuideSection(null);
+    requestAnimationFrame(() => {
+      const target = guideReturnFocusRef.current;
+      guideReturnFocusRef.current = null;
+      if (target?.isConnected) target.focus({ preventScroll: true });
+    });
   }, []);
 
   useEffect(() => {
@@ -1447,6 +1469,10 @@ export function PaperGuildGame() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
+      if (guideSection) {
+        event.preventDefault();
+        return;
+      }
       if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(key)) {
         event.preventDefault();
       }
@@ -1508,6 +1534,7 @@ export function PaperGuildGame() {
     confirmSynergyChoice,
     endlessPerkChosen,
     endlessPerkOptions,
+    guideSection,
     pauseGame,
     play,
     refreshSnapshot,
@@ -1522,9 +1549,12 @@ export function PaperGuildGame() {
 
   const pollGamepadUi = useCallback((gamepad: Gamepad, time: number) => {
     const state = gamepadUiRef.current;
+    const guideModal = document.querySelector<HTMLElement>(".guide-shell.guide-overlay");
     const pausePressed = gamepad.buttons[9]?.pressed ?? false;
     if (pausePressed && !state.pause) {
-      if (modeRef.current === "playing") {
+      if (guideModal) {
+        guideModal.querySelector<HTMLButtonElement>("[data-guide-exit]")?.click();
+      } else if (modeRef.current === "playing") {
         pauseGame();
       } else if (modeRef.current === "paused") {
         resumePausedRun();
@@ -1548,7 +1578,7 @@ export function PaperGuildGame() {
       return;
     }
 
-    const modal = document.querySelector<HTMLElement>(
+    const modal = guideModal ?? document.querySelector<HTMLElement>(
       modeRef.current === "menu" ? ".overlay.menu" : ".modal-shade",
     );
     const controls = modal
@@ -1590,7 +1620,21 @@ export function PaperGuildGame() {
     state.confirm = confirmPressed;
 
     const cancelPressed = gamepad.buttons[1]?.pressed ?? false;
-    if (cancelPressed && !state.cancel) {
+    if (guideModal) {
+      if (cancelPressed && !state.cancel) {
+        state.cancelStartedAt = time;
+        state.cancelLongTriggered = false;
+      } else if (
+        cancelPressed &&
+        !state.cancelLongTriggered &&
+        time - state.cancelStartedAt >= 650
+      ) {
+        guideModal.querySelector<HTMLButtonElement>("[data-guide-exit]")?.click();
+        state.cancelLongTriggered = true;
+      } else if (!cancelPressed && state.cancel && !state.cancelLongTriggered) {
+        guideModal.querySelector<HTMLButtonElement>("[data-gamepad-cancel]")?.click();
+      }
+    } else if (cancelPressed && !state.cancel) {
       modal?.querySelector<HTMLButtonElement>("[data-gamepad-cancel]")?.click();
     }
     state.cancel = cancelPressed;
@@ -3120,7 +3164,7 @@ export function PaperGuildGame() {
                 <button className="primary-button" onClick={startGame} disabled={!assetsReady}>
                   {assetsReady ? "展卷启程" : `卷页装订中 ${loadProgress}%`}
                 </button>
-                <button className="secondary-button" onClick={() => setGuideSection("start")}>
+                <button className="secondary-button" onClick={() => openGuide("start")}>
                   百工手册
                 </button>
                 <button
@@ -3172,7 +3216,7 @@ export function PaperGuildGame() {
               </p>
               <button
                 className="context-guide-link"
-                onClick={() => setGuideSection(
+                onClick={() => openGuide(
                   upgradeOptions[0]?.kind === "utility" && upgradeOptions[0].travelNoteId
                     ? "progression"
                     : "weapons",
@@ -4262,7 +4306,7 @@ export function PaperGuildGame() {
                     )}
                     <button
                       className="forge-blocker-guide"
-                      onClick={() => setGuideSection(
+                      onClick={() => openGuide(
                         forgeExitBlocker.state === "celestialRewardPending"
                           ? "celestials"
                           : forgeExitBlocker.state === "needsPerk" || forgeExitBlocker.state === "needsPairReplacement"
@@ -4449,7 +4493,7 @@ export function PaperGuildGame() {
                 <button className="secondary-button" onClick={() => updateAudio({ muted: !audioSettings.muted })}>
                   {audioSettings.muted ? "取消静音" : "静音"}
                 </button>
-                <button className="secondary-button" onClick={() => setGuideSection("start")}>
+                <button className="secondary-button" onClick={() => openGuide("start")}>
                   百工手册
                 </button>
                 <button className="secondary-button" onClick={returnToMenu}>弃卷返回</button>
@@ -4517,7 +4561,7 @@ export function PaperGuildGame() {
         )}
         {guideSection && (
           <Suspense fallback={<div className="guide-loading">手册展卷中……</div>}>
-            <GuideOverlay section={guideSection} onClose={() => setGuideSection(null)} />
+            <GuideOverlay section={guideSection} onExit={closeGuide} />
           </Suspense>
         )}
       </section>

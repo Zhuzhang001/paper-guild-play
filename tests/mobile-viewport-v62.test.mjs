@@ -108,7 +108,9 @@ test("the start gesture launches audio and fullscreen without making fullscreen 
 
 test("shell and forge are sized by the measured stage, not an internal viewport", async () => {
   const css = await text("app/globals.css");
-  const forgeCss = css.slice(css.indexOf("v6.1: one forge layout system"));
+  const forgeStart = css.indexOf("v6.1: one forge layout system");
+  const forgeEnd = css.indexOf("v6.4.1: controlled guide layout", forgeStart);
+  const forgeCss = css.slice(forgeStart, forgeEnd);
   assert.match(css, /container-name:\s*game-shell/);
   assert.match(css, /width:\s*var\(--game-presentation-stage-width\)/);
   assert.match(css, /height:\s*var\(--game-presentation-stage-height\)/);
@@ -136,6 +138,6 @@ test("PWA and visible build labeling expose only the v6.4 test stage", async () 
   assert.match(bootstrap, /重新进入全屏/);
   assert.match(layout, /"paper-guild-stage":\s*"test"/);
   assert.doesNotMatch(layout, /paper-guild-test|non-commercial/);
-  assert.match(helper, /version:\s*"6\.4\.0"/);
-  assert.equal(version.version, "6.4.0");
+  assert.match(helper, /version:\s*"6\.4\.1"/);
+  assert.equal(version.version, "6.4.1");
 });

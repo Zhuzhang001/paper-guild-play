@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { GuideView } from "../game/help/GuideView";
 import { GUIDE_DOCUMENT } from "../game/help/model";
+import { publicAsset } from "../publicAsset";
 
 export const metadata: Metadata = {
   title: "百工手册｜纸上百工",
@@ -8,5 +9,5 @@ export const metadata: Metadata = {
 };
 
 export default function GuidePage() {
-  return <GuideView document={GUIDE_DOCUMENT} />;
+  return <GuideView document={GUIDE_DOCUMENT} exitTarget={publicAsset("/")} />;
 }

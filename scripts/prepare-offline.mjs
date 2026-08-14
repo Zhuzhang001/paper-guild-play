@@ -33,6 +33,6 @@ await writeFile(
 // Keep a copy of the build identity beside the launcher for support checks.
 const version = await readFile(path.join(root, "public", "version.json"));
 await copyFile(path.join(root, "public", "version.json"), path.join(out, "version.json"));
-if (!version.includes(Buffer.from('"6.4.0"'))) {
+if (!version.includes(Buffer.from('"6.4.1"'))) {
   throw new Error("Unexpected build version while preparing offline package.");
 }
